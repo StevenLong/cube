@@ -1,7 +1,7 @@
 extends Camera3D
 
 const DISTANCE := 12.0
-const H_ANGLE := PI / 4.0   # 45 degrees horizontal - isometric diagonal
+const H_ANGLE := 0.0        # square-on to grid
 const ELEV_MIN := 0.2        # ~11 degrees - almost side-on
 const ELEV_MAX := 1.3        # ~74 degrees - almost top-down
 const TILT_SPEED := 1.2
