@@ -27,6 +27,13 @@ Metal Gear Solid VR Mission aesthetic - stark, clean, artificial.
 ## Architecture Notes
 *To be filled in as the project develops.*
 
+## Terminology
+- **unit (u)**: one cube side length — the grid pitch. Everything is measured in units.
+- **cell**: one 1u × 1u grid square. The player occupies exactly one cell at base size.
+- **face**: one of the six sides of the cube.
+- **tumble**: one move — the cube rolls 90° and advances 1 cell.
+- **grid position**: (x, z) in whole units; always integers. The cube's center sits at the cell centre.
+
 ## Key Design Decisions
 - Grid-based movement. Everything sized in cube-side units.
 - Cube tumbles face to face. Movement noise scales with speed.
@@ -41,12 +48,9 @@ Metal Gear Solid VR Mission aesthetic - stark, clean, artificial.
 - Cosmetic customisation unlocked through optional objectives. Cosmetic only.
 
 ## Current Status
-*Updated each session via /handoff*
-
-## Tribal Knowledge
-*See docs/CLAUDE-TRIBAL.md*
+Phase 1 in progress. Tumbling movement, grid ground, and fixed follow camera done.
+Next: movement noise (Phase 1 task 6). See HANDOFF.md for full session notes.
 
 ## Design Reference
-Full design doc and task list are in the game-dev repo:
-- `Cube Game Design Doc.md`
-- `Cube Game Tasks.md`
+The task list and design doc live in a sibling `game-dev` repo. Find it by searching
+for `Cube Game Tasks.md` from the user's home directory on first use.
