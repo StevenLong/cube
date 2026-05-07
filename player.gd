@@ -52,11 +52,9 @@ func _process(delta: float) -> void:
 			)
 		return
 
-	if Input.is_action_pressed("move_right"):
-		_begin_tumble(Vector2i(1, 0))
-	elif Input.is_action_pressed("move_left"):
-		_begin_tumble(Vector2i(-1, 0))
-	elif Input.is_action_pressed("move_back"):
-		_begin_tumble(Vector2i(0, 1))
-	elif Input.is_action_pressed("move_forward"):
-		_begin_tumble(Vector2i(0, -1))
+	var move := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
+	if move.length() > 0.5:
+		if absf(move.x) >= absf(move.y):
+			_begin_tumble(Vector2i(1 if move.x > 0.0 else -1, 0))
+		else:
+			_begin_tumble(Vector2i(0, 1 if move.y > 0.0 else -1))
