@@ -1,6 +1,7 @@
 extends Node3D
 
-const TUMBLE_DURATION := 0.2
+const TUMBLE_DURATION := 0.3
+const SPRINT_DURATION := 0.12
 
 var grid_pos := Vector2i(0, 0)
 var _tumbling := false
@@ -10,6 +11,7 @@ var _axis := Vector3.ZERO
 var _angle := 0.0
 var _start_pos := Vector3.ZERO
 var _start_basis := Basis.IDENTITY
+var _current_duration := TUMBLE_DURATION
 
 @onready var _step_player: AudioStreamPlayer = $StepSound
 
@@ -19,6 +21,7 @@ func _ready() -> void:
 
 
 func _begin_tumble(dir: Vector2i) -> void:
+	_current_duration = SPRINT_DURATION if Input.is_action_pressed("sprint") else TUMBLE_DURATION
 	_start_pos = position
 	_start_basis = basis
 	if dir.x == 1:
@@ -49,7 +52,7 @@ func _play_step(noise_level: float) -> void:
 
 func _process(delta: float) -> void:
 	if _tumbling:
-		_t = minf(_t + delta / TUMBLE_DURATION, 1.0)
+		_t = minf(_t + delta / _current_duration, 1.0)
 		var angle := _angle * _t
 		position = _pivot + (_start_pos - _pivot).rotated(_axis, angle)
 		basis = Basis(_axis, angle) * _start_basis
@@ -61,7 +64,7 @@ func _process(delta: float) -> void:
 				basis.y.snapped(Vector3.ONE),
 				basis.z.snapped(Vector3.ONE)
 			)
-			_play_step(1.0)
+			_play_step(TUMBLE_DURATION / _current_duration)
 		return
 
 	var move := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
