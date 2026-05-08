@@ -7,6 +7,7 @@ const DODGE_DURATION := 0.4
 const DODGE_COOLDOWN := 1.5
 const WAVE_DURATION := 0.4
 const MAX_WAVES := 8
+const FOCUS_SMOOTH_RATE := 25.0
 
 const EXT_LEFT  := 0
 const EXT_RIGHT := 1
@@ -30,6 +31,7 @@ var _dodge_cooldown_t := 0.0
 var _ext := [0, 0, 0, 0, 0]
 var _pending_ext := [0, 0, 0, 0, 0]
 var _tumble_distance := 1
+var _smoothed_focus := Vector3.ZERO
 var _rb_extended_this_press := false
 var _ground_material: ShaderMaterial
 var _waves: Array = []
@@ -50,29 +52,13 @@ func _input(event: InputEvent) -> void:
 		if not _rb_extended_this_press:
 			_reset_extensions()
 
-	if Input.is_action_pressed("extend"):
-		if event.is_action_pressed("move_left"):
-			_rb_extended_this_press = true
-			_try_extend(EXT_LEFT)
-		elif event.is_action_pressed("move_right"):
-			_rb_extended_this_press = true
-			_try_extend(EXT_RIGHT)
-		elif event.is_action_pressed("move_forward"):
-			_rb_extended_this_press = true
-			_try_extend(EXT_UP)
-		if event.is_action_pressed("extend_depth_fwd"):
-			_rb_extended_this_press = true
-			_try_extend(EXT_FWD)
-		elif event.is_action_pressed("extend_depth_back"):
-			_rb_extended_this_press = true
-			_try_extend(EXT_BACK)
-
 
 func _ready() -> void:
 	_step_player.stream = _make_step_sound()
 	_ground_material = get_node("../Ground/MeshInstance3D").get_surface_override_material(0)
 	_box_mesh = _mesh_instance.mesh.duplicate() as BoxMesh
 	_mesh_instance.mesh = _box_mesh
+	_smoothed_focus = _mesh_instance.global_position
 
 
 func _axis_total(side: int) -> int:
@@ -88,7 +74,16 @@ func _try_extend(side: int) -> void:
 
 
 func _reset_extensions() -> void:
+	# Move grid_pos to the cuboid's centre so the visual collapses in place
+	# instead of snapping to the original base corner.
+	var shift_x: int = roundi((_ext[EXT_RIGHT] - _ext[EXT_LEFT]) / 2.0)
+	var shift_z: int = roundi((_ext[EXT_BACK] - _ext[EXT_FWD]) / 2.0)
+	grid_pos += Vector2i(shift_x, shift_z)
+	position = Vector3(grid_pos.x, 0.5, grid_pos.y)
 	_ext = [0, 0, 0, 0, 0]
+	# Sync mesh immediately — _reset is called from _input, which runs before
+	# camera _process. Without this the camera would read a stale mesh offset.
+	_update_mesh()
 
 
 func _is_extended() -> bool:
@@ -211,13 +206,38 @@ func _play_step(noise_level: float) -> void:
 	})
 
 
-func get_camera_focus() -> Vector3:
-	# Camera tracks a linear interpolation between grid cells during a tumble,
-	# avoiding the vertical bob from the cube's arc.
+func _instant_focus() -> Vector3:
+	# The "ideal" focus this frame, before smoothing. Y is pinned at the base
+	# cell height so the camera doesn't bob when cuboid height changes.
 	if _tumbling:
-		var end_pos := Vector3(grid_pos.x, 0.5, grid_pos.y)
-		return _start_pos.lerp(end_pos, _t)
-	return position
+		var start_off := Vector3(
+			(_ext[EXT_RIGHT] - _ext[EXT_LEFT]) * 0.5,
+			0.0,
+			(_ext[EXT_BACK] - _ext[EXT_FWD]) * 0.5
+		)
+		var end_off := Vector3(
+			(_pending_ext[EXT_RIGHT] - _pending_ext[EXT_LEFT]) * 0.5,
+			0.0,
+			(_pending_ext[EXT_BACK] - _pending_ext[EXT_FWD]) * 0.5
+		)
+		var start_center := Vector3(_start_pos.x, 0.5, _start_pos.z) + start_off
+		var end_center := Vector3(grid_pos.x, 0.5, grid_pos.y) + end_off
+		return start_center.lerp(end_center, _t)
+	var mesh_pos := _mesh_instance.global_position
+	return Vector3(mesh_pos.x, 0.5, mesh_pos.z)
+
+
+func get_camera_focus() -> Vector3:
+	# Track the cuboid's visual centre. Snap during tumble/dodge so those
+	# animations remain crisp; smooth at rest so extension presses don't pop.
+	var instant := _instant_focus()
+	if _tumbling or _dodging:
+		_smoothed_focus = instant
+	else:
+		var dt := get_process_delta_time()
+		var alpha := 1.0 - exp(-FOCUS_SMOOTH_RATE * dt)
+		_smoothed_focus = _smoothed_focus.lerp(instant, alpha)
+	return _smoothed_focus
 
 
 func _pick_dir(move: Vector2) -> Vector2i:
@@ -282,6 +302,21 @@ func _process(delta: float) -> void:
 		return
 
 	if Input.is_action_pressed("extend"):
+		if Input.is_action_just_pressed("move_left"):
+			_rb_extended_this_press = true
+			_try_extend(EXT_LEFT)
+		elif Input.is_action_just_pressed("move_right"):
+			_rb_extended_this_press = true
+			_try_extend(EXT_RIGHT)
+		elif Input.is_action_just_pressed("move_forward"):
+			_rb_extended_this_press = true
+			_try_extend(EXT_UP)
+		if Input.is_action_just_pressed("extend_depth_fwd"):
+			_rb_extended_this_press = true
+			_try_extend(EXT_FWD)
+		elif Input.is_action_just_pressed("extend_depth_back"):
+			_rb_extended_this_press = true
+			_try_extend(EXT_BACK)
 		_update_mesh()
 		return
 
