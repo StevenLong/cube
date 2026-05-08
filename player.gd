@@ -2,6 +2,9 @@ extends Node3D
 
 const TUMBLE_DURATION := 0.3
 const SPRINT_DURATION := 0.15
+const DODGE_DISTANCE := 5
+const DODGE_DURATION := 0.4
+const DODGE_COOLDOWN := 1.5
 const WAVE_DURATION := 0.4
 const MAX_WAVES := 8
 
@@ -13,6 +16,11 @@ var _axis := Vector3.ZERO
 var _angle := 0.0
 var _start_pos := Vector3.ZERO
 var _start_basis := Basis.IDENTITY
+var _dodging := false
+var _dodge_t := 0.0
+var _dodge_start_pos := Vector3.ZERO
+var _dodge_end_pos := Vector3.ZERO
+var _dodge_cooldown_t := 0.0
 var _ground_material: ShaderMaterial
 var _waves: Array = []
 
@@ -53,6 +61,18 @@ func _begin_tumble(dir: Vector2i) -> void:
 	_tumbling = true
 
 
+func _begin_dodge(dir: Vector2i) -> void:
+	_dodge_start_pos = position
+	_dodge_end_pos = Vector3(
+		grid_pos.x + dir.x * DODGE_DISTANCE,
+		0.5,
+		grid_pos.y + dir.y * DODGE_DISTANCE
+	)
+	grid_pos += dir * DODGE_DISTANCE
+	_dodge_t = 0.0
+	_dodging = true
+
+
 func _play_step(noise_level: float) -> void:
 	_step_player.volume_db = linear_to_db(noise_level)
 	_step_player.play()
@@ -60,6 +80,12 @@ func _play_step(noise_level: float) -> void:
 	if _waves.size() >= MAX_WAVES:
 		_waves.pop_front()
 	_waves.append({"origin": Vector2(grid_pos.x, grid_pos.y), "t": 0.0, "max_radius": max_radius})
+
+
+func _pick_dir(move: Vector2) -> Vector2i:
+	if absf(move.x) >= absf(move.y):
+		return Vector2i(1 if move.x > 0.0 else -1, 0)
+	return Vector2i(0, 1 if move.y > 0.0 else -1)
 
 
 func _process(delta: float) -> void:
@@ -82,6 +108,19 @@ func _process(delta: float) -> void:
 	_ground_material.set_shader_parameter("wave_radii", radii)
 	_ground_material.set_shader_parameter("wave_alphas", alphas)
 
+	if _dodge_cooldown_t > 0.0:
+		_dodge_cooldown_t = maxf(_dodge_cooldown_t - delta, 0.0)
+
+	if _dodging:
+		_dodge_t = minf(_dodge_t + delta / DODGE_DURATION, 1.0)
+		var t_eased := 1.0 - pow(1.0 - _dodge_t, 3.0)
+		position = _dodge_start_pos.lerp(_dodge_end_pos, t_eased)
+		if _dodge_t >= 1.0:
+			_dodging = false
+			position = _dodge_end_pos
+			_dodge_cooldown_t = DODGE_COOLDOWN
+		return
+
 	if _tumbling:
 		var duration := SPRINT_DURATION if Input.is_action_pressed("sprint") else TUMBLE_DURATION
 		_t = minf(_t + delta / duration, 1.0)
@@ -100,11 +139,12 @@ func _process(delta: float) -> void:
 		return
 
 	var move := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
-	if move.length() > 0.5:
-		if absf(move.x) >= absf(move.y):
-			_begin_tumble(Vector2i(1 if move.x > 0.0 else -1, 0))
-		else:
-			_begin_tumble(Vector2i(0, 1 if move.y > 0.0 else -1))
+	var dodge_primed := Input.is_action_pressed("dodge") and _dodge_cooldown_t <= 0.0
+
+	if dodge_primed and move.length() > 0.5:
+		_begin_dodge(_pick_dir(move))
+	elif not dodge_primed and move.length() > 0.5:
+		_begin_tumble(_pick_dir(move))
 
 
 static func _make_step_sound() -> AudioStreamWAV:
