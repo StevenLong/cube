@@ -26,6 +26,7 @@ var _confirm_timer := 0.0
 var _last_seen_pos := Vector3.ZERO
 var _material: StandardMaterial3D
 var _player: Node3D
+var _player_area: Area3D
 
 @onready var _ray: RayCast3D = $RayCast3D
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
@@ -35,10 +36,11 @@ func _ready() -> void:
 	_material = (_mesh.get_surface_override_material(0) as StandardMaterial3D).duplicate()
 	_mesh.set_surface_override_material(0, _material)
 	_player = get_node("../Player")
+	_player_area = get_node("../Player/DetectionArea")
 
 
 func _process(delta: float) -> void:
-	var seeing := _ray.is_colliding()
+	var seeing := _ray.is_colliding() and _ray.get_collider() == _player_area
 	if seeing:
 		_last_seen_pos = _player.position
 
