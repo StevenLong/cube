@@ -3,6 +3,7 @@
 [ext_resource type="Shader" path="res://shaders/grid_ground.gdshader" id="1"]
 [ext_resource type="Script" path="res://player.gd" id="2"]
 [ext_resource type="Script" path="res://camera_controller.gd" id="3"]
+[ext_resource type="Script" path="res://enemy_sphere.gd" id="4"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_1"]
 shader = ExtResource("1")
@@ -16,6 +17,16 @@ size = Vector2(20, 20)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_1"]
 albedo_color = Color(0.9, 0.9, 0.9, 1)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_1"]
+size = Vector3(1, 1, 1)
+
+[sub_resource type="SphereMesh" id="SphereMesh_1"]
+radius = 0.4
+height = 0.8
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_2"]
+albedo_color = Color(0.7, 0.7, 0.75, 1)
 
 [sub_resource type="Environment" id="Environment_1"]
 background_mode = 1
@@ -43,6 +54,13 @@ script = ExtResource("2")
 mesh = SubResource("BoxMesh_1")
 surface_material_override/0 = SubResource("StandardMaterial3D_1")
 
+[node name="DetectionArea" type="Area3D" parent="Player"]
+collision_layer = 2
+collision_mask = 0
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Player/DetectionArea"]
+shape = SubResource("BoxShape3D_1")
+
 [node name="Ground" type="StaticBody3D" parent="."]
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Ground"]
@@ -51,3 +69,17 @@ surface_material_override/0 = SubResource("ShaderMaterial_1")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Ground"]
 shape = SubResource("WorldBoundaryShape3D_1")
+
+[node name="Enemy" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 0.4, 0)
+script = ExtResource("4")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Enemy"]
+mesh = SubResource("SphereMesh_1")
+surface_material_override/0 = SubResource("StandardMaterial3D_2")
+
+[node name="RayCast3D" type="RayCast3D" parent="Enemy"]
+target_position = Vector3(0, 0, -10)
+collision_mask = 2
+collide_with_areas = true
+collide_with_bodies = false
