@@ -43,6 +43,8 @@ var _box_mesh: BoxMesh
 
 @onready var _step_player: AudioStreamPlayer = $StepSound
 @onready var _mesh_instance: MeshInstance3D = $MeshInstance3D
+@onready var _move_cast: ShapeCast3D = $MoveCast
+@onready var _detection_area: Area3D = $DetectionArea
 @onready var _wall_rays: Array[RayCast3D] = [
 	$WallRayN, $WallRayS, $WallRayE, $WallRayW
 ]
@@ -68,6 +70,17 @@ func _ready() -> void:
 	_player_material = (_mesh_instance.get_surface_override_material(0) as StandardMaterial3D).duplicate()
 	_mesh_instance.set_surface_override_material(0, _player_material)
 	_smoothed_focus = _mesh_instance.global_position
+	_detection_area.area_entered.connect(_on_contact)
+
+
+func _on_contact(_area: Area3D) -> void:
+	get_tree().reload_current_scene.call_deferred()
+
+
+func _can_move(delta_world: Vector3) -> bool:
+	_move_cast.target_position = delta_world
+	_move_cast.force_shapecast_update()
+	return not _move_cast.is_colliding()
 
 
 func _count_covered_sides() -> int:
@@ -177,6 +190,9 @@ func _begin_tumble(dir: Vector2i) -> void:
 	else:
 		return
 
+	if not _can_move(Vector3(dir.x * move, 0, dir.y * move)):
+		return
+
 	_pivot = Vector3(pivot_x, 0.0, pivot_z)
 	_pending_ext = new_ext
 	_tumble_distance = move
@@ -186,6 +202,8 @@ func _begin_tumble(dir: Vector2i) -> void:
 
 
 func _begin_dodge(dir: Vector2i) -> void:
+	if not _can_move(Vector3(dir.x * DODGE_DISTANCE, 0, dir.y * DODGE_DISTANCE)):
+		return
 	_dodge_start_pos = position
 	_dodge_end_pos = Vector3(
 		grid_pos.x + dir.x * DODGE_DISTANCE,
