@@ -40,7 +40,9 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
-	var seeing := _ray.is_colliding() and _ray.get_collider() == _player_area
+	var seeing: bool = (_ray.is_colliding()
+		and _ray.get_collider() == _player_area
+		and not _player.is_blending)
 	if seeing:
 		_last_seen_pos = _player.position
 

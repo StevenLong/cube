@@ -8,6 +8,8 @@ const DODGE_COOLDOWN := 1.5
 const WAVE_DURATION := 0.4
 const MAX_WAVES := 8
 const FOCUS_SMOOTH_RATE := 25.0
+const COLOR_NORMAL := Color(0.9, 0.9, 0.9)
+const COLOR_BLENDING := Color(0.4, 0.4, 0.45)
 
 const EXT_LEFT  := 0
 const EXT_RIGHT := 1
@@ -33,12 +35,17 @@ var _pending_ext := [0, 0, 0, 0, 0]
 var _tumble_distance := 1
 var _smoothed_focus := Vector3.ZERO
 var _rb_extended_this_press := false
+var is_blending := false
 var _ground_material: ShaderMaterial
+var _player_material: StandardMaterial3D
 var _waves: Array = []
 var _box_mesh: BoxMesh
 
 @onready var _step_player: AudioStreamPlayer = $StepSound
 @onready var _mesh_instance: MeshInstance3D = $MeshInstance3D
+@onready var _wall_rays: Array[RayCast3D] = [
+	$WallRayN, $WallRayS, $WallRayE, $WallRayW
+]
 
 
 func _input(event: InputEvent) -> void:
@@ -58,7 +65,17 @@ func _ready() -> void:
 	_ground_material = get_node("../Ground/MeshInstance3D").get_surface_override_material(0)
 	_box_mesh = _mesh_instance.mesh.duplicate() as BoxMesh
 	_mesh_instance.mesh = _box_mesh
+	_player_material = (_mesh_instance.get_surface_override_material(0) as StandardMaterial3D).duplicate()
+	_mesh_instance.set_surface_override_material(0, _player_material)
 	_smoothed_focus = _mesh_instance.global_position
+
+
+func _count_covered_sides() -> int:
+	var count := 0
+	for r in _wall_rays:
+		if r.is_colliding():
+			count += 1
+	return count
 
 
 func _axis_total(side: int) -> int:
@@ -207,7 +224,7 @@ func _play_step(noise_level: float) -> void:
 
 
 func _instant_focus() -> Vector3:
-	# The "ideal" focus this frame, before smoothing. Y is pinned at the base
+		# The "ideal" focus this frame, before smoothing. Y is pinned at the base
 	# cell height so the camera doesn't bob when cuboid height changes.
 	if _tumbling:
 		var start_off := Vector3(
@@ -317,6 +334,15 @@ func _process(delta: float) -> void:
 		elif Input.is_action_just_pressed("extend_depth_back"):
 			_rb_extended_this_press = true
 			_try_extend(EXT_BACK)
+		_update_mesh()
+		return
+
+	# Blend: while button held and 3+ sides covered, the player is undetectable
+	# and movement is blocked (committing to the spot).
+	is_blending = Input.is_action_pressed("blend") and _count_covered_sides() >= 3
+	_player_material.albedo_color = COLOR_BLENDING if is_blending else COLOR_NORMAL
+
+	if is_blending:
 		_update_mesh()
 		return
 
