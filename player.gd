@@ -1,7 +1,9 @@
 extends Node3D
 
 const TUMBLE_DURATION := 0.3
-const SPRINT_DURATION := 0.12
+const SPRINT_DURATION := 0.15
+const WAVE_DURATION := 0.4
+const MAX_WAVES := 8
 
 var grid_pos := Vector2i(0, 0)
 var _tumbling := false
@@ -11,17 +13,23 @@ var _axis := Vector3.ZERO
 var _angle := 0.0
 var _start_pos := Vector3.ZERO
 var _start_basis := Basis.IDENTITY
-var _current_duration := TUMBLE_DURATION
+var _ground_material: ShaderMaterial
+var _waves: Array = []
 
 @onready var _step_player: AudioStreamPlayer = $StepSound
 
 
+func _input(event: InputEvent) -> void:
+	if event.is_action_pressed("ui_cancel"):
+		get_tree().quit()
+
+
 func _ready() -> void:
 	_step_player.stream = _make_step_sound()
+	_ground_material = get_node("../Ground/MeshInstance3D").get_surface_override_material(0)
 
 
 func _begin_tumble(dir: Vector2i) -> void:
-	_current_duration = SPRINT_DURATION if Input.is_action_pressed("sprint") else TUMBLE_DURATION
 	_start_pos = position
 	_start_basis = basis
 	if dir.x == 1:
@@ -48,11 +56,35 @@ func _begin_tumble(dir: Vector2i) -> void:
 func _play_step(noise_level: float) -> void:
 	_step_player.volume_db = linear_to_db(noise_level)
 	_step_player.play()
+	var max_radius := 8.0 if noise_level > 1.0 else 4.0
+	if _waves.size() >= MAX_WAVES:
+		_waves.pop_front()
+	_waves.append({"origin": Vector2(grid_pos.x, grid_pos.y), "t": 0.0, "max_radius": max_radius})
 
 
 func _process(delta: float) -> void:
+	for i in range(_waves.size() - 1, -1, -1):
+		_waves[i].t = minf(_waves[i].t + delta / WAVE_DURATION, 1.0)
+		if _waves[i].t >= 1.0:
+			_waves.remove_at(i)
+
+	var origins := PackedVector2Array()
+	var radii := PackedFloat32Array()
+	var alphas := PackedFloat32Array()
+	origins.resize(MAX_WAVES)
+	radii.resize(MAX_WAVES)
+	alphas.resize(MAX_WAVES)
+	for i in _waves.size():
+		origins[i] = _waves[i].origin
+		radii[i] = _waves[i].max_radius * _waves[i].t
+		alphas[i] = 1.0 - _waves[i].t
+	_ground_material.set_shader_parameter("wave_origins", origins)
+	_ground_material.set_shader_parameter("wave_radii", radii)
+	_ground_material.set_shader_parameter("wave_alphas", alphas)
+
 	if _tumbling:
-		_t = minf(_t + delta / _current_duration, 1.0)
+		var duration := SPRINT_DURATION if Input.is_action_pressed("sprint") else TUMBLE_DURATION
+		_t = minf(_t + delta / duration, 1.0)
 		var angle := _angle * _t
 		position = _pivot + (_start_pos - _pivot).rotated(_axis, angle)
 		basis = Basis(_axis, angle) * _start_basis
@@ -64,7 +96,7 @@ func _process(delta: float) -> void:
 				basis.y.snapped(Vector3.ONE),
 				basis.z.snapped(Vector3.ONE)
 			)
-			_play_step(TUMBLE_DURATION / _current_duration)
+			_play_step(TUMBLE_DURATION / duration)
 		return
 
 	var move := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
