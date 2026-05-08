@@ -29,6 +29,7 @@ var _dodge_end_pos := Vector3.ZERO
 var _dodge_cooldown_t := 0.0
 var _ext := [0, 0, 0, 0, 0]
 var _pending_ext := [0, 0, 0, 0, 0]
+var _tumble_distance := 1
 var _rb_extended_this_press := false
 var _ground_material: ShaderMaterial
 var _waves: Array = []
@@ -88,6 +89,13 @@ func _try_extend(side: int) -> void:
 
 func _reset_extensions() -> void:
 	_ext = [0, 0, 0, 0, 0]
+
+
+func _is_extended() -> bool:
+	for v in _ext:
+		if v > 0:
+			return true
+	return false
 
 
 func _update_mesh() -> void:
@@ -159,6 +167,7 @@ func _begin_tumble(dir: Vector2i) -> void:
 
 	_pivot = Vector3(pivot_x, 0.0, pivot_z)
 	_pending_ext = new_ext
+	_tumble_distance = move
 	grid_pos += dir * move
 	_t = 0.0
 	_tumbling = true
@@ -177,9 +186,12 @@ func _begin_dodge(dir: Vector2i) -> void:
 
 
 func _play_step(noise_level: float) -> void:
-	_step_player.volume_db = linear_to_db(noise_level)
+	var ext_sum: int = _ext[EXT_LEFT] + _ext[EXT_RIGHT] + _ext[EXT_UP] + _ext[EXT_FWD] + _ext[EXT_BACK]
+	var size_factor := 1.0 + ext_sum * 0.15
+	_step_player.volume_db = linear_to_db(noise_level * size_factor)
+	_step_player.pitch_scale = 1.0 - ext_sum * 0.08
 	_step_player.play()
-	var max_radius := 8.0 if noise_level > 1.0 else 4.0
+	var max_radius: float = (8.0 if noise_level > 1.0 else 4.0) + ext_sum
 	if _waves.size() >= MAX_WAVES:
 		_waves.pop_front()
 	# Wave originates from the footprint of the landed face
@@ -253,7 +265,9 @@ func _process(delta: float) -> void:
 		return
 
 	if _tumbling:
-		var duration := SPRINT_DURATION if Input.is_action_pressed("sprint") else TUMBLE_DURATION
+		var sprinting := Input.is_action_pressed("sprint") and not _is_extended()
+		var per_cell := SPRINT_DURATION if sprinting else TUMBLE_DURATION
+		var duration := per_cell * sqrt(float(_tumble_distance))
 		_t = minf(_t + delta / duration, 1.0)
 		var angle := _angle * _t
 		position = _pivot + (_start_pos - _pivot).rotated(_axis, angle)
@@ -263,7 +277,7 @@ func _process(delta: float) -> void:
 			position = Vector3(grid_pos.x, 0.5, grid_pos.y)
 			basis = Basis.IDENTITY
 			_ext = _pending_ext
-			_play_step(TUMBLE_DURATION / duration)
+			_play_step(TUMBLE_DURATION / per_cell)
 		_update_mesh()
 		return
 
@@ -272,7 +286,7 @@ func _process(delta: float) -> void:
 		return
 
 	var move := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
-	var dodge_primed := Input.is_action_pressed("dodge") and _dodge_cooldown_t <= 0.0
+	var dodge_primed := Input.is_action_pressed("dodge") and _dodge_cooldown_t <= 0.0 and not _is_extended()
 
 	if dodge_primed and move.length() > 0.5:
 		_begin_dodge(_pick_dir(move))
