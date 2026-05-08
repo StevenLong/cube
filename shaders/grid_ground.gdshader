@@ -2,6 +2,7 @@ shader_type spatial;
 render_mode unshaded, cull_disabled;
 
 uniform vec2 wave_origins[8];
+uniform vec2 wave_half_extents[8];
 uniform float wave_radii[8];
 uniform float wave_alphas[8];
 
@@ -15,12 +16,13 @@ void fragment() {
 	float on_line = clamp(gx + gy, 0.0, 1.0);
 	vec3 grid_color = mix(vec3(0.06, 0.06, 0.12), vec3(0.0, 1.0, 1.0), on_line);
 
-	// Noise waves
+	// Noise waves: each emanates from a rectangular footprint
 	vec2 world_xz = UV * 20.0 - vec2(10.0);
 	vec2 cell_center = round(world_xz);
 	float wave_total = 0.0;
 	for (int i = 0; i < 8; i++) {
-		float cell_dist = length(cell_center - wave_origins[i]);
+		vec2 d = max(vec2(0.0), abs(cell_center - wave_origins[i]) - wave_half_extents[i]);
+		float cell_dist = length(d);
 		float r = wave_radii[i];
 		float in_range = 1.0 - smoothstep(r - 0.5, r + 0.5, cell_dist);
 		wave_total = clamp(wave_total + in_range * wave_alphas[i], 0.0, 1.0);

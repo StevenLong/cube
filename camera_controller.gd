@@ -20,5 +20,6 @@ func _process(delta: float) -> void:
 
 	var h := DISTANCE * cos(_elevation)
 	var v := DISTANCE * sin(_elevation)
-	position = _target.position + Vector3(h * sin(H_ANGLE), v, h * cos(H_ANGLE))
-	look_at(_target.position, Vector3.UP)
+	var focus: Vector3 = _target.get_camera_focus()
+	position = focus + Vector3(h * sin(H_ANGLE), v, h * cos(H_ANGLE))
+	look_at(focus, Vector3.UP)

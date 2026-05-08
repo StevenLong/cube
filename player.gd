@@ -8,6 +8,12 @@ const DODGE_COOLDOWN := 1.5
 const WAVE_DURATION := 0.4
 const MAX_WAVES := 8
 
+const EXT_LEFT  := 0
+const EXT_RIGHT := 1
+const EXT_FWD   := 2
+const EXT_BACK  := 3
+const EXT_UP    := 4
+
 var grid_pos := Vector2i(0, 0)
 var _tumbling := false
 var _t := 0.0
@@ -21,42 +27,139 @@ var _dodge_t := 0.0
 var _dodge_start_pos := Vector3.ZERO
 var _dodge_end_pos := Vector3.ZERO
 var _dodge_cooldown_t := 0.0
+var _ext := [0, 0, 0, 0, 0]
+var _pending_ext := [0, 0, 0, 0, 0]
+var _rb_extended_this_press := false
 var _ground_material: ShaderMaterial
 var _waves: Array = []
+var _box_mesh: BoxMesh
 
 @onready var _step_player: AudioStreamPlayer = $StepSound
+@onready var _mesh_instance: MeshInstance3D = $MeshInstance3D
 
 
 func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
 		get_tree().quit()
 
+	if event.is_action_pressed("extend"):
+		_rb_extended_this_press = false
+
+	if event.is_action_released("extend"):
+		if not _rb_extended_this_press:
+			_reset_extensions()
+
+	if Input.is_action_pressed("extend"):
+		if event.is_action_pressed("move_left"):
+			_rb_extended_this_press = true
+			_try_extend(EXT_LEFT)
+		elif event.is_action_pressed("move_right"):
+			_rb_extended_this_press = true
+			_try_extend(EXT_RIGHT)
+		elif event.is_action_pressed("move_forward"):
+			_rb_extended_this_press = true
+			_try_extend(EXT_UP)
+		if event.is_action_pressed("extend_depth_fwd"):
+			_rb_extended_this_press = true
+			_try_extend(EXT_FWD)
+		elif event.is_action_pressed("extend_depth_back"):
+			_rb_extended_this_press = true
+			_try_extend(EXT_BACK)
+
 
 func _ready() -> void:
 	_step_player.stream = _make_step_sound()
 	_ground_material = get_node("../Ground/MeshInstance3D").get_surface_override_material(0)
+	_box_mesh = _mesh_instance.mesh.duplicate() as BoxMesh
+	_mesh_instance.mesh = _box_mesh
+
+
+func _axis_total(side: int) -> int:
+	match side:
+		EXT_LEFT, EXT_RIGHT: return _ext[EXT_LEFT] + _ext[EXT_RIGHT]
+		EXT_FWD, EXT_BACK:   return _ext[EXT_FWD] + _ext[EXT_BACK]
+		_:                   return _ext[EXT_UP]
+
+
+func _try_extend(side: int) -> void:
+	if _axis_total(side) < 2:
+		_ext[side] += 1
+
+
+func _reset_extensions() -> void:
+	_ext = [0, 0, 0, 0, 0]
+
+
+func _update_mesh() -> void:
+	# Mesh always lives in the parent's local frame with identity basis.
+	# At rest, parent.basis == IDENTITY so the mesh is world-aligned.
+	# During a tumble, parent.basis rotates so the mesh visibly tumbles with it.
+	_box_mesh.size = Vector3(
+		1.0 + _ext[EXT_LEFT] + _ext[EXT_RIGHT],
+		1.0 + _ext[EXT_UP],
+		1.0 + _ext[EXT_FWD] + _ext[EXT_BACK]
+	)
+	_mesh_instance.transform = Transform3D(
+		Basis.IDENTITY,
+		Vector3(
+			(_ext[EXT_RIGHT] - _ext[EXT_LEFT]) * 0.5,
+			_ext[EXT_UP] * 0.5,
+			(_ext[EXT_BACK] - _ext[EXT_FWD]) * 0.5
+		)
+	)
 
 
 func _begin_tumble(dir: Vector2i) -> void:
 	_start_pos = position
 	_start_basis = basis
+	var ext_up_old: int = _ext[EXT_UP]
+	var move: int = 0
+	var pivot_x: float = position.x
+	var pivot_z: float = position.z
+	var new_ext: Array = _ext.duplicate()
+
 	if dir.x == 1:
-		_pivot = Vector3(position.x + 0.5, 0.0, position.z)
+		var ext_dir: int = _ext[EXT_RIGHT]
+		pivot_x = position.x + 0.5 + ext_dir
 		_axis = Vector3(0, 0, 1)
 		_angle = -PI / 2.0
+		move = 1 + ext_dir + ext_up_old
+		new_ext[EXT_LEFT] = ext_up_old
+		new_ext[EXT_RIGHT] = 0
+		new_ext[EXT_UP] = _ext[EXT_LEFT] + _ext[EXT_RIGHT]
 	elif dir.x == -1:
-		_pivot = Vector3(position.x - 0.5, 0.0, position.z)
+		var ext_dir: int = _ext[EXT_LEFT]
+		pivot_x = position.x - 0.5 - ext_dir
 		_axis = Vector3(0, 0, 1)
 		_angle = PI / 2.0
-	elif dir.y == 1:
-		_pivot = Vector3(position.x, 0.0, position.z + 0.5)
-		_axis = Vector3(1, 0, 0)
-		_angle = PI / 2.0
+		move = 1 + ext_dir + ext_up_old
+		new_ext[EXT_RIGHT] = ext_up_old
+		new_ext[EXT_LEFT] = 0
+		new_ext[EXT_UP] = _ext[EXT_LEFT] + _ext[EXT_RIGHT]
 	elif dir.y == -1:
-		_pivot = Vector3(position.x, 0.0, position.z - 0.5)
+		var ext_dir: int = _ext[EXT_FWD]
+		pivot_z = position.z - 0.5 - ext_dir
 		_axis = Vector3(1, 0, 0)
 		_angle = -PI / 2.0
-	grid_pos += dir
+		move = 1 + ext_dir + ext_up_old
+		new_ext[EXT_BACK] = ext_up_old
+		new_ext[EXT_FWD] = 0
+		new_ext[EXT_UP] = _ext[EXT_FWD] + _ext[EXT_BACK]
+	elif dir.y == 1:
+		var ext_dir: int = _ext[EXT_BACK]
+		pivot_z = position.z + 0.5 + ext_dir
+		_axis = Vector3(1, 0, 0)
+		_angle = PI / 2.0
+		move = 1 + ext_dir + ext_up_old
+		new_ext[EXT_FWD] = ext_up_old
+		new_ext[EXT_BACK] = 0
+		new_ext[EXT_UP] = _ext[EXT_FWD] + _ext[EXT_BACK]
+	else:
+		return
+
+	_pivot = Vector3(pivot_x, 0.0, pivot_z)
+	_pending_ext = new_ext
+	grid_pos += dir * move
 	_t = 0.0
 	_tumbling = true
 
@@ -79,7 +182,30 @@ func _play_step(noise_level: float) -> void:
 	var max_radius := 8.0 if noise_level > 1.0 else 4.0
 	if _waves.size() >= MAX_WAVES:
 		_waves.pop_front()
-	_waves.append({"origin": Vector2(grid_pos.x, grid_pos.y), "t": 0.0, "max_radius": max_radius})
+	# Wave originates from the footprint of the landed face
+	var origin := Vector2(
+		grid_pos.x + (_ext[EXT_RIGHT] - _ext[EXT_LEFT]) * 0.5,
+		grid_pos.y + (_ext[EXT_BACK] - _ext[EXT_FWD]) * 0.5
+	)
+	var half_extent := Vector2(
+		(_ext[EXT_LEFT] + _ext[EXT_RIGHT]) * 0.5,
+		(_ext[EXT_FWD] + _ext[EXT_BACK]) * 0.5
+	)
+	_waves.append({
+		"origin": origin,
+		"half_extent": half_extent,
+		"t": 0.0,
+		"max_radius": max_radius
+	})
+
+
+func get_camera_focus() -> Vector3:
+	# Camera tracks a linear interpolation between grid cells during a tumble,
+	# avoiding the vertical bob from the cube's arc.
+	if _tumbling:
+		var end_pos := Vector3(grid_pos.x, 0.5, grid_pos.y)
+		return _start_pos.lerp(end_pos, _t)
+	return position
 
 
 func _pick_dir(move: Vector2) -> Vector2i:
@@ -95,16 +221,20 @@ func _process(delta: float) -> void:
 			_waves.remove_at(i)
 
 	var origins := PackedVector2Array()
+	var half_extents := PackedVector2Array()
 	var radii := PackedFloat32Array()
 	var alphas := PackedFloat32Array()
 	origins.resize(MAX_WAVES)
+	half_extents.resize(MAX_WAVES)
 	radii.resize(MAX_WAVES)
 	alphas.resize(MAX_WAVES)
 	for i in _waves.size():
 		origins[i] = _waves[i].origin
+		half_extents[i] = _waves[i].half_extent
 		radii[i] = _waves[i].max_radius * _waves[i].t
 		alphas[i] = 1.0 - _waves[i].t
 	_ground_material.set_shader_parameter("wave_origins", origins)
+	_ground_material.set_shader_parameter("wave_half_extents", half_extents)
 	_ground_material.set_shader_parameter("wave_radii", radii)
 	_ground_material.set_shader_parameter("wave_alphas", alphas)
 
@@ -119,6 +249,7 @@ func _process(delta: float) -> void:
 			_dodging = false
 			position = _dodge_end_pos
 			_dodge_cooldown_t = DODGE_COOLDOWN
+		_update_mesh()
 		return
 
 	if _tumbling:
@@ -130,12 +261,14 @@ func _process(delta: float) -> void:
 		if _t >= 1.0:
 			_tumbling = false
 			position = Vector3(grid_pos.x, 0.5, grid_pos.y)
-			basis = Basis(
-				basis.x.snapped(Vector3.ONE),
-				basis.y.snapped(Vector3.ONE),
-				basis.z.snapped(Vector3.ONE)
-			)
+			basis = Basis.IDENTITY
+			_ext = _pending_ext
 			_play_step(TUMBLE_DURATION / duration)
+		_update_mesh()
+		return
+
+	if Input.is_action_pressed("extend"):
+		_update_mesh()
 		return
 
 	var move := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
@@ -145,6 +278,8 @@ func _process(delta: float) -> void:
 		_begin_dodge(_pick_dir(move))
 	elif not dodge_primed and move.length() > 0.5:
 		_begin_tumble(_pick_dir(move))
+
+	_update_mesh()
 
 
 static func _make_step_sound() -> AudioStreamWAV:
