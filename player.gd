@@ -83,7 +83,7 @@ static func _make_step_sound() -> AudioStreamWAV:
 	data.resize(samples * 2)
 	for i in samples:
 		var env := exp(-float(i) / 300.0)
-		var val := int(sinf(float(i) * TAU * 150.0 / rate) * env * 32767.0)
+		var val := int(sin(float(i) * TAU * 150.0 / rate) * env * 32767.0)
 		data[i * 2] = val & 0xFF
 		data[i * 2 + 1] = (val >> 8) & 0xFF
 	stream.data = data
