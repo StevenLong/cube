@@ -6,6 +6,9 @@ uniform vec2 wave_half_extents[8];
 uniform float wave_radii[8];
 uniform float wave_alphas[8];
 
+uniform vec2 footprint_positions[64];
+uniform float footprint_alphas[64];
+
 void fragment() {
 	// Grid
 	vec2 coord = UV * 20.0 + vec2(0.5);
@@ -28,5 +31,15 @@ void fragment() {
 		wave_total = clamp(wave_total + in_range * wave_alphas[i], 0.0, 1.0);
 	}
 
-	ALBEDO = mix(grid_color, vec3(0.9, 0.55, 0.0), wave_total * 0.55);
+	vec3 with_waves = mix(grid_color, vec3(0.9, 0.55, 0.0), wave_total * 0.55);
+
+	// Ink footprints: small dark blobs at deposited cells
+	float ink_total = 0.0;
+	for (int i = 0; i < 64; i++) {
+		float d = length(world_xz - footprint_positions[i]);
+		float in_range = 1.0 - smoothstep(0.25, 0.4, d);
+		ink_total = clamp(ink_total + in_range * footprint_alphas[i], 0.0, 1.0);
+	}
+
+	ALBEDO = mix(with_waves, vec3(0.1, 0.15, 0.3), ink_total);
 }

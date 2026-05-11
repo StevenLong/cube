@@ -37,7 +37,7 @@ func _ready() -> void:
 	_end_material = (_end_tile.get_surface_override_material(0) as StandardMaterial3D).duplicate()
 	_end_tile.set_surface_override_material(0, _end_material)
 	_player.tumbled.connect(_on_player_tumbled)
-	_player.tumble_finished.connect(_on_player_tumble_finished)
+	_player.move_settled.connect(_on_player_move_settled)
 	_enemy.entered_pursuit.connect(_on_enemy_pursuit)
 	_end_area.area_entered.connect(_on_end_entered)
 	_end_area.area_exited.connect(_on_end_exited)
@@ -105,14 +105,23 @@ func _on_enemy_pursuit() -> void:
 
 
 func _on_end_entered(_area: Area3D) -> void:
-	if state == State.PLAYING:
-		_pending_complete = true
+	if state != State.PLAYING:
+		return
+	_pending_complete = true
+	if _player.is_dodging():
+		var cell := Vector2i(roundi(_end_tile.position.x), roundi(_end_tile.position.z))
+		_player.truncate_dodge_to(cell)
 
 
 func _on_end_exited(_area: Area3D) -> void:
+	# A slide that passes through the end counts as completion (per design),
+	# so don't clear pending while the player is mid-dodge. Tumbles still
+	# require landing — sweep-over without landing clears as before.
+	if _player.is_dodging():
+		return
 	_pending_complete = false
 
 
-func _on_player_tumble_finished() -> void:
+func _on_player_move_settled() -> void:
 	if state == State.PLAYING and _pending_complete:
 		_enter_complete()

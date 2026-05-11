@@ -1,7 +1,7 @@
 extends Node3D
 
 signal tumbled
-signal tumble_finished
+signal move_settled
 signal noise_emitted(origin: Vector2, max_radius: float, duration: float)
 
 const TUMBLE_DURATION := 0.3
@@ -11,6 +11,8 @@ const DODGE_DURATION := 0.4
 const DODGE_COOLDOWN := 1.5
 const WAVE_DURATION := 0.4
 const MAX_WAVES := 8
+const MAX_FOOTPRINTS := 64
+const SLIDE_SUBSAMPLES := 4
 const FOCUS_SMOOTH_RATE := 25.0
 const COLOR_NORMAL := Color(0.9, 0.9, 0.9)
 const COLOR_BLENDING := Color(0.4, 0.4, 0.45)
@@ -47,6 +49,9 @@ var _dodge_t := 0.0
 var _dodge_start_pos := Vector3.ZERO
 var _dodge_end_pos := Vector3.ZERO
 var _dodge_cooldown_t := 0.0
+var _dodge_duration := DODGE_DURATION
+var _slide_dir: Vector2i = Vector2i.ZERO
+var _slide_last_cell: Vector2i = Vector2i.ZERO
 var _ext := [0, 0, 0, 0, 0]
 var _pending_ext := [0, 0, 0, 0, 0]
 var _tumble_distance := 1
@@ -56,6 +61,7 @@ var is_blending := false
 var _ground_material: ShaderMaterial
 var _player_material: StandardMaterial3D
 var _waves: Array = []
+var _footprints: Array = []
 var _box_mesh: BoxMesh
 var _face_marks: Array[bool] = [false, false, false, false, false, false]
 var _puddle_overlap_count: int = 0
@@ -106,6 +112,12 @@ func _on_contact(area: Area3D) -> void:
 func _on_puddle_entered(area: Area3D) -> void:
 	if area == _detection_area:
 		_puddle_overlap_count += 1
+		if _dodging:
+			var was_marked := _face_marks[_down_face_id()]
+			_check_ink_contact()
+			if not was_marked and _face_marks[_down_face_id()]:
+				var cell := Vector2i(roundi(position.x), roundi(position.z))
+				_deposit_streak_cell(cell)
 
 
 func _on_puddle_exited(area: Area3D) -> void:
@@ -157,6 +169,29 @@ func _is_extended() -> bool:
 		if v > 0:
 			return true
 	return false
+
+
+func is_dodging() -> bool:
+	return _dodging
+
+
+func truncate_dodge_to(cell: Vector2i) -> void:
+	# Cut a dodge short to land on the given cell. Scales remaining duration
+	# to preserve the slide's base speed so the cube decelerates smoothly
+	# instead of teleporting to the new target.
+	if not _dodging:
+		return
+	var current_pos := position
+	var target_pos := Vector3(cell.x, 0.5, cell.y)
+	var remaining := (target_pos - current_pos).length()
+	if remaining < 0.01:
+		return
+	var base_speed := float(DODGE_DISTANCE) / DODGE_DURATION
+	_dodge_duration = remaining / base_speed
+	_dodge_start_pos = current_pos
+	_dodge_end_pos = target_pos
+	_dodge_t = 0.0
+	grid_pos = cell
 
 
 func _update_mesh() -> void:
@@ -239,16 +274,24 @@ func _begin_tumble(dir: Vector2i) -> void:
 
 
 func _begin_dodge(dir: Vector2i) -> void:
-	if not _can_move(Vector3(dir.x * DODGE_DISTANCE, 0, dir.y * DODGE_DISTANCE)):
+	var max_dist := 0
+	for d in range(1, DODGE_DISTANCE + 1):
+		if not _can_move(Vector3(dir.x * d, 0, dir.y * d)):
+			break
+		max_dist = d
+	if max_dist == 0:
 		return
 	_dodge_start_pos = position
 	_dodge_end_pos = Vector3(
-		grid_pos.x + dir.x * DODGE_DISTANCE,
+		grid_pos.x + dir.x * max_dist,
 		0.5,
-		grid_pos.y + dir.y * DODGE_DISTANCE
+		grid_pos.y + dir.y * max_dist
 	)
-	grid_pos += dir * DODGE_DISTANCE
+	grid_pos += dir * max_dist
+	_slide_dir = dir
+	_slide_last_cell = Vector2i(roundi(_dodge_start_pos.x), roundi(_dodge_start_pos.z))
 	_dodge_t = 0.0
+	_dodge_duration = DODGE_DURATION * float(max_dist) / float(DODGE_DISTANCE)
 	_dodging = true
 
 
@@ -347,13 +390,20 @@ func _process(delta: float) -> void:
 		_dodge_cooldown_t = maxf(_dodge_cooldown_t - delta, 0.0)
 
 	if _dodging:
-		_dodge_t = minf(_dodge_t + delta / DODGE_DURATION, 1.0)
+		_dodge_t = minf(_dodge_t + delta / _dodge_duration, 1.0)
 		var t_eased := 1.0 - pow(1.0 - _dodge_t, 3.0)
 		position = _dodge_start_pos.lerp(_dodge_end_pos, t_eased)
+		var current_cell := Vector2i(roundi(position.x), roundi(position.z))
+		if current_cell != _slide_last_cell:
+			_slide_last_cell = current_cell
+			if _face_marks[_down_face_id()]:
+				_deposit_streak_cell(current_cell)
 		if _dodge_t >= 1.0:
 			_dodging = false
 			position = _dodge_end_pos
 			_dodge_cooldown_t = DODGE_COOLDOWN
+			_check_ink_contact()
+			move_settled.emit()
 		_update_mesh()
 		return
 
@@ -373,7 +423,8 @@ func _process(delta: float) -> void:
 			_ext = _pending_ext
 			_play_step(TUMBLE_DURATION / per_cell)
 			_check_ink_contact()
-			tumble_finished.emit()
+			_maybe_deposit_footprint()
+			move_settled.emit()
 		_update_mesh()
 		return
 
@@ -424,6 +475,47 @@ func _check_ink_contact() -> void:
 		return
 	_face_marks[face] = true
 	_splash_player.play()
+
+
+func _maybe_deposit_footprint() -> void:
+	if not _face_marks[_down_face_id()]:
+		return
+	var origin := Vector2(
+		grid_pos.x + (_ext[EXT_RIGHT] - _ext[EXT_LEFT]) * 0.5,
+		grid_pos.y + (_ext[EXT_BACK] - _ext[EXT_FWD]) * 0.5
+	)
+	_add_footprint(origin)
+	_update_footprint_uniforms()
+
+
+func _deposit_streak_cell(cell: Vector2i) -> void:
+	# Spread SLIDE_SUBSAMPLES footprints across this cell along the slide
+	# direction so adjacent cells merge into a continuous streak instead of
+	# discrete blobs.
+	var dir := Vector2(_slide_dir.x, _slide_dir.y)
+	for i in SLIDE_SUBSAMPLES:
+		var t: float = -0.375 + i * 0.25
+		var pos := Vector2(cell.x, cell.y) + dir * t
+		_add_footprint(pos)
+	_update_footprint_uniforms()
+
+
+func _add_footprint(pos: Vector2) -> void:
+	if _footprints.size() >= MAX_FOOTPRINTS:
+		_footprints.pop_front()
+	_footprints.append({ "position": pos, "alpha": 1.0 })
+
+
+func _update_footprint_uniforms() -> void:
+	var positions := PackedVector2Array()
+	var alphas := PackedFloat32Array()
+	positions.resize(MAX_FOOTPRINTS)
+	alphas.resize(MAX_FOOTPRINTS)
+	for i in _footprints.size():
+		positions[i] = _footprints[i].position
+		alphas[i] = _footprints[i].alpha
+	_ground_material.set_shader_parameter("footprint_positions", positions)
+	_ground_material.set_shader_parameter("footprint_alphas", alphas)
 
 
 func _down_face_id() -> int:
