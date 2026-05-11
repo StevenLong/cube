@@ -2,6 +2,7 @@ extends Node3D
 
 signal tumbled
 signal tumble_finished
+signal noise_emitted(origin: Vector2, max_radius: float, duration: float)
 
 const TUMBLE_DURATION := 0.3
 const SPRINT_DURATION := 0.15
@@ -243,6 +244,7 @@ func _play_step(noise_level: float) -> void:
 		"t": 0.0,
 		"max_radius": max_radius
 	})
+	noise_emitted.emit(origin, max_radius, WAVE_DURATION)
 
 
 func _instant_focus() -> Vector3:

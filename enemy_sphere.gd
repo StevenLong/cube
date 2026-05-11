@@ -29,6 +29,7 @@ var _last_seen_pos := Vector3.ZERO
 var _material: StandardMaterial3D
 var _player: Node3D
 var _player_area: Area3D
+var _pending_sounds: Array = []
 
 @onready var _ray: RayCast3D = $RayCast3D
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
@@ -39,9 +40,11 @@ func _ready() -> void:
 	_mesh.set_surface_override_material(0, _material)
 	_player = get_node("../Player")
 	_player_area = get_node("../Player/DetectionArea")
+	_player.noise_emitted.connect(_on_player_noise)
 
 
 func _process(delta: float) -> void:
+	_advance_pending_sounds(delta)
 	var seeing: bool = (_ray.is_colliding()
 		and _ray.get_collider() == _player_area
 		and not _player.is_blending)
@@ -135,3 +138,28 @@ func _state_color() -> Color:
 		State.SUSPICIOUS: return COLOR_SUSPICIOUS
 		State.PURSUIT: return COLOR_PURSUIT
 		_: return COLOR_PATROL
+
+
+func _on_player_noise(origin: Vector2, max_radius: float, duration: float) -> void:
+	var enemy_xz := Vector2(position.x, position.z)
+	var dist := enemy_xz.distance_to(origin)
+	if dist > max_radius:
+		return
+	var delay := dist * duration / max_radius
+	_pending_sounds.append({ "origin": origin, "delay": delay })
+
+
+func _advance_pending_sounds(delta: float) -> void:
+	for i in range(_pending_sounds.size() - 1, -1, -1):
+		_pending_sounds[i].delay -= delta
+		if _pending_sounds[i].delay <= 0.0:
+			var origin: Vector2 = _pending_sounds[i].origin
+			_pending_sounds.remove_at(i)
+			_on_sound_heard(origin)
+
+
+func _on_sound_heard(origin: Vector2) -> void:
+	if _state == State.PURSUIT:
+		return
+	_last_seen_pos = Vector3(origin.x, position.y, origin.y)
+	_enter_state(State.SUSPICIOUS)
