@@ -4,6 +4,7 @@
 [ext_resource type="Script" path="res://player.gd" id="2"]
 [ext_resource type="Script" path="res://camera_controller.gd" id="3"]
 [ext_resource type="Script" path="res://enemy_sphere.gd" id="4"]
+[ext_resource type="Script" path="res://level.gd" id="5"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_1"]
 shader = ExtResource("1")
@@ -40,6 +41,22 @@ albedo_color = Color(0.4, 0.4, 0.5, 1)
 [sub_resource type="Environment" id="Environment_1"]
 background_mode = 1
 background_color = Color(0, 0, 0, 1)
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_Tile"]
+size = Vector2(0.95, 0.95)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_Start"]
+albedo_color = Color(0.2, 0.7, 1, 1)
+emission_enabled = true
+emission = Color(0.2, 0.7, 1, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_End"]
+albedo_color = Color(1, 0.75, 0.2, 1)
+emission_enabled = true
+emission = Color(1, 0.75, 0.2, 1)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_EndArea"]
+size = Vector3(0.9, 0.5, 0.9)
 
 [node name="Node3D" type="Node3D" unique_id=1563203234]
 
@@ -150,3 +167,90 @@ surface_material_override/0 = SubResource("StandardMaterial3D_3")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Wall3"]
 shape = SubResource("BoxShape3D_1")
+
+[node name="StartTile" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.01, 0)
+mesh = SubResource("PlaneMesh_Tile")
+surface_material_override/0 = SubResource("StandardMaterial3D_Start")
+
+[node name="EndTile" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 8, 0.01, 0)
+mesh = SubResource("PlaneMesh_Tile")
+surface_material_override/0 = SubResource("StandardMaterial3D_End")
+
+[node name="Area3D" type="Area3D" parent="EndTile"]
+collision_layer = 8
+collision_mask = 2
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="EndTile/Area3D"]
+shape = SubResource("BoxShape3D_EndArea")
+
+[node name="Level" type="Node" parent="."]
+script = ExtResource("5")
+
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="ReadyLabel" type="Label" parent="UI"]
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -200.0
+offset_top = -40.0
+offset_right = 200.0
+offset_bottom = 40.0
+text = "Move to begin"
+horizontal_alignment = 1
+vertical_alignment = 1
+theme_override_font_sizes/font_size = 48
+
+[node name="ResultsPanel" type="ColorRect" parent="UI"]
+visible = false
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -180.0
+offset_top = -140.0
+offset_right = 180.0
+offset_bottom = 140.0
+color = Color(0, 0, 0, 0.7)
+
+[node name="VBox" type="VBoxContainer" parent="UI/ResultsPanel"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 20.0
+offset_top = 20.0
+offset_right = -20.0
+offset_bottom = -20.0
+
+[node name="Title" type="Label" parent="UI/ResultsPanel/VBox"]
+text = "Level Complete"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 36
+
+[node name="Spacer" type="Control" parent="UI/ResultsPanel/VBox"]
+custom_minimum_size = Vector2(0, 12)
+
+[node name="Moves" type="Label" parent="UI/ResultsPanel/VBox"]
+text = "Moves: 0"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 24
+
+[node name="Time" type="Label" parent="UI/ResultsPanel/VBox"]
+text = "Time: 0.0s"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 24
+
+[node name="Spotted" type="Label" parent="UI/ResultsPanel/VBox"]
+text = "Spotted: No"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 24
+
+[node name="Spacer2" type="Control" parent="UI/ResultsPanel/VBox"]
+custom_minimum_size = Vector2(0, 16)
+
+[node name="Hint" type="Label" parent="UI/ResultsPanel/VBox"]
+text = "Press any key to restart"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 18

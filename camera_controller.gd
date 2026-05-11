@@ -12,6 +12,7 @@ var _target: Node3D
 
 func _ready() -> void:
 	_target = get_node("../Player")
+	process_mode = Node.PROCESS_MODE_ALWAYS
 
 
 func _process(delta: float) -> void:

@@ -1,5 +1,8 @@
 extends Node3D
 
+signal tumbled
+signal tumble_finished
+
 const TUMBLE_DURATION := 0.3
 const SPRINT_DURATION := 0.15
 const DODGE_DISTANCE := 5
@@ -199,6 +202,7 @@ func _begin_tumble(dir: Vector2i) -> void:
 	grid_pos += dir * move
 	_t = 0.0
 	_tumbling = true
+	tumbled.emit()
 
 
 func _begin_dodge(dir: Vector2i) -> void:
@@ -333,6 +337,7 @@ func _process(delta: float) -> void:
 			basis = Basis.IDENTITY
 			_ext = _pending_ext
 			_play_step(TUMBLE_DURATION / per_cell)
+			tumble_finished.emit()
 		_update_mesh()
 		return
 

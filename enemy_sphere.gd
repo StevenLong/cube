@@ -1,5 +1,7 @@
 extends Node3D
 
+signal entered_pursuit
+
 const COLOR_PATROL := Color(0.7, 0.7, 0.75)
 const COLOR_SUSPICIOUS := Color(1.0, 0.85, 0.0)
 const COLOR_PURSUIT := Color(1.0, 0.2, 0.2)
@@ -107,11 +109,14 @@ func _pursue(delta: float) -> void:
 
 
 func _enter_state(new_state: State) -> void:
+	var was_pursuit := _state == State.PURSUIT
 	_state = new_state
 	_state_timer = 0.0
 	_confirm_timer = 0.0
 	if new_state == State.PATROL:
 		_target_idx = _closest_waypoint_idx()
+	if new_state == State.PURSUIT and not was_pursuit:
+		entered_pursuit.emit()
 
 
 func _closest_waypoint_idx() -> int:
