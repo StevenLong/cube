@@ -14,12 +14,25 @@ const MAX_WAVES := 8
 const FOCUS_SMOOTH_RATE := 25.0
 const COLOR_NORMAL := Color(0.9, 0.9, 0.9)
 const COLOR_BLENDING := Color(0.4, 0.4, 0.45)
+const COLOR_MARKED := Color(0.25, 0.35, 0.55)
 
 const EXT_LEFT  := 0
 const EXT_RIGHT := 1
 const EXT_FWD   := 2
 const EXT_BACK  := 3
 const EXT_UP    := 4
+
+# Face IDs map cube-local axis directions to indices 0-5.
+# Used to track which physical face is in contact with ground/puddles.
+const FACE_X_POS := 0
+const FACE_X_NEG := 1
+const FACE_Y_POS := 2
+const FACE_Y_NEG := 3
+const FACE_Z_POS := 4
+const FACE_Z_NEG := 5
+
+const LAYER_ENEMY := 4
+const LAYER_PUDDLE := 16
 
 var grid_pos := Vector2i(0, 0)
 var _tumbling := false
@@ -44,8 +57,12 @@ var _ground_material: ShaderMaterial
 var _player_material: StandardMaterial3D
 var _waves: Array = []
 var _box_mesh: BoxMesh
+var _face_marks: Array[bool] = [false, false, false, false, false, false]
+var _puddle_overlap_count: int = 0
+var _orient: Basis = Basis.IDENTITY
 
 @onready var _step_player: AudioStreamPlayer = $StepSound
+@onready var _splash_player: AudioStreamPlayer = $SplashSound
 @onready var _mesh_instance: MeshInstance3D = $MeshInstance3D
 @onready var _move_cast: ShapeCast3D = $MoveCast
 @onready var _detection_area: Area3D = $DetectionArea
@@ -68,6 +85,7 @@ func _input(event: InputEvent) -> void:
 
 func _ready() -> void:
 	_step_player.stream = _make_step_sound()
+	_splash_player.stream = _make_splash_sound()
 	_ground_material = get_node("../Ground/MeshInstance3D").get_surface_override_material(0)
 	_box_mesh = _mesh_instance.mesh.duplicate() as BoxMesh
 	_mesh_instance.mesh = _box_mesh
@@ -75,10 +93,24 @@ func _ready() -> void:
 	_mesh_instance.set_surface_override_material(0, _player_material)
 	_smoothed_focus = _mesh_instance.global_position
 	_detection_area.area_entered.connect(_on_contact)
+	for puddle in get_tree().get_nodes_in_group("ink_puddles"):
+		puddle.area_entered.connect(_on_puddle_entered)
+		puddle.area_exited.connect(_on_puddle_exited)
 
 
-func _on_contact(_area: Area3D) -> void:
-	get_tree().reload_current_scene.call_deferred()
+func _on_contact(area: Area3D) -> void:
+	if (area.collision_layer & LAYER_ENEMY) != 0:
+		get_tree().reload_current_scene.call_deferred()
+
+
+func _on_puddle_entered(area: Area3D) -> void:
+	if area == _detection_area:
+		_puddle_overlap_count += 1
+
+
+func _on_puddle_exited(area: Area3D) -> void:
+	if area == _detection_area:
+		_puddle_overlap_count -= 1
 
 
 func _can_move(delta_world: Vector3) -> bool:
@@ -337,8 +369,10 @@ func _process(delta: float) -> void:
 			_tumbling = false
 			position = Vector3(grid_pos.x, 0.5, grid_pos.y)
 			basis = Basis.IDENTITY
+			_orient = _quantize_basis(Basis(_axis, _angle) * _orient)
 			_ext = _pending_ext
 			_play_step(TUMBLE_DURATION / per_cell)
+			_check_ink_contact()
 			tumble_finished.emit()
 		_update_mesh()
 		return
@@ -365,7 +399,7 @@ func _process(delta: float) -> void:
 	# Blend: while button held and 3+ sides covered, the player is undetectable
 	# and movement is blocked (committing to the spot).
 	is_blending = Input.is_action_pressed("blend") and _count_covered_sides() >= 3
-	_player_material.albedo_color = COLOR_BLENDING if is_blending else COLOR_NORMAL
+	_player_material.albedo_color = _current_color()
 
 	if is_blending:
 		_update_mesh()
@@ -380,6 +414,87 @@ func _process(delta: float) -> void:
 		_begin_tumble(_pick_dir(move))
 
 	_update_mesh()
+
+
+func _check_ink_contact() -> void:
+	if _puddle_overlap_count <= 0:
+		return
+	var face: int = _down_face_id()
+	if _face_marks[face]:
+		return
+	_face_marks[face] = true
+	_splash_player.play()
+
+
+func _down_face_id() -> int:
+	# Use logical _orient (not visual basis) so face tracking persists across
+	# tumbles even though the visual mesh snaps back to identity at rest.
+	var local_down: Vector3 = _orient.inverse() * Vector3.DOWN
+	return _dir_to_face_id(local_down)
+
+
+func _dir_to_face_id(d: Vector3) -> int:
+	if d.x > 0.5: return FACE_X_POS
+	if d.x < -0.5: return FACE_X_NEG
+	if d.y > 0.5: return FACE_Y_POS
+	if d.y < -0.5: return FACE_Y_NEG
+	if d.z > 0.5: return FACE_Z_POS
+	return FACE_Z_NEG
+
+
+func _quantize_basis(b: Basis) -> Basis:
+	# Snap each rotated axis to its nearest cardinal direction so accumulated
+	# float drift across many tumbles doesn't compound.
+	return Basis(
+		_snap_to_cardinal(b * Vector3.RIGHT),
+		_snap_to_cardinal(b * Vector3.UP),
+		_snap_to_cardinal(b * Vector3.BACK)
+	)
+
+
+func _snap_to_cardinal(v: Vector3) -> Vector3:
+	var ax := absf(v.x)
+	var ay := absf(v.y)
+	var az := absf(v.z)
+	if ax >= ay and ax >= az:
+		return Vector3(signf(v.x), 0.0, 0.0)
+	if ay >= az:
+		return Vector3(0.0, signf(v.y), 0.0)
+	return Vector3(0.0, 0.0, signf(v.z))
+
+
+func _any_marked() -> bool:
+	for m in _face_marks:
+		if m:
+			return true
+	return false
+
+
+func _current_color() -> Color:
+	if is_blending:
+		return COLOR_BLENDING
+	if _any_marked():
+		return COLOR_MARKED
+	return COLOR_NORMAL
+
+
+static func _make_splash_sound() -> AudioStreamWAV:
+	var rate := 44100
+	var samples := 4096
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = rate
+	stream.stereo = false
+	var data := PackedByteArray()
+	data.resize(samples * 2)
+	for i in samples:
+		var env := exp(-float(i) / 800.0)
+		var freq: float = 200.0 - float(i) / float(samples) * 100.0
+		var val := int(sin(float(i) * TAU * freq / float(rate)) * env * 32767.0)
+		data[i * 2] = val & 0xFF
+		data[i * 2 + 1] = (val >> 8) & 0xFF
+	stream.data = data
+	return stream
 
 
 static func _make_step_sound() -> AudioStreamWAV:
