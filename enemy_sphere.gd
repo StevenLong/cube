@@ -4,20 +4,33 @@ signal entered_pursuit
 
 const COLOR_PATROL := Color(0.7, 0.7, 0.75)
 const COLOR_SUSPICIOUS := Color(1.0, 0.85, 0.0)
+const COLOR_INVESTIGATE := Color(1.0, 0.55, 0.0)
 const COLOR_PURSUIT := Color(1.0, 0.2, 0.2)
 
 const ARRIVE_THRESHOLD := 0.05
 const CONFIRM_DURATION := 0.5
 const SUSPICIOUS_TIMEOUT := 2.0
+const INVESTIGATE_TIMEOUT := 3.0
 const PURSUIT_LOSE_TIMEOUT := 1.5
 const PURSUIT_SPEED_MULT := 1.5
 const SUSPICIOUS_SPEED_MULT := 0.5
+const INVESTIGATE_SPEED_MULT := 1.0
+const VIEW_RADIUS := 8.0
+const VIEW_CONE_COS := 0.766  # cos(40°), so an 80° total cone
+const FOOTPRINT_VIEW_RADIUS := 5.0
+const FOOTPRINT_VIEW_CONE_COS := 0.866  # cos(30°), so a 60° total cone
+const FOOTPRINT_VISIT_DIST := 0.6
+const FOOTPRINT_RETARGET_DIST := 0.3
+const TURN_RATE := 5.0  # rad/s — 180° in ~0.6s
+const TURN_LEAD_THRESHOLD := PI / 6.0  # 30° — hold position if facing more than this off
 
-enum State { PATROL, SUSPICIOUS, PURSUIT }
+enum State { PATROL, SUSPICIOUS, INVESTIGATE, PURSUIT }
 
 @export var waypoints: Array[Vector3] = [
-	Vector3(5, 0.4, 0),
-	Vector3(-5, 0.4, 0),
+	Vector3(10, 0.4, -8),
+	Vector3(-10, 0.4, -8),
+	Vector3(-10, 0.4, 8),
+	Vector3(10, 0.4, 8),
 ]
 @export var speed: float = 2.0
 
@@ -28,10 +41,9 @@ var _confirm_timer := 0.0
 var _last_seen_pos := Vector3.ZERO
 var _material: StandardMaterial3D
 var _player: Node3D
-var _player_area: Area3D
 var _pending_sounds: Array = []
+var _ground_material: ShaderMaterial
 
-@onready var _ray: RayCast3D = $RayCast3D
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
 
 
@@ -39,23 +51,28 @@ func _ready() -> void:
 	_material = (_mesh.get_surface_override_material(0) as StandardMaterial3D).duplicate()
 	_mesh.set_surface_override_material(0, _material)
 	_player = get_node("../Player")
-	_player_area = get_node("../Player/DetectionArea")
 	_player.noise_emitted.connect(_on_player_noise)
+	_ground_material = get_node("../Ground/MeshInstance3D").get_surface_override_material(0)
 
 
 func _process(delta: float) -> void:
 	_advance_pending_sounds(delta)
-	var seeing: bool = (_ray.is_colliding()
-		and _ray.get_collider() == _player_area
-		and not _player.is_blending)
+	var seeing := _is_seeing_player()
 	if seeing:
 		_last_seen_pos = _player.position
+
+	var footprint_pos := Vector3.INF
+	if not seeing and _state != State.PURSUIT:
+		footprint_pos = _visible_footprint_pos()
 
 	match _state:
 		State.PATROL:
 			_patrol(delta)
 			if seeing:
 				_enter_state(State.SUSPICIOUS)
+			elif footprint_pos != Vector3.INF:
+				_last_seen_pos = Vector3(footprint_pos.x, position.y, footprint_pos.z)
+				_enter_state(State.INVESTIGATE)
 		State.SUSPICIOUS:
 			_state_timer += delta
 			if seeing:
@@ -64,9 +81,30 @@ func _process(delta: float) -> void:
 					_enter_state(State.PURSUIT)
 			else:
 				_confirm_timer = 0.0
+				if footprint_pos != Vector3.INF:
+					_last_seen_pos = Vector3(footprint_pos.x, position.y, footprint_pos.z)
+					_enter_state(State.INVESTIGATE)
 			if _state == State.SUSPICIOUS and _state_timer >= SUSPICIOUS_TIMEOUT:
 				_enter_state(State.PATROL)
 			_creep(delta)
+		State.INVESTIGATE:
+			if seeing:
+				_enter_state(State.PURSUIT)
+			else:
+				if position.distance_to(_last_seen_pos) < FOOTPRINT_VISIT_DIST:
+					var cell := Vector2i(roundi(_last_seen_pos.x), roundi(_last_seen_pos.z))
+					_player.consume_footprints_in_cell(cell)
+				if footprint_pos != Vector3.INF:
+					var nv := Vector2(footprint_pos.x, footprint_pos.z)
+					var cv := Vector2(_last_seen_pos.x, _last_seen_pos.z)
+					if nv.distance_to(cv) > FOOTPRINT_RETARGET_DIST:
+						_last_seen_pos = Vector3(footprint_pos.x, position.y, footprint_pos.z)
+						_state_timer = 0.0
+				else:
+					_state_timer += delta
+				if _state == State.INVESTIGATE and _state_timer >= INVESTIGATE_TIMEOUT:
+					_enter_state(State.PATROL)
+				_investigate_move(delta)
 		State.PURSUIT:
 			_pursue(delta)
 			if seeing:
@@ -74,41 +112,49 @@ func _process(delta: float) -> void:
 			else:
 				_state_timer += delta
 				if _state_timer >= PURSUIT_LOSE_TIMEOUT:
-					_enter_state(State.SUSPICIOUS)
+					_last_seen_pos = Vector3(_last_seen_pos.x, position.y, _last_seen_pos.z)
+					_enter_state(State.INVESTIGATE)
 
 	_material.albedo_color = _state_color()
+	_update_cone_uniforms()
 
 
 func _patrol(delta: float) -> void:
 	if waypoints.size() < 2:
 		return
 	var target: Vector3 = waypoints[_target_idx]
-	var to_target := target - position
-	var distance := to_target.length()
-	if distance < ARRIVE_THRESHOLD:
+	if (target - position).length() < ARRIVE_THRESHOLD:
 		_target_idx = (_target_idx + 1) % waypoints.size()
-	else:
-		var step := minf(speed * delta, distance)
-		position += to_target / distance * step
-		look_at(target, Vector3.UP)
+		return
+	_move_toward(target, delta, 1.0)
 
 
 func _creep(delta: float) -> void:
-	var to_target := _last_seen_pos - position
-	var distance := to_target.length()
-	if distance > ARRIVE_THRESHOLD:
-		var step := minf(speed * SUSPICIOUS_SPEED_MULT * delta, distance)
-		position += to_target / distance * step
-		look_at(_last_seen_pos, Vector3.UP)
+	_move_toward(_last_seen_pos, delta, SUSPICIOUS_SPEED_MULT)
 
 
 func _pursue(delta: float) -> void:
-	var to_player := _player.position - position
-	var distance := to_player.length()
-	if distance > ARRIVE_THRESHOLD:
-		var step := minf(speed * PURSUIT_SPEED_MULT * delta, distance)
-		position += to_player / distance * step
-		look_at(_player.position, Vector3.UP)
+	_move_toward(_player.position, delta, PURSUIT_SPEED_MULT)
+
+
+func _move_toward(target_pos: Vector3, delta: float, speed_mult: float) -> void:
+	var to_target := Vector3(target_pos.x - position.x, 0.0, target_pos.z - position.z)
+	var distance := to_target.length()
+	if distance < ARRIVE_THRESHOLD:
+		return
+	var horizontal_dir := to_target / distance
+	var current_forward := -global_transform.basis.z
+	current_forward.y = 0.0
+	var angle_off := 0.0
+	if current_forward.length_squared() > 0.0001:
+		current_forward = current_forward.normalized()
+		angle_off = current_forward.signed_angle_to(horizontal_dir, Vector3.UP)
+		var rot_step := clampf(angle_off, -TURN_RATE * delta, TURN_RATE * delta)
+		rotate(Vector3.UP, rot_step)
+	if absf(angle_off) > TURN_LEAD_THRESHOLD:
+		return
+	var step := minf(speed * speed_mult * delta, distance)
+	position += horizontal_dir * step
 
 
 func _enter_state(new_state: State) -> void:
@@ -136,6 +182,7 @@ func _closest_waypoint_idx() -> int:
 func _state_color() -> Color:
 	match _state:
 		State.SUSPICIOUS: return COLOR_SUSPICIOUS
+		State.INVESTIGATE: return COLOR_INVESTIGATE
 		State.PURSUIT: return COLOR_PURSUIT
 		_: return COLOR_PATROL
 
@@ -163,3 +210,97 @@ func _on_sound_heard(origin: Vector2) -> void:
 		return
 	_last_seen_pos = Vector3(origin.x, position.y, origin.y)
 	_enter_state(State.SUSPICIOUS)
+
+
+func _is_seeing_player() -> bool:
+	# Cone + LoS check. A single forward RayCast3D was too narrow — the cube
+	# would slip past the line and never register. INVESTIGATE drops the cone
+	# filter (active 360° scan).
+	if _player.is_blending:
+		return false
+	var to_player := _player.global_position - global_position
+	to_player.y = 0.0
+	var dist := to_player.length()
+	if dist < 0.01 or dist > VIEW_RADIUS:
+		return false
+	if _state != State.INVESTIGATE:
+		var forward := -global_transform.basis.z
+		forward.y = 0.0
+		var fl := forward.length()
+		if fl < 0.0001:
+			return false
+		forward /= fl
+		if (to_player / dist).dot(forward) < VIEW_CONE_COS:
+			return false
+	var space := get_world_3d().direct_space_state
+	var query := PhysicsRayQueryParameters3D.create(global_position, _player.global_position)
+	query.collide_with_areas = false
+	return space.intersect_ray(query).is_empty()
+
+
+func _visible_footprint_pos() -> Vector3:
+	# Returns the closest footprint with unobstructed LoS. INVESTIGATE scans
+	# 360° around the sphere; other states use the forward cone.
+	var positions: PackedVector2Array = _player.get_footprint_positions()
+	if positions.is_empty():
+		return Vector3.INF
+	var skip_cone := _state == State.INVESTIGATE
+	var forward := Vector3.ZERO
+	if not skip_cone:
+		forward = -global_transform.basis.z
+		forward.y = 0.0
+		var fl := forward.length()
+		if fl < 0.0001:
+			return Vector3.INF
+		forward /= fl
+	var origin := global_position
+	var space := get_world_3d().direct_space_state
+	var best_pos := Vector3.INF
+	var best_dist := INF
+	for p in positions:
+		var fp_world := Vector3(p.x, 0.05, p.y)
+		var delta_xz := Vector3(fp_world.x - origin.x, 0.0, fp_world.z - origin.z)
+		var dist := delta_xz.length()
+		if dist < 0.01 or dist > FOOTPRINT_VIEW_RADIUS or dist >= best_dist:
+			continue
+		if not skip_cone:
+			var dir := delta_xz / dist
+			if dir.dot(forward) < FOOTPRINT_VIEW_CONE_COS:
+				continue
+		var query := PhysicsRayQueryParameters3D.create(origin, fp_world)
+		query.collide_with_areas = false
+		if space.intersect_ray(query).is_empty():
+			best_pos = fp_world
+			best_dist = dist
+	return best_pos
+
+
+func _investigate_move(delta: float) -> void:
+	_move_toward(_last_seen_pos, delta, INVESTIGATE_SPEED_MULT)
+
+
+func _update_cone_uniforms() -> void:
+	var forward := -global_transform.basis.z
+	forward.y = 0.0
+	var fl := forward.length()
+	var dir_2d := Vector2(1.0, 0.0)
+	if fl > 0.0001:
+		dir_2d = Vector2(forward.x / fl, forward.z / fl)
+	var col := _state_color()
+	# INVESTIGATE renders as a full circle (active 360° scan); other states use
+	# the forward cone. -1.0 makes the shader's dot test always pass.
+	var half_angle_cos := -1.0 if _state == State.INVESTIGATE else VIEW_CONE_COS
+	_ground_material.set_shader_parameter("cone_origin", Vector2(position.x, position.z))
+	_ground_material.set_shader_parameter("cone_dir", dir_2d)
+	_ground_material.set_shader_parameter("cone_half_angle_cos", half_angle_cos)
+	_ground_material.set_shader_parameter("cone_radius", VIEW_RADIUS)
+	_ground_material.set_shader_parameter("cone_color", Vector3(col.r, col.g, col.b))
+	_ground_material.set_shader_parameter("cone_alpha", _state_cone_alpha())
+
+
+func _state_cone_alpha() -> float:
+	match _state:
+		State.SUSPICIOUS: return 0.4
+		State.INVESTIGATE: return 0.5
+		State.PURSUIT: return 0.6
+		_: return 0.2

@@ -113,11 +113,7 @@ func _on_puddle_entered(area: Area3D) -> void:
 	if area == _detection_area:
 		_puddle_overlap_count += 1
 		if _dodging:
-			var was_marked := _face_marks[_down_face_id()]
 			_check_ink_contact()
-			if not was_marked and _face_marks[_down_face_id()]:
-				var cell := Vector2i(roundi(position.x), roundi(position.z))
-				_deposit_streak_cell(cell)
 
 
 func _on_puddle_exited(area: Area3D) -> void:
@@ -480,6 +476,8 @@ func _check_ink_contact() -> void:
 func _maybe_deposit_footprint() -> void:
 	if not _face_marks[_down_face_id()]:
 		return
+	if _puddle_overlap_count > 0:
+		return
 	var origin := Vector2(
 		grid_pos.x + (_ext[EXT_RIGHT] - _ext[EXT_LEFT]) * 0.5,
 		grid_pos.y + (_ext[EXT_BACK] - _ext[EXT_FWD]) * 0.5
@@ -492,6 +490,8 @@ func _deposit_streak_cell(cell: Vector2i) -> void:
 	# Spread SLIDE_SUBSAMPLES footprints across this cell along the slide
 	# direction so adjacent cells merge into a continuous streak instead of
 	# discrete blobs.
+	if _puddle_overlap_count > 0:
+		return
 	var dir := Vector2(_slide_dir.x, _slide_dir.y)
 	for i in SLIDE_SUBSAMPLES:
 		var t: float = -0.375 + i * 0.25
@@ -516,6 +516,24 @@ func _update_footprint_uniforms() -> void:
 		alphas[i] = _footprints[i].alpha
 	_ground_material.set_shader_parameter("footprint_positions", positions)
 	_ground_material.set_shader_parameter("footprint_alphas", alphas)
+
+
+func get_footprint_positions() -> PackedVector2Array:
+	var out := PackedVector2Array()
+	for fp in _footprints:
+		out.append(fp.position)
+	return out
+
+
+func consume_footprints_in_cell(cell: Vector2i) -> void:
+	var changed := false
+	for i in range(_footprints.size() - 1, -1, -1):
+		var p: Vector2 = _footprints[i].position
+		if Vector2i(roundi(p.x), roundi(p.y)) == cell:
+			_footprints.remove_at(i)
+			changed = true
+	if changed:
+		_update_footprint_uniforms()
 
 
 func _down_face_id() -> int:
