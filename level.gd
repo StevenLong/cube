@@ -19,7 +19,7 @@ var _start_material: StandardMaterial3D
 var _end_material: StandardMaterial3D
 
 @onready var _player: Node3D = get_node("../Player")
-@onready var _enemy: Node3D = get_node("../Enemy")
+@onready var _enemy: Node3D = get_node_or_null("../Enemy")
 @onready var _start_tile: MeshInstance3D = get_node("../StartTile")
 @onready var _end_tile: MeshInstance3D = get_node("../EndTile")
 @onready var _end_area: Area3D = get_node("../EndTile/Area3D")
@@ -38,10 +38,19 @@ func _ready() -> void:
 	_end_tile.set_surface_override_material(0, _end_material)
 	_player.tumbled.connect(_on_player_tumbled)
 	_player.move_settled.connect(_on_player_move_settled)
-	_enemy.entered_pursuit.connect(_on_enemy_pursuit)
+	if _enemy != null:
+		_enemy.entered_pursuit.connect(_on_enemy_pursuit)
+	else:
+		_result_spotted.hide()
 	_end_area.area_entered.connect(_on_end_entered)
 	_end_area.area_exited.connect(_on_end_exited)
 	_enter_ready()
+
+
+func _input(event: InputEvent) -> void:
+	if event.is_action_pressed("ui_cancel"):
+		get_tree().paused = false
+		get_tree().change_scene_to_file("res://main_menu.tscn")
 
 
 func _process(delta: float) -> void:
