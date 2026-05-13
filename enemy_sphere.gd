@@ -24,6 +24,19 @@ const FOOTPRINT_RETARGET_DIST := 0.3
 const TURN_RATE := 5.0  # rad/s — 180° in ~0.6s
 const TURN_LEAD_THRESHOLD := PI / 6.0  # 30° — hold position if facing more than this off
 
+const NAV_MIN := -13
+const NAV_MAX := 13
+const NEIGHBORS: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+const NEIGHBORS_8: Array[Vector2i] = [
+	Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1),
+	Vector2i(-1, 0), Vector2i(1, 0),
+	Vector2i(-1, 1), Vector2i(0, 1), Vector2i(1, 1),
+]
+const PATH_CELL_ARRIVE := 0.15
+const PURSUIT_REPATH_INTERVAL := 0.3
+const SILHOUETTE_ALPHA := 0.3
+const VISIBILITY_LERP_RATE := 8.0
+
 enum State { PATROL, SUSPICIOUS, INVESTIGATE, PURSUIT }
 
 @export var waypoints: Array[Vector3] = [
@@ -43,16 +56,25 @@ var _material: StandardMaterial3D
 var _player: Node3D
 var _pending_sounds: Array = []
 var _ground_material: ShaderMaterial
+var _nav_blocked: Dictionary = {}
+var _path: Array[Vector2i] = []
+var _path_idx: int = 0
+var _pursuit_repath_timer: float = 0.0
+var _visibility_alpha: float = 1.0
 
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
 
 
 func _ready() -> void:
 	_material = (_mesh.get_surface_override_material(0) as StandardMaterial3D).duplicate()
+	_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_mesh.set_surface_override_material(0, _material)
 	_player = get_node("../Player")
 	_player.noise_emitted.connect(_on_player_noise)
 	_ground_material = get_node("../Ground/MeshInstance3D").get_surface_override_material(0)
+	_build_nav_grid()
+	if waypoints.size() > 0:
+		_set_path_to(waypoints[_target_idx])
 
 
 func _process(delta: float) -> void:
@@ -100,6 +122,7 @@ func _process(delta: float) -> void:
 					if nv.distance_to(cv) > FOOTPRINT_RETARGET_DIST:
 						_last_seen_pos = Vector3(footprint_pos.x, position.y, footprint_pos.z)
 						_state_timer = 0.0
+						_set_path_to(_last_seen_pos)
 				else:
 					_state_timer += delta
 				if _state == State.INVESTIGATE and _state_timer >= INVESTIGATE_TIMEOUT:
@@ -115,7 +138,11 @@ func _process(delta: float) -> void:
 					_last_seen_pos = Vector3(_last_seen_pos.x, position.y, _last_seen_pos.z)
 					_enter_state(State.INVESTIGATE)
 
-	_material.albedo_color = _state_color()
+	var target_alpha := 1.0 if _visible_to_player() else SILHOUETTE_ALPHA
+	_visibility_alpha = lerpf(_visibility_alpha, target_alpha, minf(delta * VISIBILITY_LERP_RATE, 1.0))
+	var col := _state_color()
+	col.a = _visibility_alpha
+	_material.albedo_color = col
 	_update_cone_uniforms()
 
 
@@ -125,16 +152,21 @@ func _patrol(delta: float) -> void:
 	var target: Vector3 = waypoints[_target_idx]
 	if (target - position).length() < ARRIVE_THRESHOLD:
 		_target_idx = (_target_idx + 1) % waypoints.size()
+		_set_path_to(waypoints[_target_idx])
 		return
-	_move_toward(target, delta, 1.0)
+	_follow_path(delta, 1.0, target)
 
 
 func _creep(delta: float) -> void:
-	_move_toward(_last_seen_pos, delta, SUSPICIOUS_SPEED_MULT)
+	_follow_path(delta, SUSPICIOUS_SPEED_MULT, _last_seen_pos)
 
 
 func _pursue(delta: float) -> void:
-	_move_toward(_player.position, delta, PURSUIT_SPEED_MULT)
+	_pursuit_repath_timer -= delta
+	if _pursuit_repath_timer <= 0.0:
+		_set_path_to(_player.position)
+		_pursuit_repath_timer = PURSUIT_REPATH_INTERVAL
+	_follow_path(delta, PURSUIT_SPEED_MULT, _player.position)
 
 
 func _move_toward(target_pos: Vector3, delta: float, speed_mult: float) -> void:
@@ -164,8 +196,16 @@ func _enter_state(new_state: State) -> void:
 	_confirm_timer = 0.0
 	if new_state == State.PATROL:
 		_target_idx = _closest_waypoint_idx()
-	if new_state == State.PURSUIT and not was_pursuit:
-		entered_pursuit.emit()
+		_set_path_to(waypoints[_target_idx])
+	if new_state == State.SUSPICIOUS:
+		_set_path_to(_last_seen_pos)
+	if new_state == State.INVESTIGATE:
+		_set_path_to(_last_seen_pos)
+	if new_state == State.PURSUIT:
+		_set_path_to(_player.position)
+		_pursuit_repath_timer = PURSUIT_REPATH_INTERVAL
+		if not was_pursuit:
+			entered_pursuit.emit()
 
 
 func _closest_waypoint_idx() -> int:
@@ -276,7 +316,7 @@ func _visible_footprint_pos() -> Vector3:
 
 
 func _investigate_move(delta: float) -> void:
-	_move_toward(_last_seen_pos, delta, INVESTIGATE_SPEED_MULT)
+	_follow_path(delta, INVESTIGATE_SPEED_MULT, _last_seen_pos)
 
 
 func _update_cone_uniforms() -> void:
@@ -304,3 +344,119 @@ func _state_cone_alpha() -> float:
 		State.INVESTIGATE: return 0.5
 		State.PURSUIT: return 0.6
 		_: return 0.2
+
+
+func _build_nav_grid() -> void:
+	# Static walls only — interior Wall* nodes at integer cells. Perimeter walls
+	# sit outside the playable band and are handled by the NAV_MIN/MAX bounds.
+	_nav_blocked.clear()
+	for child in get_parent().get_children():
+		if child is StaticBody3D and child.name.begins_with("Wall"):
+			var cell := Vector2i(roundi(child.position.x), roundi(child.position.z))
+			_nav_blocked[cell] = true
+
+
+func _cell_blocked(cell: Vector2i) -> bool:
+	if cell.x < NAV_MIN or cell.x > NAV_MAX or cell.y < NAV_MIN or cell.y > NAV_MAX:
+		return true
+	return _nav_blocked.has(cell)
+
+
+func _world_to_cell(p: Vector3) -> Vector2i:
+	return Vector2i(roundi(p.x), roundi(p.z))
+
+
+func _set_path_to(target: Vector3) -> void:
+	var start_cell := _world_to_cell(position)
+	var goal_cell := _world_to_cell(target)
+	_path = _find_path(start_cell, goal_cell)
+	_path_idx = 0
+	if _path.size() > 0 and _path[0] == start_cell:
+		_path_idx = 1
+
+
+func _follow_path(delta: float, speed_mult: float, final_target: Vector3) -> void:
+	while _path_idx < _path.size():
+		var cell: Vector2i = _path[_path_idx]
+		var cell_world := Vector3(cell.x, position.y, cell.y)
+		var to_cell := Vector2(cell_world.x - position.x, cell_world.z - position.z)
+		if to_cell.length() < PATH_CELL_ARRIVE:
+			_path_idx += 1
+			continue
+		_move_toward(cell_world, delta, speed_mult)
+		return
+	# Path exhausted (or empty) — close the last sub-cell to the actual target.
+	_move_toward(final_target, delta, speed_mult)
+
+
+func _find_path(start: Vector2i, goal: Vector2i) -> Array[Vector2i]:
+	# Goal-blocked fallback: snap to closest open 8-neighbour of the goal so the
+	# sphere walks to a cell adjacent to a footprint sitting on a wall edge.
+	if _cell_blocked(goal):
+		var best_n := Vector2i.ZERO
+		var best_dist := INF
+		var found := false
+		for d in NEIGHBORS_8:
+			var n: Vector2i = goal + d
+			if _cell_blocked(n):
+				continue
+			var dist := float((start - n).length_squared())
+			if dist < best_dist:
+				best_dist = dist
+				best_n = n
+				found = true
+		if not found:
+			return []
+		goal = best_n
+	if _cell_blocked(start):
+		return []
+	if start == goal:
+		var single: Array[Vector2i] = [start]
+		return single
+	var came_from: Dictionary = {}
+	var g_score: Dictionary = {start: 0.0}
+	var open: Dictionary = {start: float(absi(start.x - goal.x) + absi(start.y - goal.y))}
+	while not open.is_empty():
+		var current := _pop_lowest(open)
+		if current == goal:
+			return _reconstruct_path(came_from, current)
+		var current_g: float = g_score[current]
+		for step in NEIGHBORS:
+			var n: Vector2i = current + step
+			if _cell_blocked(n):
+				continue
+			var tentative_g := current_g + 1.0
+			if not g_score.has(n) or tentative_g < g_score[n]:
+				came_from[n] = current
+				g_score[n] = tentative_g
+				open[n] = tentative_g + float(absi(n.x - goal.x) + absi(n.y - goal.y))
+	return []
+
+
+func _pop_lowest(open: Dictionary) -> Vector2i:
+	var best: Vector2i = Vector2i.ZERO
+	var best_f := INF
+	for k in open.keys():
+		var key: Vector2i = k
+		var f: float = open[key]
+		if f < best_f:
+			best_f = f
+			best = key
+	open.erase(best)
+	return best
+
+
+func _reconstruct_path(came_from: Dictionary, current: Vector2i) -> Array[Vector2i]:
+	var path: Array[Vector2i] = [current]
+	while came_from.has(current):
+		var prev: Vector2i = came_from[current]
+		current = prev
+		path.push_front(current)
+	return path
+
+
+func _visible_to_player() -> bool:
+	var space := get_world_3d().direct_space_state
+	var query := PhysicsRayQueryParameters3D.create(_player.global_position, global_position)
+	query.collide_with_areas = false
+	return space.intersect_ray(query).is_empty()
