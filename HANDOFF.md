@@ -1,149 +1,142 @@
-# Handoff - 2026-05-12
+# Handoff, 2026-05-13
 
 ## Where we are
-Phases 1-4 complete. Phase 5 (Environmental Detection) nearly done — only
-water-puddle dilution remains. Enemy now follows footprint trails through
-a dedicated INVESTIGATE state, scans 360° while alert, and has math-based
-cone vision with a ground-projected visual indicator. Arena expanded to
-30×30 with perimeter walls and a 4-corner sphere patrol.
+Phase 5 done. Sphere pathfinding done. Project now has a main menu and a level
+loader pattern, with Tutorial 1: Movement as the first level. Enemy fades to
+silhouette when out of the cube's line of sight. New systems need tuning, but
+everything functions.
 
-Local commit `a06a415` covers this session's work but is NOT pushed —
-WSL machine has no GitHub credentials. Set up next session before doing
-more work.
+All commits on `main` are pushed to origin. Last session ended with one local
+commit that needed pushing; that's done.
 
 ## Completed this session
-- **Slice 4 — enemy sees footprints (INVESTIGATE state)**: enemy reads
-  player's footprint list, filters by range + facing cone (60°/5u) +
-  LoS raycast (`collide_with_areas = false` to ignore the player's own
-  Area3D). On finding a print, enters INVESTIGATE, walks to the print,
-  calls `player.consume_footprints_in_cell(cell)` on arrival — the
-  print pops off the ground. Scans for next visible print; follows the
-  trail. Times out after 3s with no new evidence → PATROL.
-- **Player detection rewrite**: original single forward `RayCast3D` was
-  too narrow — cube could stand directly beside the sphere and not be
-  detected. Replaced with math-based cone scan + LoS raycast (80°/8u
-  by default). Same pattern as footprint detection. The RayCast3D node
-  is still in main.tscn but unreferenced; can be deleted any time.
-- **Power-mode framing**:
-  - PATROL: forward cone (80°/8u) + audio.
-  - SUSPICIOUS: forward cone, slow creep (0.5×).
-  - INVESTIGATE: 360° scan for both player and footprints, walks at base
-    speed (1.0×). PURSUIT_LOSE timeout drops into INVESTIGATE (not
-    SUSPICIOUS) so the sphere actively hunts.
-  - PURSUIT: tracks player at 1.5×.
-- **Visual sensor indicator**: ground-shader-projected cone in front of
-  the sphere. Colour matches state; alpha rises with alertness; expands
-  to a full circle during INVESTIGATE. Same `VIEW_RADIUS`/`VIEW_CONE_COS`
-  drive both detection and visual, so tuning one updates the other.
-- **Smooth rotation**: all movement goes through `_move_toward(target,
-  delta, speed_mult)`. Sphere yaws at `TURN_RATE` rad/s toward the
-  target, holds position while more than `TURN_LEAD_THRESHOLD` (PI/6)
-  off so it doesn't slide sideways during the turn. Replaces snap
-  `look_at` at every waypoint.
-- **Puddle deposit fix**: prints no longer deposited while the cube is
-  over a puddle. Removed the entry-cell streak deposit from
-  `_on_puddle_entered`; added `_puddle_overlap_count > 0` guards to
-  `_maybe_deposit_footprint` and `_deposit_streak_cell`.
-- **Larger arena**: ground 20×20 → 30×30. Shader UV scaling and offset
-  updated. Added 4 perimeter walls (`PerimeterN/S/E/W`) as StaticBody3D
-  with new `BoxMesh_PerimeterNS/EW` and matching shapes. Inner
-  playable cells ≈ -13..13.
-- **Sphere patrol path**: 4-corner rectangle (10,-8) → (-10,-8) → (-10,8)
-  → (10,8) at y=0.4. Set as the script default; scene has no override.
 
-## Bugs found and fixed
-- **`Cannot infer the type of "positions"`**: `_player` was typed
-  `Node3D`, so the parser couldn't see `get_footprint_positions`'s
-  return type. Annotated `var positions: PackedVector2Array` at the
-  call site.
-- **`_last_seen_pos.y` tilting the enemy**: footprint world Y = 0.05;
-  using that directly tilts the sphere's look_at down and pulls the
-  raycast off-axis. Now pegged to `position.y` everywhere
-  `_last_seen_pos` is set from a footprint or PURSUIT_LOSE.
-- **Sphere "stuck looking at print forever"**: the closest-visible-print
-  was itself once arrived → kept resetting timer. Fixed by consuming
-  prints on arrival (now they're gone from the list) + INVESTIGATE
-  timeout.
+### Water puddle (Phase 5 Slice 5)
+- Water is binary, whole-cube cleanse. Touching water with any face marked
+  clears all of `_face_marks` and plays the splash sound. No step counter,
+  no per-face dilution. See `project_ink_water_binary` memory for design
+  rationale. Existing footprints on the ground are left in place.
+- New `WaterPuddle` node in `main.tscn`, cyan transparent material, in the
+  `water_puddles` group. Position `(4, 0.01, 1)` is arbitrary, move as needed.
+- New player state `_water_overlap_count`; handler `_on_water_entered` calls
+  `_check_water_cleanse()` on entry.
+
+### Sphere pathfinding (grid A*)
+- New nav grid built in `_ready` from `StaticBody3D` children of root whose
+  names start with "Wall". Cell pitch is 1u. Bounds are [-13, 13] inclusive.
+  Perimeter walls sit outside those bounds and are handled implicitly.
+- `_find_path(start, goal)` runs A* with Manhattan heuristic, 4-connected.
+  Goal-blocked fallback snaps to nearest open 8-neighbour so footprints on
+  wall cells still produce a reachable target.
+- `_follow_path(delta, mult, final_target)` walks cell-to-cell via the
+  existing `_move_toward`. When the path is exhausted, falls back to direct
+  seek so the final sub-cell distance closes.
+- All four states pathfind now: PATROL recomputes on entry and waypoint
+  advance, SUSPICIOUS on entry, INVESTIGATE on entry and on footprint
+  retarget, PURSUIT on entry and every `PURSUIT_REPATH_INTERVAL` (0.3s).
+
+### Main menu + level loader + Tutorial 1
+- New `main_menu.tscn` + `main_menu.gd`. Three buttons: Tutorial 1: Movement,
+  Sandbox, Quit. Sandbox loads the existing `main.tscn` unchanged. Tutorial 1
+  loads `levels/level_01_movement.tscn`. Escape on the menu quits.
+- `project.godot` entry scene is now `res://main_menu.tscn`.
+- Escape behaviour moved from `player.gd` to `level.gd`. In any level, Escape
+  unpauses the tree and calls `change_scene_to_file("res://main_menu.tscn")`.
+- `level.gd` made the enemy optional: `get_node_or_null("../Enemy")`. If no
+  enemy is present, the pursuit signal is not connected and the Spotted
+  results label is hidden.
+- Tutorial 1 scene: player, ground, start tile at `(0, 0.01, 0)`, end tile at
+  `(3, 0.01, 3)` so the player has to tumble in two axes. No enemy, walls,
+  perimeters, or puddles.
+
+### Enemy line-of-sight silhouette fade
+- Each frame, raycast from player global position to enemy global position
+  against bodies only. If unblocked, target alpha is 1.0. If a wall blocks
+  the line, target alpha is `SILHOUETTE_ALPHA` (0.3).
+- Current alpha lerps toward the target at `VISIBILITY_LERP_RATE` (8.0/s),
+  giving roughly a 0.3 second crossfade. Material transparency is set to
+  `TRANSPARENCY_ALPHA` in `_ready` so the alpha channel actually renders.
+- Tutorial 1 has no enemy, so this is sandbox-only behaviour.
 
 ## Phase status
-- [x] Phase 1 — core movement
-- [x] Phase 2 — extension
-- [x] Phase 3 — detection and hiding
-- [x] Phase 4 — first playable level
-- [ ] Phase 5 — environmental detection
-  - [x] Ink puddle object
-  - [x] Ink mark on cube side on contact, splash sound
-  - [x] Ink footprints on ground from marked side
-  - [x] Suspicious state triggered by enemy seeing footprints
-    (implemented as INVESTIGATE; SUSPICIOUS now reserved for
-    audio/brief-visual)
-  - [ ] Water puddle dilutes ink (10 steps to 3)
-  - [x] Enemy reacts to movement noise
+- [x] Phase 1, core movement
+- [x] Phase 2, extension
+- [x] Phase 3, detection and hiding
+- [x] Phase 4, first playable level
+- [x] Phase 5, environmental detection (all six items done)
+- [x] Sphere pathfinding (was deferred from prior session)
+- [x] Main menu and level loader
+- [x] Tutorial 1: Movement
 
-## Tunable constants worth knowing (enemy_sphere.gd)
-- `VIEW_RADIUS` 8.0, `VIEW_CONE_COS` 0.766 (80° cone) — player vision
-- `FOOTPRINT_VIEW_RADIUS` 5.0, `FOOTPRINT_VIEW_CONE_COS` 0.866 (60°)
-- `INVESTIGATE_TIMEOUT` 3.0s, `SUSPICIOUS_TIMEOUT` 2.0s,
-  `PURSUIT_LOSE_TIMEOUT` 1.5s
-- Speed mults: PATROL 1.0, SUSPICIOUS 0.5, INVESTIGATE 1.0, PURSUIT 1.5
-- `TURN_RATE` 5.0 rad/s, `TURN_LEAD_THRESHOLD` PI/6
-- `FOOTPRINT_VISIT_DIST` 0.6u (consume radius)
+## Tuning backlog (next session's first focus)
+User flagged these as needing pass before moving on.
 
-## Deferred / known limitations
-- **Sphere doesn't navigate around walls**. Patrol path is straight-line
-  clear of the 3 interior walls, but INVESTIGATE can drag the sphere
-  toward a print behind an interior wall and it'll clip through. Next
-  task: navmesh or A* on the grid.
-- **GitHub auth not set up on this WSL** — commits stay local until
-  configured (`gh auth login` or switch remote to SSH).
-- **Unused `RayCast3D` on Enemy** in main.tscn (replaced by math). Can
-  be deleted whenever.
-- **Per-face cube ink visualisation** still parked. Cube tints
-  whole-body when any face is marked.
-- **No fail-state results screen**: enemy contact instantly reloads.
-- **Extended-cuboid footprints**: one deposit at cuboid centre, not
-  per contact cell.
+### Player LoS silhouette
+- `SILHOUETTE_ALPHA` (0.3) and `VISIBILITY_LERP_RATE` (8.0) are placeholders.
+  Likely want to tune by feel.
+- The enemy's ground-projected vision cone (drawn in `grid_ground.gdshader`,
+  not on the mesh) is currently still visible when the enemy itself is faded.
+  If you can't see the enemy you shouldn't see where it's looking. Easiest
+  fix: scale `cone_alpha` uniform by `_visibility_alpha` in
+  `_update_cone_uniforms`, so the cone fades with the enemy.
 
-## Polish backlog (parked)
-- sfx + particles for end/caught
-- smooth respawn camera transition
-- spawn elevator animation
-- symmetric "Caught" results panel
-- per-face ink visualisation on cube
+### Pathfinding
+- PATROL waypoint default in `enemy_sphere.gd` is still the 4-corner
+  rectangle. Hasn't been re-evaluated post-pathfinding (could now be a
+  tighter shape that the sphere would route through).
+- `PURSUIT_REPATH_INTERVAL` 0.3s feels responsive in casual testing but has
+  not been stress-tested.
 
-## Phase 5 next step (the only one left)
-**Slice 5 — water dilution**:
-- Water puddle object (cyan, transparent visual). Mirror the ink puddle
-  structure (MeshInstance3D + Area3D, on a new `water_puddles` group).
-- On contact with a marked face, reduce a per-face "ink steps remaining"
-  counter from 10 to 3.
-- Each footprint deposit decrements that face's counter; at 0 the mark
-  is cleared (face no longer prints).
-- Per-face counter array on the player (parallel to `_face_marks`).
+## Deferred / parked
 
-## After Phase 5
-- **Sphere pathfinding** (deferred from this session). Either NavMesh3D
-  or grid-based A* with the existing wall colliders as blockers.
-  Probably easier to go grid-A* given the integer cell pitch.
-- More level content / per-mechanic challenge levels.
+### From prior session (still parked)
+- Unused `RayCast3D` on Enemy in `main.tscn`; replaced by the math-based
+  cone but the node was never removed. Safe to delete.
+- Per-face cube ink visualisation. Cube tints whole-body when any face is
+  marked. Per-face decals or shader trick still TODO.
+- No fail-state results screen. Enemy contact still instantly reloads the
+  scene; not symmetric with the Complete results panel.
+- Extended-cuboid footprints. One deposit at cuboid centre, not per contact
+  cell.
+
+### From this session
+- Polish backlog: sfx + particles for end/caught, smooth respawn camera,
+  spawn elevator animation, symmetric Caught results panel.
+- More tutorials: sprint and noise next, then extension, blend, ink and
+  water, enemy. Each is a stripped scene loaded from the menu.
+- Level select grows organically as tutorials are added; no scrolling or
+  paging needed yet.
+
+## Tunable constants worth knowing
+- `enemy_sphere.gd`
+  - `VIEW_RADIUS` 8.0, `VIEW_CONE_COS` 0.766 (80° forward cone), player vision
+  - `FOOTPRINT_VIEW_RADIUS` 5.0, `FOOTPRINT_VIEW_CONE_COS` 0.866 (60°)
+  - `INVESTIGATE_TIMEOUT` 3.0s, `SUSPICIOUS_TIMEOUT` 2.0s,
+    `PURSUIT_LOSE_TIMEOUT` 1.5s
+  - Speed mults: PATROL 1.0, SUSPICIOUS 0.5, INVESTIGATE 1.0, PURSUIT 1.5
+  - `TURN_RATE` 5.0 rad/s, `TURN_LEAD_THRESHOLD` PI/6
+  - `FOOTPRINT_VISIT_DIST` 0.6u
+  - New: `NAV_MIN`/`NAV_MAX` -13/13, `PATH_CELL_ARRIVE` 0.15,
+    `PURSUIT_REPATH_INTERVAL` 0.3s, `SILHOUETTE_ALPHA` 0.3,
+    `VISIBILITY_LERP_RATE` 8.0
 
 ## Key files
-- `player.gd` — tumble + extension + dodge + blend + face tracking + ink
-  + audio waves + footprint API (`get_footprint_positions`,
-  `consume_footprints_in_cell`)
-- `enemy_sphere.gd` — PATROL/SUSPICIOUS/INVESTIGATE/PURSUIT,
-  math-based cone vision, footprint trail logic, smooth rotation,
-  cone shader uniform updates
-- `level.gd` — state machine (READY/PLAYING/COMPLETE), stats, end tile,
-  pause
-- `camera_controller.gd` — fixed follow + tilt; `process_mode = ALWAYS`
-- `main.tscn` — Player + colliders + audio, Enemy, interior Walls,
-  Perimeter walls (N/S/E/W), Ground (30×30), StartTile, EndTile + Area,
-  Puddle + Area, Level, UI
-- `shaders/grid_ground.gdshader` — grid + waves + vision cone +
-  footprints, all in fragment
+- `player.gd`: tumble, extension, dodge, blend, face tracking, ink, audio
+  waves, footprint API, water cleanse. No longer handles Escape.
+- `enemy_sphere.gd`: PATROL/SUSPICIOUS/INVESTIGATE/PURSUIT, math-based cone
+  vision, footprint trail logic, smooth rotation, cone shader uniform updates,
+  grid A* pathfinding, LoS silhouette fade.
+- `level.gd`: state machine (READY/PLAYING/COMPLETE), stats, end tile, pause,
+  Escape -> menu, optional enemy.
+- `camera_controller.gd`: fixed follow + tilt; `process_mode = ALWAYS`.
+- `main_menu.gd`: button signals, Escape quits.
+- `main.tscn`: sandbox scene, full arena with everything in it.
+- `main_menu.tscn`: title and three buttons.
+- `levels/level_01_movement.tscn`: stripped movement-only tutorial.
+- `shaders/grid_ground.gdshader`: grid + waves + vision cone + footprints,
+  all in fragment. Hardcodes 30x30 UV mapping, so all ground planes are 30x30.
 
-## Input map
+## Input map (updated)
 | Action | Controller | Keyboard |
 |--------|-----------|---------|
 | Move | D-pad / left stick | WASD / arrows |
@@ -154,18 +147,22 @@ more work.
 | Extend depth back | L2 (+ R1) | C |
 | Blend (hide) | Square | V |
 | Camera tilt | Right stick Y | R / F |
-| Quit | — | Escape |
+| Back to menu / quit menu | (none) | Escape |
+
+Escape used to quit the game outright; now it returns to the main menu inside
+a level, and quits only from the main menu itself.
 
 ## Memory notes worth checking
-- Transform3D is row-major in .tscn
-- GDScript can't infer types from untyped Array element access (and
-  often can't from `Node3D._player.method()` either — annotate the var
-  explicitly)
+- Transform3D is row-major in `.tscn`
+- GDScript can't infer types from untyped Array element access
 - Commit/push cadence: end of session
-- Task list at `/home/steven_long/game-dev/Cube Game Tasks.md` (was
-  `Documents/game-dev/...` on the Windows side; the WSL repo is the
-  canonical copy now)
+- HANDOFF.md is read at session start and rewritten at session end, not
+  edited mid-session
+- Ink/water mechanic is binary, whole-cube cleanse (no step counter)
+- No em or en dashes in any output
+- Task list at `/home/steven_long/game-dev/Cube Game Tasks.md` (WSL canonical)
 
 ## Task list source
-`/home/steven_long/game-dev/Cube Game Tasks.md` — updated this session
-to reflect actual completion state (committed + pushed in that repo).
+`/home/steven_long/game-dev/Cube Game Tasks.md`, updated this session to add
+Phase 6 (loader and tutorials) and tick remaining Phase 5 items. Committed
+and pushed in that repo.
