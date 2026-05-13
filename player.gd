@@ -65,6 +65,7 @@ var _footprints: Array = []
 var _box_mesh: BoxMesh
 var _face_marks: Array[bool] = [false, false, false, false, false, false]
 var _puddle_overlap_count: int = 0
+var _water_overlap_count: int = 0
 var _orient: Basis = Basis.IDENTITY
 
 @onready var _step_player: AudioStreamPlayer = $StepSound
@@ -102,6 +103,9 @@ func _ready() -> void:
 	for puddle in get_tree().get_nodes_in_group("ink_puddles"):
 		puddle.area_entered.connect(_on_puddle_entered)
 		puddle.area_exited.connect(_on_puddle_exited)
+	for water in get_tree().get_nodes_in_group("water_puddles"):
+		water.area_entered.connect(_on_water_entered)
+		water.area_exited.connect(_on_water_exited)
 
 
 func _on_contact(area: Area3D) -> void:
@@ -119,6 +123,17 @@ func _on_puddle_entered(area: Area3D) -> void:
 func _on_puddle_exited(area: Area3D) -> void:
 	if area == _detection_area:
 		_puddle_overlap_count -= 1
+
+
+func _on_water_entered(area: Area3D) -> void:
+	if area == _detection_area:
+		_water_overlap_count += 1
+		_check_water_cleanse()
+
+
+func _on_water_exited(area: Area3D) -> void:
+	if area == _detection_area:
+		_water_overlap_count -= 1
 
 
 func _can_move(delta_world: Vector3) -> bool:
@@ -470,6 +485,16 @@ func _check_ink_contact() -> void:
 	if _face_marks[face]:
 		return
 	_face_marks[face] = true
+	_splash_player.play()
+
+
+func _check_water_cleanse() -> void:
+	if _water_overlap_count <= 0:
+		return
+	if not _any_marked():
+		return
+	for i in _face_marks.size():
+		_face_marks[i] = false
 	_splash_player.play()
 
 

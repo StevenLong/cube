@@ -67,6 +67,12 @@ albedo_color = Color(0.1, 0.15, 0.3, 1)
 metallic = 0.2
 roughness = 0.3
 
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_Water"]
+transparency = 1
+albedo_color = Color(0.3, 0.8, 1, 0.7)
+metallic = 0.1
+roughness = 0.2
+
 [sub_resource type="BoxShape3D" id="BoxShape3D_Puddle"]
 size = Vector3(0.85, 0.5, 0.85)
 
@@ -331,4 +337,16 @@ collision_layer = 16
 collision_mask = 2
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Puddle/Area3D"]
+shape = SubResource("BoxShape3D_Puddle")
+
+[node name="WaterPuddle" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4, 0.01, 1)
+mesh = SubResource("PlaneMesh_Puddle")
+surface_material_override/0 = SubResource("StandardMaterial3D_Water")
+
+[node name="Area3D" type="Area3D" parent="WaterPuddle" groups=["water_puddles"]]
+collision_layer = 16
+collision_mask = 2
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="WaterPuddle/Area3D"]
 shape = SubResource("BoxShape3D_Puddle")
