@@ -1,6 +1,6 @@
 extends Node
 
-enum State { READY, PLAYING, COMPLETE }
+enum State { READY, PLAYING, COMPLETE, CAUGHT }
 
 const PULSE_BASE := 1.5
 const PULSE_AMPLITUDE := 1.0
@@ -25,6 +25,7 @@ var _end_material: StandardMaterial3D
 @onready var _end_area: Area3D = get_node("../EndTile/Area3D")
 @onready var _ready_label: Label = get_node("../UI/ReadyLabel")
 @onready var _results_panel: Control = get_node("../UI/ResultsPanel")
+@onready var _result_title: Label = get_node("../UI/ResultsPanel/VBox/Title")
 @onready var _result_moves: Label = get_node("../UI/ResultsPanel/VBox/Moves")
 @onready var _result_time: Label = get_node("../UI/ResultsPanel/VBox/Time")
 @onready var _result_spotted: Label = get_node("../UI/ResultsPanel/VBox/Spotted")
@@ -38,6 +39,7 @@ func _ready() -> void:
 	_end_tile.set_surface_override_material(0, _end_material)
 	_player.tumbled.connect(_on_player_tumbled)
 	_player.move_settled.connect(_on_player_move_settled)
+	_player.caught.connect(_on_player_caught)
 	if _enemy != null:
 		_enemy.entered_pursuit.connect(_on_enemy_pursuit)
 	else:
@@ -66,7 +68,7 @@ func _process(delta: float) -> void:
 				_enter_playing()
 		State.PLAYING:
 			time_elapsed += delta
-		State.COMPLETE:
+		State.COMPLETE, State.CAUGHT:
 			_complete_t += delta
 			if _complete_t >= RESTART_DELAY and _restart_pressed():
 				get_tree().reload_current_scene()
@@ -98,9 +100,23 @@ func _enter_complete() -> void:
 	state = State.COMPLETE
 	_complete_t = 0.0
 	get_tree().paused = true
+	_result_title.text = "Level Complete"
 	_result_moves.text = "Moves: %d" % moves
 	_result_time.text = "Time: %.1fs" % time_elapsed
 	_result_spotted.text = "Spotted: %s" % ("Yes" if spotted else "No")
+	if _enemy != null:
+		_result_spotted.show()
+	_results_panel.show()
+
+
+func _enter_caught() -> void:
+	state = State.CAUGHT
+	_complete_t = 0.0
+	get_tree().paused = true
+	_result_title.text = "Caught"
+	_result_moves.text = "Moves: %d" % moves
+	_result_time.text = "Time: %.1fs" % time_elapsed
+	_result_spotted.hide()
 	_results_panel.show()
 
 
@@ -111,6 +127,11 @@ func _on_player_tumbled() -> void:
 
 func _on_enemy_pursuit() -> void:
 	spotted = true
+
+
+func _on_player_caught() -> void:
+	if state == State.PLAYING:
+		_enter_caught()
 
 
 func _on_end_entered(_area: Area3D) -> void:

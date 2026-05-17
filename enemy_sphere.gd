@@ -34,16 +34,17 @@ const NEIGHBORS_8: Array[Vector2i] = [
 ]
 const PATH_CELL_ARRIVE := 0.15
 const PURSUIT_REPATH_INTERVAL := 0.3
-const SILHOUETTE_ALPHA := 0.3
+const SILHOUETTE_ALPHA := 0.0
 const VISIBILITY_LERP_RATE := 8.0
+const PURSUIT_LOS_PADDING := 0.45
 
 enum State { PATROL, SUSPICIOUS, INVESTIGATE, PURSUIT }
 
 @export var waypoints: Array[Vector3] = [
-	Vector3(10, 0.4, -8),
-	Vector3(-10, 0.4, -8),
-	Vector3(-10, 0.4, 8),
-	Vector3(10, 0.4, 8),
+	Vector3(8, 0.4, 0),
+	Vector3(-8, 0.4, 0),
+	Vector3(-8, 0.4, 1),
+	Vector3(8, 0.4, 1),
 ]
 @export var speed: float = 2.0
 
@@ -61,8 +62,10 @@ var _path: Array[Vector2i] = []
 var _path_idx: int = 0
 var _pursuit_repath_timer: float = 0.0
 var _visibility_alpha: float = 1.0
+var _visibility_initialized: bool = false
 
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
+@onready var _hum_player: AudioStreamPlayer3D = $HumSound
 
 
 func _ready() -> void:
@@ -72,6 +75,8 @@ func _ready() -> void:
 	_player = get_node("../Player")
 	_player.noise_emitted.connect(_on_player_noise)
 	_ground_material = get_node("../Ground/MeshInstance3D").get_surface_override_material(0)
+	_hum_player.stream = _make_hum_sound()
+	_hum_player.play()
 	_build_nav_grid()
 	if waypoints.size() > 0:
 		_set_path_to(waypoints[_target_idx])
@@ -139,7 +144,11 @@ func _process(delta: float) -> void:
 					_enter_state(State.INVESTIGATE)
 
 	var target_alpha := 1.0 if _visible_to_player() else SILHOUETTE_ALPHA
-	_visibility_alpha = lerpf(_visibility_alpha, target_alpha, minf(delta * VISIBILITY_LERP_RATE, 1.0))
+	if not _visibility_initialized:
+		_visibility_alpha = target_alpha
+		_visibility_initialized = true
+	else:
+		_visibility_alpha = lerpf(_visibility_alpha, target_alpha, minf(delta * VISIBILITY_LERP_RATE, 1.0))
 	var col := _state_color()
 	col.a = _visibility_alpha
 	_material.albedo_color = col
@@ -162,11 +171,39 @@ func _creep(delta: float) -> void:
 
 
 func _pursue(delta: float) -> void:
+	# Hybrid locomotion: when there's a sphere-wide corridor to the player,
+	# drop the grid path and seek directly (off-grid, more threatening). When
+	# the corridor is blocked, fall back to A* routing.
+	if _has_pursuit_corridor():
+		_path = []
+		_path_idx = 0
+		_pursuit_repath_timer = 0.0
+		_move_toward(_player.position, delta, PURSUIT_SPEED_MULT)
+		return
 	_pursuit_repath_timer -= delta
 	if _pursuit_repath_timer <= 0.0:
 		_set_path_to(_player.position)
 		_pursuit_repath_timer = PURSUIT_REPATH_INTERVAL
 	_follow_path(delta, PURSUIT_SPEED_MULT, _player.position)
+
+
+func _has_pursuit_corridor() -> bool:
+	# Three parallel rays (center + two offset by sphere radius perpendicular
+	# to travel direction). All must be clear so the sphere's body fits.
+	var to := _player.global_position
+	var from := global_position
+	var dir := Vector3(to.x - from.x, 0.0, to.z - from.z)
+	if dir.length_squared() < 0.0001:
+		return true
+	var perp := Vector3(-dir.z, 0.0, dir.x).normalized() * PURSUIT_LOS_PADDING
+	var offsets: Array[Vector3] = [Vector3.ZERO, perp, -perp]
+	var space := get_world_3d().direct_space_state
+	for offset in offsets:
+		var query := PhysicsRayQueryParameters3D.create(from + offset, to + offset)
+		query.collide_with_areas = false
+		if not space.intersect_ray(query).is_empty():
+			return false
+	return true
 
 
 func _move_toward(target_pos: Vector3, delta: float, speed_mult: float) -> void:
@@ -335,7 +372,7 @@ func _update_cone_uniforms() -> void:
 	_ground_material.set_shader_parameter("cone_half_angle_cos", half_angle_cos)
 	_ground_material.set_shader_parameter("cone_radius", VIEW_RADIUS)
 	_ground_material.set_shader_parameter("cone_color", Vector3(col.r, col.g, col.b))
-	_ground_material.set_shader_parameter("cone_alpha", _state_cone_alpha())
+	_ground_material.set_shader_parameter("cone_alpha", _state_cone_alpha() * _visibility_alpha)
 
 
 func _state_cone_alpha() -> float:
@@ -460,3 +497,29 @@ func _visible_to_player() -> bool:
 	var query := PhysicsRayQueryParameters3D.create(_player.global_position, global_position)
 	query.collide_with_areas = false
 	return space.intersect_ray(query).is_empty()
+
+
+static func _make_hum_sound() -> AudioStreamWAV:
+	# 147Hz fundamental + 294Hz octave + 3Hz amplitude tremolo. 14700 samples
+	# (1/3s) holds an integer number of cycles for all three components, so the
+	# loop seam is silent.
+	var rate := 44100
+	var samples := 14700
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = rate
+	stream.stereo = false
+	stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	stream.loop_begin = 0
+	stream.loop_end = samples
+	var data := PackedByteArray()
+	data.resize(samples * 2)
+	for i in samples:
+		var t := float(i) * TAU / float(rate)
+		var carrier := sin(t * 147.0) * 0.7 + sin(t * 294.0) * 0.3
+		var tremolo := 1.0 + 0.3 * sin(t * 3.0)
+		var val := int(carrier * tremolo * 24000.0)
+		data[i * 2] = val & 0xFF
+		data[i * 2 + 1] = (val >> 8) & 0xFF
+	stream.data = data
+	return stream

@@ -1,142 +1,163 @@
-# Handoff, 2026-05-13
+# Handoff, 2026-05-17
 
 ## Where we are
-Phase 5 done. Sphere pathfinding done. Project now has a main menu and a level
-loader pattern, with Tutorial 1: Movement as the first level. Enemy fades to
-silhouette when out of the cube's line of sight. New systems need tuning, but
-everything functions.
+Major visibility/audio rework done this session. The silhouette-tuning task
+expanded into "out of sight = truly out of sight" plus per-fragment fog of war
+plus partial cone visibility. Symmetric Caught panel landed. Patrol redesigned
+to actually exercise pathfinding. Pursuit gained an off-grid mode for an
+aggression tier.
 
-All commits on `main` are pushed to origin. Last session ended with one local
-commit that needed pushing; that's done.
+All changes are local; commit + push pending at handoff time.
 
 ## Completed this session
 
-### Water puddle (Phase 5 Slice 5)
-- Water is binary, whole-cube cleanse. Touching water with any face marked
-  clears all of `_face_marks` and plays the splash sound. No step counter,
-  no per-face dilution. See `project_ink_water_binary` memory for design
-  rationale. Existing footprints on the ground are left in place.
-- New `WaterPuddle` node in `main.tscn`, cyan transparent material, in the
-  `water_puddles` group. Position `(4, 0.01, 1)` is arbitrary, move as needed.
-- New player state `_water_overlap_count`; handler `_on_water_entered` calls
-  `_check_water_cleanse()` on entry.
+### Visibility/audio rework (started as a tuning task)
+- `SILHOUETTE_ALPHA` 0.3 → **0.0**. Enemy fades to fully invisible behind walls.
+  Constant kept its name even though it no longer renders a silhouette; rename
+  later if desired.
+- Visibility init flash fix: first `_process` tick now snaps `_visibility_alpha`
+  to its target instead of lerping from 1.0. A hidden-at-start enemy stays
+  hidden on frame 0.
+- Cone overlay alpha now scaled by `_visibility_alpha` in
+  `_update_cone_uniforms` so the cone fades together with the enemy.
+- Per-enemy hum: new `HumSound` AudioStreamPlayer3D child of `Enemy`. Stream is
+  procedurally generated in `_make_hum_sound()`: 147Hz fundamental + 294Hz
+  octave + 3Hz amplitude tremolo, 14700-sample buffer that loops seamlessly
+  (integer cycles for all three components). Current 3D settings: unit_size 6,
+  max_distance 20, volume_db -10.
 
-### Sphere pathfinding (grid A*)
-- New nav grid built in `_ready` from `StaticBody3D` children of root whose
-  names start with "Wall". Cell pitch is 1u. Bounds are [-13, 13] inclusive.
-  Perimeter walls sit outside those bounds and are handled implicitly.
-- `_find_path(start, goal)` runs A* with Manhattan heuristic, 4-connected.
-  Goal-blocked fallback snaps to nearest open 8-neighbour so footprints on
-  wall cells still produce a reachable target.
-- `_follow_path(delta, mult, final_target)` walks cell-to-cell via the
-  existing `_move_toward`. When the path is exhausted, falls back to direct
-  seek so the final sub-cell distance closes.
-- All four states pathfind now: PATROL recomputes on entry and waypoint
-  advance, SUSPICIOUS on entry, INVESTIGATE on entry and on footprint
-  retarget, PURSUIT on entry and every `PURSUIT_REPATH_INTERVAL` (0.3s).
+### Fog of war (Flavor B, real LoS)
+- `grid_ground.gdshader` now has uniforms `player_xz`, `wall_mins[16]`,
+  `wall_maxs[16]`, `wall_count`, `dark_factor` (default 0.25) and a
+  `segment_blocked()` 2D slab test.
+- Per fragment: `visibility = segment_blocked(player_xz, world_xz) ? 0 : 1`.
+  Cone intensity is multiplied by visibility (so cone draws only on visible
+  ground — partial-cone visibility from the prior "slice 4" backlog item is
+  done for free). Final ALBEDO multiplied by `mix(dark_factor, 1.0, visibility)`
+  so footprints/waves/grid all dim in shadowed regions.
+- `player.gd` enumerates `Wall*` children in `_push_walls_to_shader()` at
+  `_ready`, reads each `MeshInstance3D.mesh` (BoxMesh) for size, builds AABB
+  arrays. `Perimeter*` walls are skipped (the ground strip under them is
+  hidden anyway). Player pushes `player_xz` each frame alongside the wave
+  uniforms.
+- Tutorial 1 has no walls → wall_count is 0 → no darkening, no cone (no enemy
+  either). Plays unchanged.
 
-### Main menu + level loader + Tutorial 1
-- New `main_menu.tscn` + `main_menu.gd`. Three buttons: Tutorial 1: Movement,
-  Sandbox, Quit. Sandbox loads the existing `main.tscn` unchanged. Tutorial 1
-  loads `levels/level_01_movement.tscn`. Escape on the menu quits.
-- `project.godot` entry scene is now `res://main_menu.tscn`.
-- Escape behaviour moved from `player.gd` to `level.gd`. In any level, Escape
-  unpauses the tree and calls `change_scene_to_file("res://main_menu.tscn")`.
-- `level.gd` made the enemy optional: `get_node_or_null("../Enemy")`. If no
-  enemy is present, the pursuit signal is not connected and the Spotted
-  results label is hidden.
-- Tutorial 1 scene: player, ground, start tile at `(0, 0.01, 0)`, end tile at
-  `(3, 0.01, 3)` so the player has to tumble in two axes. No enemy, walls,
-  perimeters, or puddles.
+### Symmetric Caught panel
+- `player.gd`: new `caught` signal. Enemy contact emits it instead of
+  immediately reloading the scene.
+- `level.gd`: new `CAUGHT` state alongside `COMPLETE`. `_enter_caught()` sets
+  title to "Caught", hides the Spotted line (always Yes if caught, redundant).
+  Restart logic shared between both terminal states.
+- Title label is now driven by code so each ending sets its own text.
 
-### Enemy line-of-sight silhouette fade
-- Each frame, raycast from player global position to enemy global position
-  against bodies only. If unblocked, target alpha is 1.0. If a wall blocks
-  the line, target alpha is `SILHOUETTE_ALPHA` (0.3).
-- Current alpha lerps toward the target at `VISIBILITY_LERP_RATE` (8.0/s),
-  giving roughly a 0.3 second crossfade. Material transparency is set to
-  `TRANSPARENCY_ALPHA` in `_ready` so the alpha channel actually renders.
-- Tutorial 1 has no enemy, so this is sandbox-only behaviour.
+### Patrol shape redesigned
+- Waypoints changed from `(±10, ±8)` perimeter rectangle to a wall-hugging
+  pattern: `(8,0), (-8,0), (-8,1), (8,1)`. Both horizontal legs traverse a
+  blocked nav cell (`(3,0)` and `(2,1)`), so 2 of 4 legs force the sphere to
+  route around walls. The other two are 1-cell verticals.
+- Important context: pathfinder is **4-connected**. A previous attempt at a
+  figure-X with diagonal waypoints failed visually because the pathfinder
+  resolves diagonals as L-shapes that happen to skirt the wall cluster instead
+  of crossing it. Any future patrol redesign must account for this — or move
+  the pathfinder to 8-connected.
 
-## Phase status
-- [x] Phase 1, core movement
-- [x] Phase 2, extension
-- [x] Phase 3, detection and hiding
-- [x] Phase 4, first playable level
-- [x] Phase 5, environmental detection (all six items done)
-- [x] Sphere pathfinding (was deferred from prior session)
-- [x] Main menu and level loader
-- [x] Tutorial 1: Movement
+### Off-grid pursuit (aggression tier)
+- PATROL / SUSPICIOUS / INVESTIGATE: unchanged, still 4-connected grid A*.
+- PURSUIT: `_pursue` now branches on `_has_pursuit_corridor()`. When the
+  3-ray check (center + perpendicular offset by `PURSUIT_LOS_PADDING` 0.45)
+  passes, the sphere clears its path and calls `_move_toward(_player.position,
+  ...)` directly — off-grid, smooth-turning, no cell snap. When the corridor
+  is blocked, falls back to existing A* + `_follow_path`.
+- The single-ray `_visible_to_player()` is retained for the silhouette fade
+  (center-to-center is the right semantic there).
 
-## Tuning backlog (next session's first focus)
-User flagged these as needing pass before moving on.
+### Polish
+- Unused `RayCast3D` on Enemy in `main.tscn` deleted.
 
-### Player LoS silhouette
-- `SILHOUETTE_ALPHA` (0.3) and `VISIBILITY_LERP_RATE` (8.0) are placeholders.
-  Likely want to tune by feel.
-- The enemy's ground-projected vision cone (drawn in `grid_ground.gdshader`,
-  not on the mesh) is currently still visible when the enemy itself is faded.
-  If you can't see the enemy you shouldn't see where it's looking. Easiest
-  fix: scale `cone_alpha` uniform by `_visibility_alpha` in
-  `_update_cone_uniforms`, so the cone fades with the enemy.
+## Tuning backlog (next session candidates)
 
-### Pathfinding
-- PATROL waypoint default in `enemy_sphere.gd` is still the 4-corner
-  rectangle. Hasn't been re-evaluated post-pathfinding (could now be a
-  tighter shape that the sphere would route through).
-- `PURSUIT_REPATH_INTERVAL` 0.3s feels responsive in casual testing but has
-  not been stress-tested.
+### Pursuit corridor
+- Per-frame corridor check could oscillate at wall transitions (one frame
+  blocked, next frame clear). Watch for one-frame jitter when LoS reopens
+  just past a wall corner. Fix would be hysteresis (stick to current mode
+  for N frames after a transition).
+- `PURSUIT_LOS_PADDING` 0.45 is paired with the default sphere radius 0.5.
+  If sphere size changes, update.
+
+### Patrol
+- Current waypoints are a thin near-wall pattern (z=0/z=1). Visually less
+  varied than the old perimeter rectangle. If feel suggests boredom, consider
+  more waypoints or 8-connected A*.
+
+### Fog of war
+- `dark_factor` 0.25 is a placeholder. User said "works well enough" but never
+  tuned. Try 0.15 (harsher) or 0.4 (subtler) if you want a feel pass.
+- Perimeter walls are excluded from the LoS array — fine today; revisit if
+  arena layouts change.
+- `MAX_WALLS` is 16 in shader + player. Plenty for current arena (~3 walls).
+
+### Hum
+- Volume / range still placeholder. unit_size 6, max_distance 20, volume_db
+  -10. Adjust on `HumSound` in `main.tscn`.
+- Tremolo at 3Hz / depth 0.3 — feel-tunable in `_make_hum_sound()`.
 
 ## Deferred / parked
 
-### From prior session (still parked)
-- Unused `RayCast3D` on Enemy in `main.tscn`; replaced by the math-based
-  cone but the node was never removed. Safe to delete.
-- Per-face cube ink visualisation. Cube tints whole-body when any face is
-  marked. Per-face decals or shader trick still TODO.
-- No fail-state results screen. Enemy contact still instantly reloads the
-  scene; not symmetric with the Complete results panel.
-- Extended-cuboid footprints. One deposit at cuboid centre, not per contact
-  cell.
+### From earlier sessions (still parked)
+- Per-face cube ink visualisation. Whole-cube tint still used.
+- Extended-cuboid footprints. One deposit at cuboid centre, not per cell.
+- Polish backlog: sfx + particles for end/caught, smooth respawn camera,
+  spawn elevator animation.
+- More tutorials: sprint and noise next, then extension, blend, ink and
+  water, enemy.
 
 ### From this session
-- Polish backlog: sfx + particles for end/caught, smooth respawn camera,
-  spawn elevator animation, symmetric Caught results panel.
-- More tutorials: sprint and noise next, then extension, blend, ink and
-  water, enemy. Each is a stripped scene loaded from the menu.
-- Level select grows organically as tutorials are added; no scrolling or
-  paging needed yet.
+- 8-connected pathfinder switch. Would enable more interesting patrol shapes
+  and smoother pursuit grid paths. Currently 4-connected works for everything
+  needed; only worth doing if patrol/investigate feel mechanical.
+- Hysteresis on pursuit corridor check (see Tuning backlog).
+- Rename `SILHOUETTE_ALPHA` to something honest (e.g. `HIDDEN_ALPHA`).
 
 ## Tunable constants worth knowing
 - `enemy_sphere.gd`
-  - `VIEW_RADIUS` 8.0, `VIEW_CONE_COS` 0.766 (80° forward cone), player vision
-  - `FOOTPRINT_VIEW_RADIUS` 5.0, `FOOTPRINT_VIEW_CONE_COS` 0.866 (60°)
-  - `INVESTIGATE_TIMEOUT` 3.0s, `SUSPICIOUS_TIMEOUT` 2.0s,
+  - Vision: `VIEW_RADIUS` 8.0, `VIEW_CONE_COS` 0.766 (80° cone)
+  - Footprint vision: `FOOTPRINT_VIEW_RADIUS` 5.0, `FOOTPRINT_VIEW_CONE_COS`
+    0.866 (60°)
+  - Timeouts: `INVESTIGATE_TIMEOUT` 3.0s, `SUSPICIOUS_TIMEOUT` 2.0s,
     `PURSUIT_LOSE_TIMEOUT` 1.5s
   - Speed mults: PATROL 1.0, SUSPICIOUS 0.5, INVESTIGATE 1.0, PURSUIT 1.5
   - `TURN_RATE` 5.0 rad/s, `TURN_LEAD_THRESHOLD` PI/6
   - `FOOTPRINT_VISIT_DIST` 0.6u
-  - New: `NAV_MIN`/`NAV_MAX` -13/13, `PATH_CELL_ARRIVE` 0.15,
-    `PURSUIT_REPATH_INTERVAL` 0.3s, `SILHOUETTE_ALPHA` 0.3,
-    `VISIBILITY_LERP_RATE` 8.0
+  - Navigation: `NAV_MIN`/`NAV_MAX` -13/13, `PATH_CELL_ARRIVE` 0.15,
+    `PURSUIT_REPATH_INTERVAL` 0.3s
+  - Visibility: `SILHOUETTE_ALPHA` 0.0, `VISIBILITY_LERP_RATE` 8.0,
+    `PURSUIT_LOS_PADDING` 0.45
+- `grid_ground.gdshader`
+  - `dark_factor` 0.25 (default)
+  - Hardcoded UV map: 30x30, so all ground planes must be 30x30
+- `main.tscn` HumSound: unit_size 6, max_distance 20, volume_db -10
 
 ## Key files
 - `player.gd`: tumble, extension, dodge, blend, face tracking, ink, audio
-  waves, footprint API, water cleanse. No longer handles Escape.
+  waves, footprint API, water cleanse, **wall-AABB enumeration for the fog
+  shader**, **caught signal**. No longer handles Escape.
 - `enemy_sphere.gd`: PATROL/SUSPICIOUS/INVESTIGATE/PURSUIT, math-based cone
-  vision, footprint trail logic, smooth rotation, cone shader uniform updates,
-  grid A* pathfinding, LoS silhouette fade.
-- `level.gd`: state machine (READY/PLAYING/COMPLETE), stats, end tile, pause,
-  Escape -> menu, optional enemy.
+  vision, footprint trail logic, smooth rotation, cone shader uniform
+  updates, grid A* pathfinding, LoS silhouette fade, **per-enemy hum
+  generation**, **off-grid pursuit corridor check**.
+- `level.gd`: state machine (READY/PLAYING/COMPLETE/**CAUGHT**), stats,
+  end tile, pause, Escape -> menu, optional enemy, **handles caught**.
 - `camera_controller.gd`: fixed follow + tilt; `process_mode = ALWAYS`.
 - `main_menu.gd`: button signals, Escape quits.
-- `main.tscn`: sandbox scene, full arena with everything in it.
+- `main.tscn`: sandbox scene, full arena, **HumSound on Enemy**, RayCast3D
+  on Enemy removed.
 - `main_menu.tscn`: title and three buttons.
 - `levels/level_01_movement.tscn`: stripped movement-only tutorial.
-- `shaders/grid_ground.gdshader`: grid + waves + vision cone + footprints,
-  all in fragment. Hardcodes 30x30 UV mapping, so all ground planes are 30x30.
+- `shaders/grid_ground.gdshader`: grid + waves + vision cone + footprints
+  + **player LoS fog of war**, all in fragment. Hardcodes 30x30 UV mapping.
 
-## Input map (updated)
+## Input map
 | Action | Controller | Keyboard |
 |--------|-----------|---------|
 | Move | D-pad / left stick | WASD / arrows |
@@ -149,10 +170,8 @@ User flagged these as needing pass before moving on.
 | Camera tilt | Right stick Y | R / F |
 | Back to menu / quit menu | (none) | Escape |
 
-Escape used to quit the game outright; now it returns to the main menu inside
-a level, and quits only from the main menu itself.
-
 ## Memory notes worth checking
+- Read HANDOFF.md first thing at session start (new this session)
 - Transform3D is row-major in `.tscn`
 - GDScript can't infer types from untyped Array element access
 - Commit/push cadence: end of session
@@ -163,6 +182,4 @@ a level, and quits only from the main menu itself.
 - Task list at `/home/steven_long/game-dev/Cube Game Tasks.md` (WSL canonical)
 
 ## Task list source
-`/home/steven_long/game-dev/Cube Game Tasks.md`, updated this session to add
-Phase 6 (loader and tutorials) and tick remaining Phase 5 items. Committed
-and pushed in that repo.
+`/home/steven_long/game-dev/Cube Game Tasks.md`, unchanged this session.

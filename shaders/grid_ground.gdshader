@@ -16,6 +16,45 @@ uniform float cone_radius;
 uniform vec3 cone_color;
 uniform float cone_alpha;
 
+uniform vec2 player_xz;
+uniform vec2 wall_mins[16];
+uniform vec2 wall_maxs[16];
+uniform int wall_count;
+uniform float dark_factor = 0.25;
+
+// 2D segment-vs-AABB slab test. Returns true if the segment from a to b
+// passes through any wall AABB in the wall_mins/wall_maxs arrays.
+bool segment_blocked(vec2 a, vec2 b) {
+	vec2 dir = b - a;
+	for (int i = 0; i < wall_count; i++) {
+		vec2 wmin = wall_mins[i];
+		vec2 wmax = wall_maxs[i];
+		float t_near = 0.0;
+		float t_far = 1.0;
+		bool miss = false;
+		for (int j = 0; j < 2; j++) {
+			float d = dir[j];
+			float p = a[j];
+			if (abs(d) < 1e-6) {
+				if (p < wmin[j] || p > wmax[j]) {
+					miss = true;
+					break;
+				}
+			} else {
+				float t1 = (wmin[j] - p) / d;
+				float t2 = (wmax[j] - p) / d;
+				if (t1 > t2) { float tmp = t1; t1 = t2; t2 = tmp; }
+				t_near = max(t_near, t1);
+				t_far = min(t_far, t2);
+			}
+		}
+		if (!miss && t_near <= t_far && t_near < 1.0 && t_far > 0.0) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void fragment() {
 	// Grid
 	vec2 coord = UV * 30.0 + vec2(0.5);
@@ -40,8 +79,13 @@ void fragment() {
 
 	vec3 with_waves = mix(grid_color, vec3(0.9, 0.55, 0.0), wave_total * 0.55);
 
+	// Player line-of-sight check against walls. visibility = 1 if a straight
+	// line from the player to this fragment is unblocked, 0 otherwise.
+	float visibility = segment_blocked(player_xz, world_xz) ? 0.0 : 1.0;
+
 	// Vision cone overlay: tinted sector from the enemy with soft edges and
-	// distance falloff. cone_radius == 0 disables (default state).
+	// distance falloff. cone_radius == 0 disables (default state). Gated on
+	// visibility so the cone only renders on ground the player can see.
 	float cone_intensity = 0.0;
 	if (cone_radius > 0.01) {
 		vec2 to_cone = world_xz - cone_origin;
@@ -59,7 +103,7 @@ void fragment() {
 			}
 		}
 	}
-	vec3 with_cone = mix(with_waves, cone_color, cone_intensity);
+	vec3 with_cone = mix(with_waves, cone_color, cone_intensity * visibility);
 
 	// Ink footprints: small dark blobs at deposited cells
 	float ink_total = 0.0;
@@ -69,5 +113,6 @@ void fragment() {
 		ink_total = clamp(ink_total + in_range * footprint_alphas[i], 0.0, 1.0);
 	}
 
-	ALBEDO = mix(with_cone, vec3(0.1, 0.15, 0.3), ink_total);
+	vec3 final_color = mix(with_cone, vec3(0.1, 0.15, 0.3), ink_total);
+	ALBEDO = final_color * mix(dark_factor, 1.0, visibility);
 }

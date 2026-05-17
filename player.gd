@@ -3,6 +3,7 @@ extends Node3D
 signal tumbled
 signal move_settled
 signal noise_emitted(origin: Vector2, max_radius: float, duration: float)
+signal caught
 
 const TUMBLE_DURATION := 0.3
 const SPRINT_DURATION := 0.15
@@ -12,6 +13,7 @@ const DODGE_COOLDOWN := 1.5
 const WAVE_DURATION := 0.4
 const MAX_WAVES := 8
 const MAX_FOOTPRINTS := 64
+const MAX_WALLS := 16
 const SLIDE_SUBSAMPLES := 4
 const FOCUS_SMOOTH_RATE := 25.0
 const COLOR_NORMAL := Color(0.9, 0.9, 0.9)
@@ -91,6 +93,7 @@ func _ready() -> void:
 	_step_player.stream = _make_step_sound()
 	_splash_player.stream = _make_splash_sound()
 	_ground_material = get_node("../Ground/MeshInstance3D").get_surface_override_material(0)
+	_push_walls_to_shader()
 	_box_mesh = _mesh_instance.mesh.duplicate() as BoxMesh
 	_mesh_instance.mesh = _box_mesh
 	_player_material = (_mesh_instance.get_surface_override_material(0) as StandardMaterial3D).duplicate()
@@ -107,7 +110,7 @@ func _ready() -> void:
 
 func _on_contact(area: Area3D) -> void:
 	if (area.collision_layer & LAYER_ENEMY) != 0:
-		get_tree().reload_current_scene.call_deferred()
+		caught.emit()
 
 
 func _on_puddle_entered(area: Area3D) -> void:
@@ -393,6 +396,7 @@ func _process(delta: float) -> void:
 	_ground_material.set_shader_parameter("wave_half_extents", half_extents)
 	_ground_material.set_shader_parameter("wave_radii", radii)
 	_ground_material.set_shader_parameter("wave_alphas", alphas)
+	_ground_material.set_shader_parameter("player_xz", Vector2(global_position.x, global_position.z))
 
 	if _dodge_cooldown_t > 0.0:
 		_dodge_cooldown_t = maxf(_dodge_cooldown_t - delta, 0.0)
@@ -538,6 +542,35 @@ func _update_footprint_uniforms() -> void:
 		alphas[i] = _footprints[i].alpha
 	_ground_material.set_shader_parameter("footprint_positions", positions)
 	_ground_material.set_shader_parameter("footprint_alphas", alphas)
+
+
+func _push_walls_to_shader() -> void:
+	# One-time enumeration of static walls for the ground shader's LoS check.
+	# Skips Perimeter* (arena edge — never blocks visibility inside the bounds).
+	var mins := PackedVector2Array()
+	var maxs := PackedVector2Array()
+	mins.resize(MAX_WALLS)
+	maxs.resize(MAX_WALLS)
+	var count := 0
+	for child in get_parent().get_children():
+		if count >= MAX_WALLS:
+			break
+		if not (child is StaticBody3D and child.name.begins_with("Wall")):
+			continue
+		var mesh_node := child.get_node_or_null("MeshInstance3D") as MeshInstance3D
+		if mesh_node == null:
+			continue
+		var box := mesh_node.mesh as BoxMesh
+		if box == null:
+			continue
+		var half := Vector2(box.size.x * 0.5, box.size.z * 0.5)
+		var pos := Vector2(child.position.x, child.position.z)
+		mins[count] = pos - half
+		maxs[count] = pos + half
+		count += 1
+	_ground_material.set_shader_parameter("wall_mins", mins)
+	_ground_material.set_shader_parameter("wall_maxs", maxs)
+	_ground_material.set_shader_parameter("wall_count", count)
 
 
 func get_footprint_positions() -> PackedVector2Array:
