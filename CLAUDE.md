@@ -47,10 +47,9 @@ Metal Gear Solid VR Mission aesthetic - stark, clean, artificial.
 - Spotted = pursuit state. Break line of sight = return to patrol.
 - Cosmetic customisation unlocked through optional objectives. Cosmetic only.
 
-## Current Status
-Phase 1 in progress. Tumbling movement, grid ground, and fixed follow camera done.
-Next: movement noise (Phase 1 task 6). See HANDOFF.md for full session notes.
-
 ## Design Reference
 The task list and design doc live in a sibling `game-dev` repo. Find it by searching
 for `Cube Game Tasks.md` from the user's home directory on first use.
+
+Progress is tracked in two places, not here: the task list (phase/task status)
+and HANDOFF.md (session-by-session state). Read HANDOFF.md at session start.
