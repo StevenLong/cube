@@ -182,6 +182,13 @@ func _is_extended() -> bool:
 	return false
 
 
+func get_extension_sum() -> int:
+	# Total extension units across all axes. Drives the detection size factor and
+	# mirrors the noise size factor in _play_step.
+	var total: int = _ext[EXT_LEFT] + _ext[EXT_RIGHT] + _ext[EXT_UP] + _ext[EXT_FWD] + _ext[EXT_BACK]
+	return total
+
+
 func is_dodging() -> bool:
 	return _dodging
 

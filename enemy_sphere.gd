@@ -8,10 +8,7 @@ const COLOR_INVESTIGATE := Color(1.0, 0.55, 0.0)
 const COLOR_PURSUIT := Color(1.0, 0.2, 0.2)
 
 const ARRIVE_THRESHOLD := 0.05
-const CONFIRM_DURATION := 0.5
-const SUSPICIOUS_TIMEOUT := 2.0
 const INVESTIGATE_TIMEOUT := 3.0
-const PURSUIT_LOSE_TIMEOUT := 1.5
 const PURSUIT_SPEED_MULT := 1.5
 const SUSPICIOUS_SPEED_MULT := 0.5
 const INVESTIGATE_SPEED_MULT := 1.0
@@ -38,6 +35,19 @@ const SILHOUETTE_ALPHA := 0.0
 const VISIBILITY_LERP_RATE := 8.0
 const PURSUIT_LOS_PADDING := 0.45
 
+# Graduated detection (SPEC_graduated_detection.md). _detection in [0,1] is the
+# enemy's visual certainty; thresholds drive the PATROL/SUSPICIOUS/PURSUIT ladder.
+const DETECT_FILL_RATE := 2.0        # per second at full exposure factors
+const DETECT_DRAIN_RATE := 0.4       # per second when not seeing
+const DETECT_SUSPICIOUS := 0.25      # PATROL -> SUSPICIOUS
+const DETECT_PURSUIT := 1.0          # -> PURSUIT (full bar)
+const DETECT_PURSUIT_KEEP := 0.5     # stay in PURSUIT until drained below this
+const DETECT_MIN_PROXIMITY := 0.15   # fill floor at cone edge
+const DETECT_SIZE_WEIGHT := 0.15     # per extension unit
+const DETECT_ALERT_FILL_MULT := 1.5  # faster fill when already alert
+const DETECT_NOISE_SEED := 0.5       # heard noise seeds detection here, then drains
+const DEBUG_DETECTION := true        # temporary on-screen _detection readout; remove with the focusing-cone task
+
 enum State { PATROL, SUSPICIOUS, INVESTIGATE, PURSUIT }
 
 @export var waypoints: Array[Vector3] = [
@@ -51,7 +61,7 @@ enum State { PATROL, SUSPICIOUS, INVESTIGATE, PURSUIT }
 var _target_idx := 0
 var _state: State = State.PATROL
 var _state_timer := 0.0
-var _confirm_timer := 0.0
+var _detection := 0.0
 var _last_seen_pos := Vector3.ZERO
 var _material: StandardMaterial3D
 var _player: Node3D
@@ -63,6 +73,7 @@ var _path_idx: int = 0
 var _pursuit_repath_timer: float = 0.0
 var _visibility_alpha: float = 1.0
 var _visibility_initialized: bool = false
+var _debug_label: Label
 
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
 @onready var _hum_player: AudioStreamPlayer3D = $HumSound
@@ -80,6 +91,8 @@ func _ready() -> void:
 	_build_nav_grid()
 	if waypoints.size() > 0:
 		_set_path_to(waypoints[_target_idx])
+	if DEBUG_DETECTION:
+		_setup_debug_label()
 
 
 func _process(delta: float) -> void:
@@ -87,6 +100,7 @@ func _process(delta: float) -> void:
 	var seeing := _is_seeing_player()
 	if seeing:
 		_last_seen_pos = _player.position
+	_update_detection(delta, seeing)
 
 	var footprint_pos := Vector3.INF
 	if not seeing and _state != State.PURSUIT:
@@ -95,27 +109,23 @@ func _process(delta: float) -> void:
 	match _state:
 		State.PATROL:
 			_patrol(delta)
-			if seeing:
+			if _detection >= DETECT_SUSPICIOUS:
 				_enter_state(State.SUSPICIOUS)
 			elif footprint_pos != Vector3.INF:
 				_last_seen_pos = Vector3(footprint_pos.x, position.y, footprint_pos.z)
 				_enter_state(State.INVESTIGATE)
 		State.SUSPICIOUS:
-			_state_timer += delta
-			if seeing:
-				_confirm_timer += delta
-				if _confirm_timer >= CONFIRM_DURATION:
-					_enter_state(State.PURSUIT)
-			else:
-				_confirm_timer = 0.0
-				if footprint_pos != Vector3.INF:
-					_last_seen_pos = Vector3(footprint_pos.x, position.y, footprint_pos.z)
-					_enter_state(State.INVESTIGATE)
-			if _state == State.SUSPICIOUS and _state_timer >= SUSPICIOUS_TIMEOUT:
+			if _detection >= DETECT_PURSUIT:
+				_enter_state(State.PURSUIT)
+			elif _detection < DETECT_SUSPICIOUS:
 				_enter_state(State.PATROL)
-			_creep(delta)
+			elif footprint_pos != Vector3.INF:
+				_last_seen_pos = Vector3(footprint_pos.x, position.y, footprint_pos.z)
+				_enter_state(State.INVESTIGATE)
+			else:
+				_creep(delta)
 		State.INVESTIGATE:
-			if seeing:
+			if _detection >= DETECT_PURSUIT:
 				_enter_state(State.PURSUIT)
 			else:
 				if position.distance_to(_last_seen_pos) < FOOTPRINT_VISIT_DIST:
@@ -135,13 +145,9 @@ func _process(delta: float) -> void:
 				_investigate_move(delta)
 		State.PURSUIT:
 			_pursue(delta)
-			if seeing:
-				_state_timer = 0.0
-			else:
-				_state_timer += delta
-				if _state_timer >= PURSUIT_LOSE_TIMEOUT:
-					_last_seen_pos = Vector3(_last_seen_pos.x, position.y, _last_seen_pos.z)
-					_enter_state(State.INVESTIGATE)
+			if _detection < DETECT_PURSUIT_KEEP:
+				_last_seen_pos = Vector3(_last_seen_pos.x, position.y, _last_seen_pos.z)
+				_enter_state(State.INVESTIGATE)
 
 	var target_alpha := 1.0 if _visible_to_player() else SILHOUETTE_ALPHA
 	if not _visibility_initialized:
@@ -153,6 +159,25 @@ func _process(delta: float) -> void:
 	col.a = _visibility_alpha
 	_material.albedo_color = col
 	_update_cone_uniforms()
+	_update_debug_label()
+
+
+func _update_detection(delta: float, seeing: bool) -> void:
+	# Graduated visual certainty. Fills while the player is seen, scaled by how
+	# close and how large they are (and faster when already alert); drains
+	# otherwise. Hiding affects this only via _is_seeing_player (blend makes
+	# seeing false), never as a direct term. See SPEC_graduated_detection.md.
+	if seeing:
+		var to_player := _player.global_position - global_position
+		to_player.y = 0.0
+		var dist := to_player.length()
+		var proximity := clampf(1.0 - dist / VIEW_RADIUS, DETECT_MIN_PROXIMITY, 1.0)
+		var size: float = 1.0 + _player.get_extension_sum() * DETECT_SIZE_WEIGHT
+		var alert := DETECT_ALERT_FILL_MULT if _state != State.PATROL else 1.0
+		_detection += DETECT_FILL_RATE * proximity * size * alert * delta
+	else:
+		_detection -= DETECT_DRAIN_RATE * delta
+	_detection = clampf(_detection, 0.0, 1.0)
 
 
 func _patrol(delta: float) -> void:
@@ -230,7 +255,6 @@ func _enter_state(new_state: State) -> void:
 	var was_pursuit := _state == State.PURSUIT
 	_state = new_state
 	_state_timer = 0.0
-	_confirm_timer = 0.0
 	if new_state == State.PATROL:
 		_target_idx = _closest_waypoint_idx()
 		_set_path_to(waypoints[_target_idx])
@@ -264,6 +288,41 @@ func _state_color() -> Color:
 		_: return COLOR_PATROL
 
 
+func get_detection_level() -> float:
+	return _detection
+
+
+func get_detection_state() -> int:
+	return _state
+
+
+func _setup_debug_label() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 128
+	add_child(layer)
+	_debug_label = Label.new()
+	_debug_label.position = Vector2(24, 24)
+	_debug_label.add_theme_font_size_override("font_size", 22)
+	_debug_label.add_theme_color_override("font_outline_color", Color.BLACK)
+	_debug_label.add_theme_constant_override("outline_size", 4)
+	layer.add_child(_debug_label)
+
+
+func _update_debug_label() -> void:
+	if _debug_label == null:
+		return
+	_debug_label.text = "%s  %.2f" % [_state_name(), _detection]
+	_debug_label.add_theme_color_override("font_color", _state_color())
+
+
+func _state_name() -> String:
+	match _state:
+		State.SUSPICIOUS: return "SUSPICIOUS"
+		State.INVESTIGATE: return "INVESTIGATE"
+		State.PURSUIT: return "PURSUIT"
+		_: return "PATROL"
+
+
 func _on_player_noise(origin: Vector2, max_radius: float, duration: float) -> void:
 	var enemy_xz := Vector2(position.x, position.z)
 	var dist := enemy_xz.distance_to(origin)
@@ -286,6 +345,7 @@ func _on_sound_heard(origin: Vector2) -> void:
 	if _state == State.PURSUIT:
 		return
 	_last_seen_pos = Vector3(origin.x, position.y, origin.y)
+	_detection = maxf(_detection, DETECT_NOISE_SEED)
 	_enter_state(State.SUSPICIOUS)
 
 
