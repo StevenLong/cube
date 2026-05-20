@@ -48,6 +48,13 @@ const DETECT_ALERT_FILL_MULT := 1.5  # faster fill when already alert
 const DETECT_NOISE_SEED := 0.5       # heard noise seeds detection here, then drains
 const DEBUG_DETECTION := true        # temporary on-screen _detection readout; remove with the focusing-cone task
 
+# Focusing cone (reads _detection). The cone narrows, colour-ramps, and aims at
+# the suspect as detection rises; INVESTIGATE opens to a 360 search sweep.
+const CONE_FOCUS_COS := 0.97         # half-angle cos when fully locked (~14 deg)
+const CONE_PATROL_ALPHA := 0.2       # cone opacity at detection 0
+const CONE_LOCKED_ALPHA := 0.6       # cone opacity at detection 1
+const CONE_SEARCH_ALPHA := 0.5       # 360 sweep opacity in INVESTIGATE
+
 enum State { PATROL, SUSPICIOUS, INVESTIGATE, PURSUIT }
 
 @export var waypoints: Array[Vector3] = [
@@ -423,24 +430,44 @@ func _update_cone_uniforms() -> void:
 	var dir_2d := Vector2(1.0, 0.0)
 	if fl > 0.0001:
 		dir_2d = Vector2(forward.x / fl, forward.z / fl)
-	var col := _state_color()
-	# INVESTIGATE renders as a full circle (active 360° scan); other states use
-	# the forward cone. -1.0 makes the shader's dot test always pass.
-	var half_angle_cos := -1.0 if _state == State.INVESTIGATE else VIEW_CONE_COS
 	_ground_material.set_shader_parameter("cone_origin", Vector2(position.x, position.z))
-	_ground_material.set_shader_parameter("cone_dir", dir_2d)
-	_ground_material.set_shader_parameter("cone_half_angle_cos", half_angle_cos)
 	_ground_material.set_shader_parameter("cone_radius", VIEW_RADIUS)
-	_ground_material.set_shader_parameter("cone_color", Vector3(col.r, col.g, col.b))
-	_ground_material.set_shader_parameter("cone_alpha", _state_cone_alpha() * _visibility_alpha)
+
+	if _state == State.INVESTIGATE:
+		# Lost the thread: full 360 search sweep. -1.0 makes the shader's dot test
+		# always pass.
+		_ground_material.set_shader_parameter("cone_dir", dir_2d)
+		_ground_material.set_shader_parameter("cone_half_angle_cos", -1.0)
+		_ground_material.set_shader_parameter("cone_color", _color_to_vec3(COLOR_INVESTIGATE))
+		_ground_material.set_shader_parameter("cone_alpha", CONE_SEARCH_ALPHA * _visibility_alpha)
+		return
+
+	# Visual ladder: the cone is the detection fill. As _detection rises it
+	# narrows toward a tight beam, ramps grey -> yellow -> red, and aims at the
+	# suspect so the narrowing beam keeps the target lit (and marks last-known).
+	var aim := dir_2d
+	var to_suspect := Vector2(_last_seen_pos.x - position.x, _last_seen_pos.z - position.z)
+	if _detection > 0.001 and to_suspect.length() > 0.05:
+		var blended := dir_2d.lerp(to_suspect.normalized(), _detection)
+		if blended.length() > 0.01:
+			aim = blended.normalized()
+	var half_cos := lerpf(VIEW_CONE_COS, CONE_FOCUS_COS, _detection)
+	var col := _detection_color(_detection)
+	var alpha := lerpf(CONE_PATROL_ALPHA, CONE_LOCKED_ALPHA, _detection)
+	_ground_material.set_shader_parameter("cone_dir", aim)
+	_ground_material.set_shader_parameter("cone_half_angle_cos", half_cos)
+	_ground_material.set_shader_parameter("cone_color", _color_to_vec3(col))
+	_ground_material.set_shader_parameter("cone_alpha", alpha * _visibility_alpha)
 
 
-func _state_cone_alpha() -> float:
-	match _state:
-		State.SUSPICIOUS: return 0.4
-		State.INVESTIGATE: return 0.5
-		State.PURSUIT: return 0.6
-		_: return 0.2
+func _detection_color(d: float) -> Color:
+	if d < 0.5:
+		return COLOR_PATROL.lerp(COLOR_SUSPICIOUS, d / 0.5)
+	return COLOR_SUSPICIOUS.lerp(COLOR_PURSUIT, (d - 0.5) / 0.5)
+
+
+func _color_to_vec3(c: Color) -> Vector3:
+	return Vector3(c.r, c.g, c.b)
 
 
 func _build_nav_grid() -> void:
