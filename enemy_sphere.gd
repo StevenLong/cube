@@ -19,11 +19,12 @@ const FOOTPRINT_VIEW_CONE_COS := 0.866  # cos(30°), so a 60° total cone
 const FOOTPRINT_VISIT_DIST := 0.6
 const FOOTPRINT_RETARGET_DIST := 0.3
 const TURN_RATE := 5.0  # rad/s — 180° in ~0.6s
-const TURN_LEAD_THRESHOLD := PI / 6.0  # 30° — hold position if facing more than this off
+const TURN_CRAWL_FRACTION := 0.5  # min fraction of speed kept through sharp turns (no dead stop)
+const CORRIDOR_HYSTERESIS := 0.2  # corridor must stay clear this long before off-grid pursuit engages
+const SQRT2 := 1.4142135623730951  # diagonal step cost for 8-connected A*
 
 const NAV_MIN := -13
 const NAV_MAX := 13
-const NEIGHBORS: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 const NEIGHBORS_8: Array[Vector2i] = [
 	Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1),
 	Vector2i(-1, 0), Vector2i(1, 0),
@@ -78,6 +79,7 @@ var _nav_blocked: Dictionary = {}
 var _path: Array[Vector2i] = []
 var _path_idx: int = 0
 var _pursuit_repath_timer: float = 0.0
+var _corridor_open_timer: float = 0.0
 var _visibility_alpha: float = 1.0
 var _visibility_initialized: bool = false
 var _debug_label: Label
@@ -203,10 +205,16 @@ func _creep(delta: float) -> void:
 
 
 func _pursue(delta: float) -> void:
-	# Hybrid locomotion: when there's a sphere-wide corridor to the player,
-	# drop the grid path and seek directly (off-grid, more threatening). When
-	# the corridor is blocked, fall back to A* routing.
+	# Hybrid locomotion: seek the player directly (off-grid, more threatening)
+	# once a sphere-wide corridor has stayed clear for CORRIDOR_HYSTERESIS. That
+	# debounces the per-frame ray check so the sphere does not jitter between
+	# modes at a wall corner. Any block resets the timer and falls back to A*
+	# immediately, the safe choice near walls.
 	if _has_pursuit_corridor():
+		_corridor_open_timer += delta
+	else:
+		_corridor_open_timer = 0.0
+	if _corridor_open_timer >= CORRIDOR_HYSTERESIS:
 		_path = []
 		_path_idx = 0
 		_pursuit_repath_timer = 0.0
@@ -252,9 +260,12 @@ func _move_toward(target_pos: Vector3, delta: float, speed_mult: float) -> void:
 		angle_off = current_forward.signed_angle_to(horizontal_dir, Vector3.UP)
 		var rot_step := clampf(angle_off, -TURN_RATE * delta, TURN_RATE * delta)
 		rotate(Vector3.UP, rot_step)
-	if absf(angle_off) > TURN_LEAD_THRESHOLD:
-		return
-	var step := minf(speed * speed_mult * delta, distance)
+	# Move while turning: full speed when aligned, easing to a crawl (never a dead
+	# stop) through sharp turns so the sphere arcs decisively instead of pivoting
+	# in place at corners.
+	var align := clampf(cos(angle_off), 0.0, 1.0)
+	var speed_factor := lerpf(TURN_CRAWL_FRACTION, 1.0, align)
+	var step := minf(speed * speed_mult * speed_factor * delta, distance)
 	position += horizontal_dir * step
 
 
@@ -272,6 +283,7 @@ func _enter_state(new_state: State) -> void:
 	if new_state == State.PURSUIT:
 		_set_path_to(_player.position)
 		_pursuit_repath_timer = PURSUIT_REPATH_INTERVAL
+		_corridor_open_timer = 0.0
 		if not was_pursuit:
 			entered_pursuit.emit()
 
@@ -539,21 +551,27 @@ func _find_path(start: Vector2i, goal: Vector2i) -> Array[Vector2i]:
 		return single
 	var came_from: Dictionary = {}
 	var g_score: Dictionary = {start: 0.0}
-	var open: Dictionary = {start: float(absi(start.x - goal.x) + absi(start.y - goal.y))}
+	var open: Dictionary = {start: _octile(start, goal)}
 	while not open.is_empty():
 		var current := _pop_lowest(open)
 		if current == goal:
 			return _reconstruct_path(came_from, current)
 		var current_g: float = g_score[current]
-		for step in NEIGHBORS:
+		for step in NEIGHBORS_8:
 			var n: Vector2i = current + step
 			if _cell_blocked(n):
 				continue
-			var tentative_g := current_g + 1.0
+			# No diagonal corner cutting: both shared orthogonal cells must be
+			# open so the sphere body cannot clip a wall corner.
+			if step.x != 0 and step.y != 0:
+				if _cell_blocked(Vector2i(current.x + step.x, current.y)) or _cell_blocked(Vector2i(current.x, current.y + step.y)):
+					continue
+			var move_cost := SQRT2 if (step.x != 0 and step.y != 0) else 1.0
+			var tentative_g := current_g + move_cost
 			if not g_score.has(n) or tentative_g < g_score[n]:
 				came_from[n] = current
 				g_score[n] = tentative_g
-				open[n] = tentative_g + float(absi(n.x - goal.x) + absi(n.y - goal.y))
+				open[n] = tentative_g + _octile(n, goal)
 	return []
 
 
@@ -568,6 +586,13 @@ func _pop_lowest(open: Dictionary) -> Vector2i:
 			best = key
 	open.erase(best)
 	return best
+
+
+func _octile(a: Vector2i, b: Vector2i) -> float:
+	# 8-connected admissible heuristic: straight steps cost 1, diagonals SQRT2.
+	var dx := float(absi(a.x - b.x))
+	var dy := float(absi(a.y - b.y))
+	return (dx + dy) + (SQRT2 - 2.0) * minf(dx, dy)
 
 
 func _reconstruct_path(came_from: Dictionary, current: Vector2i) -> Array[Vector2i]:
