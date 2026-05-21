@@ -59,6 +59,13 @@ const CONE_SEARCH_SWEEP_RATE := 3.0  # rad/s the INVESTIGATE cone rotates (emerg
 const GLYPH_POP_SCALE := 1.6         # alert-glyph scale spike on a state change
 const GLYPH_POP_TIME := 0.25         # seconds the glyph pop decays over
 
+# State-encoded hum (occlusion-proof alert channel): pitch and volume rise along
+# the alert ladder, indexed by State. Pitch also speeds the baked tremolo, so a
+# higher alert reads as a more agitated hum even when the enemy is out of sight.
+const HUM_PITCH: Array[float] = [1.0, 1.12, 1.22, 1.5]   # PATROL/SUSPICIOUS/INVESTIGATE/PURSUIT
+const HUM_VOL: Array[float] = [-10.0, -9.0, -8.0, -6.0]
+const HUM_LERP_RATE := 4.0           # how fast the hum eases between state targets
+
 enum State { PATROL, SUSPICIOUS, INVESTIGATE, PURSUIT }
 
 @export var waypoints: Array[Vector3] = [
@@ -89,6 +96,10 @@ var _debug_label: Label
 var _alert_glyph: Label3D
 var _investigate_sweep_angle: float = 0.0
 var _glyph_pop: float = 0.0
+var _sting_player: AudioStreamPlayer3D
+var _sting_alert: AudioStreamWAV
+var _sting_spot: AudioStreamWAV
+var _sting_standdown: AudioStreamWAV
 
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
 @onready var _hum_player: AudioStreamPlayer3D = $HumSound
@@ -103,6 +114,7 @@ func _ready() -> void:
 	_ground_material = get_node("../Ground/MeshInstance3D").get_surface_override_material(0)
 	_hum_player.stream = _make_hum_sound()
 	_hum_player.play()
+	_setup_stings()
 	_setup_alert_glyph()
 	_build_nav_grid()
 	if waypoints.size() > 0:
@@ -178,6 +190,7 @@ func _process(delta: float) -> void:
 	_material.albedo_color = col
 	_update_cone_uniforms(delta)
 	_update_alert_glyph(delta)
+	_update_hum(delta)
 	_update_debug_label()
 
 
@@ -280,10 +293,20 @@ func _move_toward(target_pos: Vector3, delta: float, speed_mult: float) -> void:
 
 
 func _enter_state(new_state: State) -> void:
-	var was_pursuit := _state == State.PURSUIT
+	var prev := _state
+	var was_pursuit := prev == State.PURSUIT
 	_state = new_state
 	_state_timer = 0.0
 	_glyph_pop = GLYPH_POP_TIME
+	# Transition stings: occlusion-proof punctuation for the key beats. Spotted (!)
+	# on entering pursuit, alerted (?) on the first escalation out of patrol, and an
+	# all-clear when settling back to patrol. Lateral moves stay silent.
+	if new_state == State.PURSUIT and not was_pursuit:
+		_play_sting(_sting_spot)
+	elif prev == State.PATROL and new_state != State.PATROL:
+		_play_sting(_sting_alert)
+	elif new_state == State.PATROL and prev != State.PATROL:
+		_play_sting(_sting_standdown)
 	if new_state == State.PATROL:
 		_target_idx = _closest_waypoint_idx()
 		_set_path_to(waypoints[_target_idx])
@@ -530,6 +553,31 @@ func _color_to_vec3(c: Color) -> Vector3:
 	return Vector3(c.r, c.g, c.b)
 
 
+func _setup_stings() -> void:
+	# One-shot transition stings on their own 3D player (so they layer over the
+	# looping hum). Procedurally generated so there are no audio assets to ship.
+	_sting_player = AudioStreamPlayer3D.new()
+	_sting_player.unit_size = 6.0
+	_sting_player.max_distance = 20.0
+	add_child(_sting_player)
+	_sting_alert = _make_sting(520.0, 760.0, 0.16, 0.6)       # "?" curious, rising
+	_sting_spot = _make_sting(1000.0, 820.0, 0.13, 0.95)      # "!" alarm, sharp and loud
+	_sting_standdown = _make_sting(520.0, 320.0, 0.22, 0.45)  # all-clear, falling and soft
+
+
+func _play_sting(stream: AudioStreamWAV) -> void:
+	_sting_player.stream = stream
+	_sting_player.play()
+
+
+func _update_hum(delta: float) -> void:
+	# Ease pitch and volume toward the current state's target so the hum tracks the
+	# alert ladder smoothly. Audio is not occluded, so this reads through walls.
+	var t := minf(delta * HUM_LERP_RATE, 1.0)
+	_hum_player.pitch_scale = lerpf(_hum_player.pitch_scale, HUM_PITCH[_state], t)
+	_hum_player.volume_db = lerpf(_hum_player.volume_db, HUM_VOL[_state], t)
+
+
 func _setup_alert_glyph() -> void:
 	# Billboarded ? / ! above the sphere. Hidden on patrol; reads alert state from
 	# any angle. Fades with _visibility_alpha so it never leaks the enemy's
@@ -729,6 +777,31 @@ static func _make_hum_sound() -> AudioStreamWAV:
 		var carrier := sin(t * 147.0) * 0.7 + sin(t * 294.0) * 0.3
 		var tremolo := 1.0 + 0.3 * sin(t * 3.0)
 		var val := int(carrier * tremolo * 24000.0)
+		data[i * 2] = val & 0xFF
+		data[i * 2 + 1] = (val >> 8) & 0xFF
+	stream.data = data
+	return stream
+
+
+static func _make_sting(f0: float, f1: float, dur: float, peak: float) -> AudioStreamWAV:
+	# Short non-looping tone that glides f0 -> f1 with a fast attack and an
+	# exponential decay. peak (0..1) sets loudness. Used for the ? / ! / all-clear
+	# transition stings.
+	var rate := 44100
+	var samples := int(rate * dur)
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = rate
+	stream.stereo = false
+	var data := PackedByteArray()
+	data.resize(samples * 2)
+	var phase := 0.0
+	for i in samples:
+		var u := float(i) / float(samples)
+		var freq := lerpf(f0, f1, u)
+		phase += TAU * freq / float(rate)
+		var env := minf(u / 0.04, 1.0) * exp(-3.5 * u)
+		var val := int(sin(phase) * env * peak * 30000.0)
 		data[i * 2] = val & 0xFF
 		data[i * 2 + 1] = (val >> 8) & 0xFF
 	stream.data = data
