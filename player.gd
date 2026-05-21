@@ -13,6 +13,7 @@ const DODGE_COOLDOWN := 1.5
 const WAVE_DURATION := 0.4
 const MAX_WAVES := 8
 const MAX_FOOTPRINTS := 64
+const FOOTPRINT_FADE_TIME := 12.0  # seconds for a deposited print to fade out and clear
 const MAX_WALLS := 16
 const SLIDE_SUBSAMPLES := 4
 const FOCUS_SMOOTH_RATE := 25.0
@@ -68,6 +69,7 @@ var _box_mesh: BoxMesh
 var _face_marks: Array[bool] = [false, false, false, false, false, false]
 var _puddle_overlap_count: int = 0
 var _water_overlap_count: int = 0
+var _ink_cells: Dictionary = {}
 var _orient: Basis = Basis.IDENTITY
 
 @onready var _step_player: AudioStreamPlayer = $StepSound
@@ -106,6 +108,34 @@ func _ready() -> void:
 	for water in get_tree().get_nodes_in_group("water_puddles"):
 		water.area_entered.connect(_on_water_entered)
 		water.area_exited.connect(_on_water_exited)
+	_build_ink_cells()
+
+
+func _build_ink_cells() -> void:
+	# Record every cell an ink puddle covers, so ink contact reads off the current
+	# position rather than the Area3D overlap count (which lags the render-frame
+	# position lerp during a dodge and would swallow the first tiles of the trail).
+	# Reads each puddle's BoxShape3D footprint, so multi-cell puddles and clusters
+	# of adjacent puddles both work. Assumes axis-aligned boxes, like the walls.
+	_ink_cells.clear()
+	for puddle in get_tree().get_nodes_in_group("ink_puddles"):
+		var area := puddle as Area3D
+		if area == null:
+			continue
+		var center := area.global_position
+		var box: BoxShape3D = null
+		for child in area.get_children():
+			if child is CollisionShape3D:
+				center = child.global_position
+				box = child.shape as BoxShape3D
+				break
+		if box == null:
+			_ink_cells[Vector2i(roundi(center.x), roundi(center.z))] = true
+			continue
+		var half := box.size * 0.5
+		for cx in range(ceili(center.x - half.x), floori(center.x + half.x) + 1):
+			for cz in range(ceili(center.z - half.z), floori(center.z + half.z) + 1):
+				_ink_cells[Vector2i(cx, cz)] = true
 
 
 func _on_contact(area: Area3D) -> void:
@@ -381,6 +411,7 @@ func _pick_dir(move: Vector2) -> Vector2i:
 
 
 func _process(delta: float) -> void:
+	_decay_footprints(delta)
 	for i in range(_waves.size() - 1, -1, -1):
 		_waves[i].t = minf(_waves[i].t + delta / WAVE_DURATION, 1.0)
 		if _waves[i].t >= 1.0:
@@ -415,7 +446,8 @@ func _process(delta: float) -> void:
 		var current_cell := Vector2i(roundi(position.x), roundi(position.z))
 		if current_cell != _slide_last_cell:
 			_slide_last_cell = current_cell
-			if _face_marks[_down_face_id()]:
+			_check_ink_contact()
+			if not _ink_cells.has(current_cell) and _face_marks[_down_face_id()]:
 				_deposit_streak_cell(current_cell)
 		if _dodge_t >= 1.0:
 			_dodging = false
@@ -487,7 +519,9 @@ func _process(delta: float) -> void:
 
 
 func _check_ink_contact() -> void:
-	if _puddle_overlap_count <= 0:
+	# Cell-based so it stays in sync with a fast dodge slide (the Area3D overlap
+	# count lags the position lerp). Inks the current down face on an ink cell.
+	if not _ink_cells.has(Vector2i(roundi(position.x), roundi(position.z))):
 		return
 	var face: int = _down_face_id()
 	if _face_marks[face]:
@@ -522,9 +556,7 @@ func _maybe_deposit_footprint() -> void:
 func _deposit_streak_cell(cell: Vector2i) -> void:
 	# Spread SLIDE_SUBSAMPLES footprints across this cell along the slide
 	# direction so adjacent cells merge into a continuous streak instead of
-	# discrete blobs.
-	if _puddle_overlap_count > 0:
-		return
+	# discrete blobs. The caller gates this on the cell being off-ink.
 	var dir := Vector2(_slide_dir.x, _slide_dir.y)
 	for i in SLIDE_SUBSAMPLES:
 		var t: float = -0.375 + i * 0.25
@@ -537,6 +569,19 @@ func _add_footprint(pos: Vector2) -> void:
 	if _footprints.size() >= MAX_FOOTPRINTS:
 		_footprints.pop_front()
 	_footprints.append({ "position": pos, "alpha": 1.0 })
+
+
+func _decay_footprints(delta: float) -> void:
+	# Prints fade with age (oldest reach zero first) and clear when spent. Drives
+	# both the visual fade and the enemy trail, which only follows live prints.
+	if _footprints.is_empty():
+		return
+	var fade := delta / FOOTPRINT_FADE_TIME
+	for i in range(_footprints.size() - 1, -1, -1):
+		_footprints[i].alpha -= fade
+		if _footprints[i].alpha <= 0.0:
+			_footprints.remove_at(i)
+	_update_footprint_uniforms()
 
 
 func _update_footprint_uniforms() -> void:

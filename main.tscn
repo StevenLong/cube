@@ -76,6 +76,12 @@ roughness = 0.2
 [sub_resource type="BoxShape3D" id="BoxShape3D_Puddle"]
 size = Vector3(0.85, 0.5, 0.85)
 
+[sub_resource type="PlaneMesh" id="PlaneMesh_PuddleWide"]
+size = Vector2(2.9, 0.9)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_PuddleWide"]
+size = Vector3(2.85, 0.5, 0.85)
+
 [sub_resource type="BoxMesh" id="BoxMesh_PerimeterNS"]
 size = Vector3(30, 1, 1)
 
@@ -349,3 +355,15 @@ collision_mask = 2
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="WaterPuddle/Area3D"]
 shape = SubResource("BoxShape3D_Puddle")
+
+[node name="PuddleWide" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.01, -3)
+mesh = SubResource("PlaneMesh_PuddleWide")
+surface_material_override/0 = SubResource("StandardMaterial3D_Ink")
+
+[node name="Area3D" type="Area3D" parent="PuddleWide" groups=["ink_puddles"]]
+collision_layer = 16
+collision_mask = 2
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="PuddleWide/Area3D"]
+shape = SubResource("BoxShape3D_PuddleWide")

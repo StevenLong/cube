@@ -16,7 +16,6 @@ const VIEW_RADIUS := 8.0
 const VIEW_CONE_COS := 0.766  # cos(40°), so an 80° total cone
 const FOOTPRINT_VIEW_RADIUS := 5.0
 const FOOTPRINT_VIEW_CONE_COS := 0.866  # cos(30°), so a 60° total cone
-const FOOTPRINT_VISIT_DIST := 0.6
 const FOOTPRINT_RETARGET_DIST := 0.3
 const TURN_RATE := 5.0  # rad/s — 180° in ~0.6s
 const TURN_CRAWL_FRACTION := 0.5  # min fraction of speed kept through sharp turns (no dead stop)
@@ -54,7 +53,11 @@ const DEBUG_DETECTION := true        # temporary on-screen _detection readout; r
 const CONE_FOCUS_COS := 0.97         # half-angle cos when fully locked (~14 deg)
 const CONE_PATROL_ALPHA := 0.2       # cone opacity at detection 0
 const CONE_LOCKED_ALPHA := 0.6       # cone opacity at detection 1
-const CONE_SEARCH_ALPHA := 0.5       # 360 sweep opacity in INVESTIGATE
+const CONE_SEARCH_ALPHA := 0.5       # rotating search cone opacity in INVESTIGATE (lock 0)
+const CONE_SEARCH_HALF_COS := 0.7071 # cos(45°): a 90° rotating search cone in INVESTIGATE
+const CONE_SEARCH_SWEEP_RATE := 3.0  # rad/s the INVESTIGATE cone rotates (emergency-beacon sweep)
+const GLYPH_POP_SCALE := 1.6         # alert-glyph scale spike on a state change
+const GLYPH_POP_TIME := 0.25         # seconds the glyph pop decays over
 
 enum State { PATROL, SUSPICIOUS, INVESTIGATE, PURSUIT }
 
@@ -83,6 +86,9 @@ var _corridor_open_timer: float = 0.0
 var _visibility_alpha: float = 1.0
 var _visibility_initialized: bool = false
 var _debug_label: Label
+var _alert_glyph: Label3D
+var _investigate_sweep_angle: float = 0.0
+var _glyph_pop: float = 0.0
 
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
 @onready var _hum_player: AudioStreamPlayer3D = $HumSound
@@ -97,6 +103,7 @@ func _ready() -> void:
 	_ground_material = get_node("../Ground/MeshInstance3D").get_surface_override_material(0)
 	_hum_player.stream = _make_hum_sound()
 	_hum_player.play()
+	_setup_alert_glyph()
 	_build_nav_grid()
 	if waypoints.size() > 0:
 		_set_path_to(waypoints[_target_idx])
@@ -137,19 +144,21 @@ func _process(delta: float) -> void:
 			if _detection >= DETECT_PURSUIT:
 				_enter_state(State.PURSUIT)
 			else:
-				if position.distance_to(_last_seen_pos) < FOOTPRINT_VISIT_DIST:
-					var cell := Vector2i(roundi(_last_seen_pos.x), roundi(_last_seen_pos.z))
-					_player.consume_footprints_in_cell(cell)
+				# Eat the print under our feet as we follow the trail, so the cells
+				# we have already checked can't lure us back the way we came.
+				_player.consume_footprints_in_cell(Vector2i(roundi(position.x), roundi(position.z)))
+				var advanced := false
 				if footprint_pos != Vector3.INF:
 					var nv := Vector2(footprint_pos.x, footprint_pos.z)
 					var cv := Vector2(_last_seen_pos.x, _last_seen_pos.z)
 					if nv.distance_to(cv) > FOOTPRINT_RETARGET_DIST:
 						_last_seen_pos = Vector3(footprint_pos.x, position.y, footprint_pos.z)
-						_state_timer = 0.0
 						_set_path_to(_last_seen_pos)
-				else:
+						_state_timer = 0.0
+						advanced = true
+				if not advanced:
 					_state_timer += delta
-				if _state == State.INVESTIGATE and _state_timer >= INVESTIGATE_TIMEOUT:
+				if _state_timer >= INVESTIGATE_TIMEOUT:
 					_enter_state(State.PATROL)
 				_investigate_move(delta)
 		State.PURSUIT:
@@ -167,7 +176,8 @@ func _process(delta: float) -> void:
 	var col := _state_color()
 	col.a = _visibility_alpha
 	_material.albedo_color = col
-	_update_cone_uniforms()
+	_update_cone_uniforms(delta)
+	_update_alert_glyph(delta)
 	_update_debug_label()
 
 
@@ -273,6 +283,7 @@ func _enter_state(new_state: State) -> void:
 	var was_pursuit := _state == State.PURSUIT
 	_state = new_state
 	_state_timer = 0.0
+	_glyph_pop = GLYPH_POP_TIME
 	if new_state == State.PATROL:
 		_target_idx = _closest_waypoint_idx()
 		_set_path_to(waypoints[_target_idx])
@@ -280,6 +291,11 @@ func _enter_state(new_state: State) -> void:
 		_set_path_to(_last_seen_pos)
 	if new_state == State.INVESTIGATE:
 		_set_path_to(_last_seen_pos)
+		# Start the search sweep aimed at the last-seen spot so the beam picks up
+		# where the suspicious cone left it, then rotates away.
+		var to_suspect := Vector2(_last_seen_pos.x - position.x, _last_seen_pos.z - position.z)
+		if to_suspect.length() > 0.001:
+			_investigate_sweep_angle = atan2(to_suspect.y, to_suspect.x)
 	if new_state == State.PURSUIT:
 		_set_path_to(_player.position)
 		_pursuit_repath_timer = PURSUIT_REPATH_INTERVAL
@@ -361,11 +377,20 @@ func _advance_pending_sounds(delta: float) -> void:
 
 
 func _on_sound_heard(origin: Vector2) -> void:
+	# A noise is a located clue, so go investigate the source (this is what makes
+	# knocking a usable lure). Pursuit ignores noise — already locked on. If we are
+	# already searching, retarget to the fresher sound and refresh the dwell rather
+	# than re-entering the state, which would re-pop the glyph and reseed the cone
+	# on every footstep.
 	if _state == State.PURSUIT:
 		return
 	_last_seen_pos = Vector3(origin.x, position.y, origin.y)
 	_detection = maxf(_detection, DETECT_NOISE_SEED)
-	_enter_state(State.SUSPICIOUS)
+	if _state == State.INVESTIGATE:
+		_state_timer = 0.0
+		_set_path_to(_last_seen_pos)
+	else:
+		_enter_state(State.INVESTIGATE)
 
 
 func _is_seeing_player() -> bool:
@@ -395,8 +420,10 @@ func _is_seeing_player() -> bool:
 
 
 func _visible_footprint_pos() -> Vector3:
-	# Returns the closest footprint with unobstructed LoS. INVESTIGATE scans
-	# 360° around the sphere; other states use the forward cone.
+	# Returns the freshest in-view footprint with unobstructed LoS, so the search
+	# heads up the trail toward the player instead of back down it. get_footprint_
+	# positions is oldest -> newest, so we walk it newest-first and take the first
+	# hit. INVESTIGATE scans 360° around the sphere; other states use the cone.
 	var positions: PackedVector2Array = _player.get_footprint_positions()
 	if positions.is_empty():
 		return Vector3.INF
@@ -411,13 +438,12 @@ func _visible_footprint_pos() -> Vector3:
 		forward /= fl
 	var origin := global_position
 	var space := get_world_3d().direct_space_state
-	var best_pos := Vector3.INF
-	var best_dist := INF
-	for p in positions:
+	for i in range(positions.size() - 1, -1, -1):
+		var p := positions[i]
 		var fp_world := Vector3(p.x, 0.05, p.y)
 		var delta_xz := Vector3(fp_world.x - origin.x, 0.0, fp_world.z - origin.z)
 		var dist := delta_xz.length()
-		if dist < 0.01 or dist > FOOTPRINT_VIEW_RADIUS or dist >= best_dist:
+		if dist < 0.01 or dist > FOOTPRINT_VIEW_RADIUS:
 			continue
 		if not skip_cone:
 			var dir := delta_xz / dist
@@ -426,16 +452,15 @@ func _visible_footprint_pos() -> Vector3:
 		var query := PhysicsRayQueryParameters3D.create(origin, fp_world)
 		query.collide_with_areas = false
 		if space.intersect_ray(query).is_empty():
-			best_pos = fp_world
-			best_dist = dist
-	return best_pos
+			return fp_world
+	return Vector3.INF
 
 
 func _investigate_move(delta: float) -> void:
 	_follow_path(delta, INVESTIGATE_SPEED_MULT, _last_seen_pos)
 
 
-func _update_cone_uniforms() -> void:
+func _update_cone_uniforms(delta: float) -> void:
 	var forward := -global_transform.basis.z
 	forward.y = 0.0
 	var fl := forward.length()
@@ -446,12 +471,7 @@ func _update_cone_uniforms() -> void:
 	_ground_material.set_shader_parameter("cone_radius", VIEW_RADIUS)
 
 	if _state == State.INVESTIGATE:
-		# Lost the thread: full 360 search sweep. -1.0 makes the shader's dot test
-		# always pass.
-		_ground_material.set_shader_parameter("cone_dir", dir_2d)
-		_ground_material.set_shader_parameter("cone_half_angle_cos", -1.0)
-		_ground_material.set_shader_parameter("cone_color", _color_to_vec3(COLOR_INVESTIGATE))
-		_ground_material.set_shader_parameter("cone_alpha", CONE_SEARCH_ALPHA * _visibility_alpha)
+		_update_search_cone(delta)
 		return
 
 	# Visual ladder: the cone is the detection fill. As _detection rises it
@@ -472,6 +492,30 @@ func _update_cone_uniforms() -> void:
 	_ground_material.set_shader_parameter("cone_alpha", alpha * _visibility_alpha)
 
 
+func _update_search_cone(delta: float) -> void:
+	# Active search: a 90° cone sweeps the floor like a rotating beacon. As
+	# certainty (lock) climbs back toward pursuit the sweep slows and stops, the
+	# cone narrows toward the focus beam, slides orange -> red, and homes on the
+	# suspect. At lock 1 this matches the PURSUIT branch exactly, so the handoff
+	# is a continuous focus rather than a snap.
+	var lock := clampf((_detection - DETECT_SUSPICIOUS) / (DETECT_PURSUIT - DETECT_SUSPICIOUS), 0.0, 1.0)
+	_investigate_sweep_angle += CONE_SEARCH_SWEEP_RATE * (1.0 - lock) * delta
+	var sweep_dir := Vector2(cos(_investigate_sweep_angle), sin(_investigate_sweep_angle))
+	var aim := sweep_dir
+	var to_suspect := Vector2(_last_seen_pos.x - position.x, _last_seen_pos.z - position.z)
+	if to_suspect.length() > 0.05:
+		var blended := sweep_dir.lerp(to_suspect.normalized(), lock)
+		if blended.length() > 0.01:
+			aim = blended.normalized()
+	var half_cos := lerpf(CONE_SEARCH_HALF_COS, CONE_FOCUS_COS, lock)
+	var col := COLOR_INVESTIGATE.lerp(COLOR_PURSUIT, lock)
+	var alpha := lerpf(CONE_SEARCH_ALPHA, CONE_LOCKED_ALPHA, lock)
+	_ground_material.set_shader_parameter("cone_dir", aim)
+	_ground_material.set_shader_parameter("cone_half_angle_cos", half_cos)
+	_ground_material.set_shader_parameter("cone_color", _color_to_vec3(col))
+	_ground_material.set_shader_parameter("cone_alpha", alpha * _visibility_alpha)
+
+
 func _detection_color(d: float) -> Color:
 	if d < 0.5:
 		return COLOR_PATROL.lerp(COLOR_SUSPICIOUS, d / 0.5)
@@ -480,6 +524,51 @@ func _detection_color(d: float) -> Color:
 
 func _color_to_vec3(c: Color) -> Vector3:
 	return Vector3(c.r, c.g, c.b)
+
+
+func _setup_alert_glyph() -> void:
+	# Billboarded ? / ! above the sphere. Hidden on patrol; reads alert state from
+	# any angle. Fades with _visibility_alpha so it never leaks the enemy's
+	# position when the player has no line of sight (matches the mesh).
+	_alert_glyph = Label3D.new()
+	_alert_glyph.text = ""
+	_alert_glyph.position = Vector3(0.0, 0.95, 0.0)
+	_alert_glyph.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_alert_glyph.pixel_size = 0.01
+	_alert_glyph.font_size = 64
+	_alert_glyph.outline_size = 12
+	_alert_glyph.outline_modulate = Color.BLACK
+	_alert_glyph.visible = false
+	add_child(_alert_glyph)
+
+
+func _update_alert_glyph(delta: float) -> void:
+	if _alert_glyph == null:
+		return
+	_glyph_pop = maxf(_glyph_pop - delta, 0.0)
+	var glyph := ""
+	var col := COLOR_PATROL
+	match _state:
+		State.SUSPICIOUS:
+			glyph = "?"
+			col = COLOR_SUSPICIOUS
+		State.INVESTIGATE:
+			glyph = "?"
+			col = COLOR_INVESTIGATE
+		State.PURSUIT:
+			glyph = "!"
+			col = COLOR_PURSUIT
+	if glyph == "":
+		_alert_glyph.visible = false
+		return
+	_alert_glyph.visible = true
+	_alert_glyph.text = glyph
+	col.a = _visibility_alpha
+	_alert_glyph.modulate = col
+	_alert_glyph.outline_modulate = Color(0.0, 0.0, 0.0, _visibility_alpha)
+	# Scale spike on state change: starts at GLYPH_POP_SCALE and eases back to 1.
+	var s := 1.0 + (GLYPH_POP_SCALE - 1.0) * (_glyph_pop / GLYPH_POP_TIME)
+	_alert_glyph.scale = Vector3(s, s, s)
 
 
 func _build_nav_grid() -> void:

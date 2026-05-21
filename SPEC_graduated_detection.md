@@ -137,12 +137,14 @@ of `_detection` is fine for verifying it before the cone task renders it.
 
 ## Decisions (locked 2026-05-20)
 
-1. **Noise seeds the accumulator: yes.** A noise-triggered SUSPICIOUS would start
-   with `_detection` near 0 and the drain rule would bounce it straight back to
-   PATROL. So on noise heard, set `_detection = maxf(_detection, DETECT_SUSPICIOUS)`;
-   heard-suspicion then lives and drains on one model (this is what retires
-   `SUSPICIOUS_TIMEOUT` cleanly). Footprint sighting stays independent: it routes
-   to INVESTIGATE, which keeps its own timeout.
+1. **Noise routes to INVESTIGATE, not SUSPICIOUS (revised 2026-05-21).** A noise is
+   a located clue, so the enemy goes and searches its source; this is what makes
+   knocking a usable lure. On noise heard, set `_detection = maxf(_detection,
+   DETECT_NOISE_SEED)` (seeds the accumulator so a glimpse confirms faster) and
+   enter INVESTIGATE at the source; a repeat noise while already searching just
+   retargets and refreshes the dwell. SUSPICIOUS is now reached only by the visual
+   accumulator. PURSUIT still ignores noise. (Originally noise seeded SUSPICIOUS;
+   that let footstep noise downgrade an active INVESTIGATE back down to PATROL.)
 2. **Exposure inputs: extension size + proximity only.** Covered sides are NOT a
    detection input. They exist solely to gate the blend (3+ covered), which is the
    only hiding mechanic that affects detection, and it does so through the existing
