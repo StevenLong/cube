@@ -1,110 +1,129 @@
-# Handoff, 2026-05-20
+# Handoff, 2026-05-21
 
 ## Where we are
-Design-heavy session. Stepped back from building tutorials to lock down the
-game's design (v0.2), then started Phase 7 (reactive stealth depth): graduated
-detection, the focusing cone, and a navigation feel pass. All cube code
-committed; design docs and task list committed in the game-dev repo.
+Phase 7 (Reactive Stealth Depth), building on last session's graduated detection
++ focusing cone + nav pass. This session was alert feedback and a run of
+investigate/ink/knock fixes, mostly driven by playtesting. All cube code committed
+to `main`; task list updated in the game-dev repo.
 
 ## Completed this session
 
-### Design v0.2 (`game-dev/Cube Game.md`)
-- Center of gravity: reactive stealth spine with puzzle-forward extension
-  setpieces woven in (user's call, not the puzzle-forward option I first pushed).
-- Anchor tension: the shape that lets you move/reach/hide is the shape that gets
-  you seen, slows you, and makes noise.
-- Doc now holds pillars, core loop, detection/readability spec, a systems-vs-props
-  mechanic taxonomy, six signature situations, and a decisions log.
-- Decisions: **jump cut** (grid tumble identity; extension height is the only,
-  priced, verticality), extension cost resolved (free to change, priced in
-  speed/noise/silhouette), detection graduated not binary.
-- See memory `project-design-direction-v02`.
+### Alert glyph (Phase 7 item done)
+- Billboarded `Label3D` above the enemy (`_setup_alert_glyph` / `_update_alert_glyph`
+  in `enemy_sphere.gd`): hidden on patrol, yellow `?` (suspicious), orange `?`
+  (investigate), red `!` (pursuit). Fades with `_visibility_alpha` like the mesh so
+  it never leaks position when the player has no LoS.
+- Scale-pop on every state change (`GLYPH_POP_SCALE` 1.6 over `GLYPH_POP_TIME` 0.25,
+  fired from `_enter_state`).
 
-### Docs hygiene
-- `CLAUDE.md` no longer tracks progress (removed Current Status); it points to the
-  task list and HANDOFF instead.
-- Task list reorged: Phase 6 trimmed to its done items; new **Phase 7 (Reactive
-  Stealth Depth)** ahead of **Phase 8 (Tutorials)**, which is re-scoped so each
-  tutorial teaches a signature situation, not a bare mechanic. LoS-tuning and
-  caught-panel items checked off.
+### Focusing cone: no acquire snap + new INVESTIGATE look
+- INVESTIGATE cone is now a rotating 90 deg beacon (`_update_search_cone`,
+  `CONE_SEARCH_HALF_COS`, `CONE_SEARCH_SWEEP_RATE` 3.0). As detection climbs from
+  the suspicious threshold to pursuit, a `lock` factor slows/stops the sweep,
+  narrows it to the focus beam, slides orange -> red, and homes on the suspect. At
+  lock 1 it matches the PURSUIT branch exactly, so INVESTIGATE -> PURSUIT no longer
+  snaps. Sweep is seeded toward the last-seen spot on entry so SUSPICIOUS ->
+  INVESTIGATE picks up smoothly too.
+- Extracting `_update_search_cone` also cleared the `CONFUSABLE_LOCAL_DECLARATION`
+  warnings (the branch's locals collided with the ladder branch's).
 
-### Phase 7, task 1: Graduated detection model (committed ec3815b)
-- `_detection` accumulator [0,1] in `enemy_sphere.gd`. Fills by
-  `proximity * size * alert-mult` while seeing, drains otherwise. Hiding feeds in
-  only via the blend short-circuit (covered sides are NOT a detection input, per
-  user). Thresholds drive PATROL/SUSPICIOUS/PURSUIT; retired CONFIRM_DURATION,
-  SUSPICIOUS_TIMEOUT, PURSUIT_LOSE_TIMEOUT.
-- Noise seeds `_detection` to DETECT_NOISE_SEED. Getters `get_detection_level()`
-  / `get_detection_state()` for downstream readability tasks. `get_extension_sum()`
-  added to `player.gd`.
-- Spec: `cube/SPEC_graduated_detection.md`.
+### Noise -> INVESTIGATE (two bugs, one fix)
+- `_on_sound_heard` now enters INVESTIGATE (was SUSPICIOUS). Fixes (a) pursuit-loss
+  sliding through suspicious to patrol because footstep noise downgraded the active
+  search, and (b) makes noise a usable lure. A repeat noise while already searching
+  retargets + refreshes the dwell without re-popping the glyph. PURSUIT still
+  ignores noise. SUSPICIOUS is now reached only by the visual accumulator.
+- Spec updated: `SPEC_graduated_detection.md` decision 1.
 
-### Phase 7, task 2: Focusing cone (committed 7d2d5aa)
-- The ground cone now reads off `_detection`: narrows from the patrol sweep to a
-  tight beam, ramps grey -> yellow -> red, and aims at the suspect (the beam
-  doubles as a last-known-position marker). INVESTIGATE opens to a 360 orange
-  search sweep. Pure uniform changes, no shader edit.
+### Footprint trail follows toward the player + fades
+- `_visible_footprint_pos` returns the freshest in-view print (iterates newest ->
+  oldest), so the search heads up the trail toward the player instead of back down
+  it. INVESTIGATE consumes the print underfoot so a checked cell can't lure it back.
+- Footprints fade with age and clear (`FOOTPRINT_FADE_TIME` 12.0 in `player.gd`,
+  `_decay_footprints`); the shader already multiplies ink by `footprint_alphas`, so
+  the trail visibly fades from its oldest end. Enemy only follows live prints.
 
-### Navigation feel pass (committed 3234119)
-- **8-connected A\*** (octile heuristic, SQRT2 diagonal cost, no corner cutting):
-  direct diagonal routes instead of 4-connected staircases.
-- **Move-while-turning** in `_move_toward`: speed eases to TURN_CRAWL_FRACTION
-  through sharp turns instead of the old dead-stop-and-pivot (TURN_LEAD_THRESHOLD,
-  removed).
-- **Pursuit corridor hysteresis**: off-grid seek engages only after the corridor
-  stays clear for CORRIDOR_HYSTERESIS; any block reverts to A* immediately. Kills
-  the corner jiggle.
-- Removed dead NEIGHBORS (4-conn).
+### Slide ink contact is cell-based + multi-cell puddles
+- Ink contact during a dodge was gated on the Area3D overlap count, which lags the
+  render-frame position lerp and swallowed the first tiles of the trail. Now
+  cell-based: `_build_ink_cells` records each puddle's `BoxShape3D` footprint at
+  ready, `_check_ink_contact` reads the current cell. Trail starts on the first dry
+  cell past the ink.
+- `_build_ink_cells` enumerates every cell a puddle box covers, so multi-cell
+  puddles and adjacent clusters work. Added a 3-cell ink puddle (`PuddleWide`) to
+  `main.tscn` at cells (-1,-3),(0,-3),(1,-3).
+
+### Wall-knock distraction (Phase 7 item done)
+- A deliberate directional tap into an adjacent wall (the move is blocked, no tumble
+  started) emits a loud noise at the wall cell: `_emit_knock` in `player.gd`,
+  `KNOCK_RADIUS` 10.0 (+ extension size), `KNOCK_COOLDOWN` 0.4. Reuses the wave +
+  `noise_emitted` plumbing and the step sound at pitch 0.65. Just-pressed edge means
+  holding into a wall can't spam it. No new input binding (reuses move dirs).
+
+### Corner-catch fix (knock in the hiding pocket)
+- `_follow_path` ended with an unconditional `_move_toward(final_target)`, which is
+  collision-free. A knock's target is a wall cell, so the sphere drove into the wall
+  and reached the player through the shared edge/corner. Now it only closes the
+  final gap if the target cell is open; otherwise it stops at the path end (an open
+  neighbour) and searches there. Pursuit unaffected (player cell is open).
 
 ## Temporary / to remove
-- `DEBUG_DETECTION := true` in `enemy_sphere.gd` draws an on-screen `_detection`
-  readout (top-left). Drop the flag plus `_setup_debug_label` /
-  `_update_debug_label` / `_state_name` once the cone is verified.
+- `DEBUG_DETECTION := true` in `enemy_sphere.gd` still draws the on-screen detection
+  readout (top-left). Keeping it for the end-of-phase tuning pass; drop the flag plus
+  `_setup_debug_label` / `_update_debug_label` / `_state_name` when done.
 
 ## Phase 7 remaining
 - State-encoded hum audio + transition stings (occlusion-proof alert channel).
-- Alert glyph `?` -> `!` above the enemy.
 - Floor cone stays visible when the enemy body is occluded (decouple `cone_alpha`
   from `_visibility_alpha`).
-- Wall-knock distraction (deliberate re-press into an adjacent wall emits noise).
-- Extend-lock system (forced shape, locked until a requirement is met).
+- Extend-lock system (a trigger forces a shape, locked until a requirement is met).
 
-## Tuning backlog
-- Detection (`DETECT_*`): noise dwell ~0.6s feels short (seed/intensity coupling
-  in a single accumulator). INVESTIGATE re-acquire now ramps (~0.5-0.7s) rather
-  than snapping to pursuit. Fill/drain rates and thresholds all tunable.
-- Cone: CONE_FOCUS_COS, CONE_PATROL_ALPHA, CONE_LOCKED_ALPHA, CONE_SEARCH_ALPHA.
-- Nav: TURN_CRAWL_FRACTION 0.5 (higher = more relentless, lower = more arc),
-  CORRIDOR_HYSTERESIS 0.2, TURN_RATE 5.0 (bump for snappier facing).
+## Known watch items (not bugs blocking us)
+- LoS is a single centre-to-centre ray; it can thread the exact point where two
+  walls meet for a frame and grant vision through a corner. That only lets the enemy
+  *detect* you (then it pursues around via A*), never catch through the wall. Widen
+  to a multi-ray / body-width check if it shows up in play.
+- PURSUIT -> INVESTIGATE (losing the player at detection 0.5) has a small colour
+  seam: the pursuit ladder is yellow at 0.5 while the search cone is orange. Aim
+  stays continuous; cosmetic only.
+- Multi-cell puddles: keep the visual `PlaneMesh` and the collision `BoxShape3D`
+  sized together (the player sees the plane, the box decides what inks you).
+  `_build_ink_cells` assumes axis-aligned boxes, like the wall enumeration.
+
+## Tuning backlog (end-of-phase pass)
+- Detection (`DETECT_*`): fill/drain/thresholds. `DETECT_NOISE_SEED` 0.5 sets a
+  knock's starting "alarm" (cone starts ~1/3 focused); drop to ~0.25 for a calmer
+  wide search read.
+- Cone: `CONE_FOCUS_COS`, `CONE_*_ALPHA`, `CONE_SEARCH_HALF_COS`,
+  `CONE_SEARCH_SWEEP_RATE` 3.0.
+- Glyph: `GLYPH_POP_SCALE` 1.6, `GLYPH_POP_TIME` 0.25.
+- Footprints: `FOOTPRINT_FADE_TIME` 12.0, `FOOTPRINT_RETARGET_DIST` 0.3.
+- Knock: `KNOCK_RADIUS` 10.0, `KNOCK_COOLDOWN` 0.4, knock pitch 0.65.
+- Nav: `TURN_CRAWL_FRACTION` 0.5, `CORRIDOR_HYSTERESIS` 0.2, `TURN_RATE` 5.0.
 - Fog: `dark_factor` 0.25 still a placeholder.
 
-## Cleared from previous backlog
-- 8-connected pathfinder switch: done.
-- Pursuit corridor hysteresis: done.
-- (Player LoS silhouette tuning was done last session.)
-
-## Deferred / parked (unchanged)
-- Per-face cube ink visualisation; extended-cuboid per-cell footprints.
-- Pyramid / composite enemies; optional-objective definition; recovery-when-spotted
-  variety. See `Cube Game.md` open questions.
-- Shelved props: conveyor belts (off the reactive-stealth centre), timed noisemaker.
-
 ## Key files
-- `player.gd`: tumble, extension, dodge, blend, ink, audio waves, footprints,
-  water cleanse, wall-AABB enumeration, caught signal, **get_extension_sum**.
+- `player.gd`: tumble, extension, dodge, blend, ink (cell-based contact +
+  `_build_ink_cells`), audio waves, footprints (**fade**, freshest exposed in
+  order), water cleanse, **wall-knock** (`_emit_knock`), `get_extension_sum`.
 - `enemy_sphere.gd`: PATROL/SUSPICIOUS/INVESTIGATE/PURSUIT, math cone vision,
-  footprint trail, smooth rotation, **graduated detection accumulator**,
-  **detection-driven focusing cone**, **8-connected A* + move-while-turning +
-  corridor hysteresis**, per-enemy hum, **debug detection readout (temp)**.
+  graduated detection accumulator, **detection-driven cone incl. rotating beacon
+  search (`_update_search_cone`)**, **alert glyph**, **noise -> investigate**,
+  **freshest-footprint follow + consume-underfoot**, 8-connected A* +
+  move-while-turning + corridor hysteresis (**blocked-final-target guard**),
+  per-enemy hum, debug detection readout (temp).
 - `level.gd`: state machine (READY/PLAYING/COMPLETE/CAUGHT), stats, pause, Escape.
 - `shaders/grid_ground.gdshader`: grid + waves + vision cone + footprints + LoS
-  fog of war. Hardcodes 30x30 UV mapping.
-- `SPEC_graduated_detection.md`: the detection model spec.
+  fog. Hardcodes 30x30 UV mapping.
+- `main.tscn`: sandbox. Ink puddle (1,1), water (4,1), `PuddleWide` 3-cell ink at
+  z=-3. Walls (3,0)/(2,-1)/(2,1) form the corner hiding pocket at (2,0).
+- `SPEC_graduated_detection.md`: detection model spec (noise -> INVESTIGATE).
 
 ## Input map
 | Action | Controller | Keyboard |
 |--------|-----------|---------|
 | Move | D-pad / left stick | WASD / arrows |
+| Wall-knock | tap move into a wall | tap move into a wall |
 | Sprint | R2 | Left Shift |
 | Dodge | Circle (hold + dir) | Space |
 | Extend mode | R1 | E |
@@ -113,14 +132,14 @@ committed; design docs and task list committed in the game-dev repo.
 | Camera tilt | Right stick Y | R / F |
 | Back to menu / quit menu | (none) | Escape |
 
-(Jump is cut by design; no binding.)
+(Jump is cut by design; no binding. Wall-knock reuses the move inputs, no new bind.)
 
 ## Memory notes worth checking
 - Read HANDOFF.md first thing at session start.
 - Design direction v0.2 (reactive-stealth, shape-vs-exposure, jump cut).
-- No Co-Authored-By trailer on commits.
-- Transform3D row-major; GDScript can't infer types from untyped Array / a
-  Node3D-typed `_player` method call (annotate explicitly). SQRT2 is not a
-  GDScript global; define it.
-- Commit at session end or on request; no em/en dashes; ink/water binary cleanse.
+- No Co-Authored-By trailer on commits; no em/en dashes.
+- Commit at session end or on request; ink/water binary cleanse.
+- Transform3D row-major; GDScript can't infer types from untyped Array; define
+  SQRT2 yourself; GDScript locals are block-scoped (extract to a function to avoid
+  confusable-declaration warnings across branches).
 - Task list at `/home/steven_long/game-dev/Cube Game Tasks.md`.

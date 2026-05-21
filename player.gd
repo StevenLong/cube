@@ -11,6 +11,8 @@ const DODGE_DISTANCE := 5
 const DODGE_DURATION := 0.4
 const DODGE_COOLDOWN := 1.5
 const WAVE_DURATION := 0.4
+const KNOCK_RADIUS := 10.0  # base wall-knock noise radius (cube size adds to it)
+const KNOCK_COOLDOWN := 0.4  # min seconds between wall knocks
 const MAX_WAVES := 8
 const MAX_FOOTPRINTS := 64
 const FOOTPRINT_FADE_TIME := 12.0  # seconds for a deposited print to fade out and clear
@@ -52,6 +54,7 @@ var _dodge_t := 0.0
 var _dodge_start_pos := Vector3.ZERO
 var _dodge_end_pos := Vector3.ZERO
 var _dodge_cooldown_t := 0.0
+var _knock_cooldown_t := 0.0
 var _dodge_duration := DODGE_DURATION
 var _slide_dir: Vector2i = Vector2i.ZERO
 var _slide_last_cell: Vector2i = Vector2i.ZERO
@@ -370,6 +373,27 @@ func _play_step(noise_level: float) -> void:
 	noise_emitted.emit(origin, max_radius, WAVE_DURATION)
 
 
+func _emit_knock(dir: Vector2i) -> void:
+	# Loud noise sourced at the wall cell the player rapped on. Reuses the step
+	# audio at a lower pitch and the same wave/noise plumbing the enemy hears.
+	var ext_sum: int = _ext[EXT_LEFT] + _ext[EXT_RIGHT] + _ext[EXT_UP] + _ext[EXT_FWD] + _ext[EXT_BACK]
+	var size_factor := 1.0 + ext_sum * 0.15
+	_step_player.volume_db = linear_to_db(size_factor)
+	_step_player.pitch_scale = 0.65
+	_step_player.play()
+	var origin := Vector2(grid_pos.x + dir.x, grid_pos.y + dir.y)
+	var max_radius := KNOCK_RADIUS + ext_sum
+	if _waves.size() >= MAX_WAVES:
+		_waves.pop_front()
+	_waves.append({
+		"origin": origin,
+		"half_extent": Vector2.ZERO,
+		"t": 0.0,
+		"max_radius": max_radius
+	})
+	noise_emitted.emit(origin, max_radius, WAVE_DURATION)
+
+
 func _instant_focus() -> Vector3:
 		# The "ideal" focus this frame, before smoothing. Y is pinned at the base
 	# cell height so the camera doesn't bob when cuboid height changes.
@@ -410,6 +434,13 @@ func _pick_dir(move: Vector2) -> Vector2i:
 	return Vector2i(0, 1 if move.y > 0.0 else -1)
 
 
+func _move_just_pressed() -> bool:
+	return (Input.is_action_just_pressed("move_left")
+		or Input.is_action_just_pressed("move_right")
+		or Input.is_action_just_pressed("move_forward")
+		or Input.is_action_just_pressed("move_back"))
+
+
 func _process(delta: float) -> void:
 	_decay_footprints(delta)
 	for i in range(_waves.size() - 1, -1, -1):
@@ -438,6 +469,8 @@ func _process(delta: float) -> void:
 
 	if _dodge_cooldown_t > 0.0:
 		_dodge_cooldown_t = maxf(_dodge_cooldown_t - delta, 0.0)
+	if _knock_cooldown_t > 0.0:
+		_knock_cooldown_t = maxf(_knock_cooldown_t - delta, 0.0)
 
 	if _dodging:
 		_dodge_t = minf(_dodge_t + delta / _dodge_duration, 1.0)
@@ -514,6 +547,14 @@ func _process(delta: float) -> void:
 		_begin_dodge(_pick_dir(move))
 	elif not dodge_primed and move.length() > 0.5:
 		_begin_tumble(_pick_dir(move))
+
+	# Wall-knock: a deliberate directional tap that hits a wall (no tumble started)
+	# emits a loud noise enemies investigate. The just-pressed edge means holding a
+	# direction into a wall can't spam it; you re-press to knock.
+	if (not _tumbling and not _dodging and not dodge_primed
+			and _knock_cooldown_t <= 0.0 and move.length() > 0.5 and _move_just_pressed()):
+		_emit_knock(_pick_dir(move))
+		_knock_cooldown_t = KNOCK_COOLDOWN
 
 	_update_mesh()
 

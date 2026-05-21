@@ -610,8 +610,13 @@ func _follow_path(delta: float, speed_mult: float, final_target: Vector3) -> voi
 			continue
 		_move_toward(cell_world, delta, speed_mult)
 		return
-	# Path exhausted (or empty) — close the last sub-cell to the actual target.
-	_move_toward(final_target, delta, speed_mult)
+	# Path exhausted (or empty) — close the last sub-cell to the actual target, but
+	# only if that target cell is open. A knock is sourced from a wall cell, so
+	# without this the sphere would slide straight into the wall and reach the
+	# player through the shared edge/corner. Stop at the path end (an open
+	# neighbour) and search from there instead.
+	if not _cell_blocked(_world_to_cell(final_target)):
+		_move_toward(final_target, delta, speed_mult)
 
 
 func _find_path(start: Vector2i, goal: Vector2i) -> Array[Vector2i]:
