@@ -67,16 +67,32 @@ to `main`; task list updated in the game-dev repo.
   final gap if the target cell is open; otherwise it stops at the path end (an open
   neighbour) and searches there. Pursuit unaffected (player cell is open).
 
+### Floor cone visible when occluded (Phase 7 item done)
+- Dropped the `_visibility_alpha` multiplier from `cone_alpha` in both
+  `_update_cone_uniforms` and `_update_search_cone`. The shader still gates the cone
+  on per-pixel LoS, so the floor cone now reads on visible ground even when the enemy
+  body is hidden behind a wall, without drawing on ground the player can't see. The
+  mesh and glyph still fade with `_visibility_alpha` (they shouldn't leak position).
+
+### State-encoded hum + transition stings (Phase 7 item done)
+- `_update_hum` eases the per-enemy hum's `pitch_scale` and `volume_db` toward
+  per-state targets (`HUM_PITCH` / `HUM_VOL`, indexed by State; `HUM_LERP_RATE`).
+  Patrol calm -> pursuit high/loud; the baked tremolo speeds up with pitch, so higher
+  alert sounds more agitated.
+- Procedural one-shot stings (`_make_sting`, played from a code-created
+  `AudioStreamPlayer3D`): `?` on first escalation out of patrol, `!` on entering
+  pursuit, all-clear when settling back to patrol; lateral moves stay silent.
+- Both are positional and audio is not wall-occluded, so this is the occlusion-proof
+  alert channel that pairs with the floor-cone change.
+
 ## Temporary / to remove
 - `DEBUG_DETECTION := true` in `enemy_sphere.gd` still draws the on-screen detection
   readout (top-left). Keeping it for the end-of-phase tuning pass; drop the flag plus
   `_setup_debug_label` / `_update_debug_label` / `_state_name` when done.
 
 ## Phase 7 remaining
-- State-encoded hum audio + transition stings (occlusion-proof alert channel).
-- Floor cone stays visible when the enemy body is occluded (decouple `cone_alpha`
-  from `_visibility_alpha`).
 - Extend-lock system (a trigger forces a shape, locked until a requirement is met).
+  Last Phase 7 item; the meatiest, and the main building block for Phase 8 tutorials.
 
 ## Known watch items (not bugs blocking us)
 - LoS is a single centre-to-centre ray; it can thread the exact point where two
@@ -97,6 +113,9 @@ to `main`; task list updated in the game-dev repo.
 - Cone: `CONE_FOCUS_COS`, `CONE_*_ALPHA`, `CONE_SEARCH_HALF_COS`,
   `CONE_SEARCH_SWEEP_RATE` 3.0.
 - Glyph: `GLYPH_POP_SCALE` 1.6, `GLYPH_POP_TIME` 0.25.
+- Hum: `HUM_PITCH` / `HUM_VOL` (per-state arrays), `HUM_LERP_RATE` 4.0. Stings: the
+  freq/dur/peak args in `_setup_stings`, and `_sting_player.volume_db` (default 0,
+  ~6-10 dB above the hum so they cut through).
 - Footprints: `FOOTPRINT_FADE_TIME` 12.0, `FOOTPRINT_RETARGET_DIST` 0.3.
 - Knock: `KNOCK_RADIUS` 10.0, `KNOCK_COOLDOWN` 0.4, knock pitch 0.65.
 - Nav: `TURN_CRAWL_FRACTION` 0.5, `CORRIDOR_HYSTERESIS` 0.2, `TURN_RATE` 5.0.
@@ -107,11 +126,12 @@ to `main`; task list updated in the game-dev repo.
   `_build_ink_cells`), audio waves, footprints (**fade**, freshest exposed in
   order), water cleanse, **wall-knock** (`_emit_knock`), `get_extension_sum`.
 - `enemy_sphere.gd`: PATROL/SUSPICIOUS/INVESTIGATE/PURSUIT, math cone vision,
-  graduated detection accumulator, **detection-driven cone incl. rotating beacon
-  search (`_update_search_cone`)**, **alert glyph**, **noise -> investigate**,
-  **freshest-footprint follow + consume-underfoot**, 8-connected A* +
-  move-while-turning + corridor hysteresis (**blocked-final-target guard**),
-  per-enemy hum, debug detection readout (temp).
+  graduated detection accumulator, detection-driven cone incl. rotating beacon
+  search (`_update_search_cone`, **cone alpha decoupled from body visibility**),
+  alert glyph, noise -> investigate, freshest-footprint follow + consume-underfoot,
+  8-connected A* + move-while-turning + corridor hysteresis (blocked-final-target
+  guard), **state-encoded hum + transition stings (`_update_hum` / `_make_sting`)**,
+  debug detection readout (temp).
 - `level.gd`: state machine (READY/PLAYING/COMPLETE/CAUGHT), stats, pause, Escape.
 - `shaders/grid_ground.gdshader`: grid + waves + vision cone + footprints + LoS
   fog. Hardcodes 30x30 UV mapping.
