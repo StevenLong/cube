@@ -489,7 +489,9 @@ func _update_cone_uniforms(delta: float) -> void:
 	_ground_material.set_shader_parameter("cone_dir", aim)
 	_ground_material.set_shader_parameter("cone_half_angle_cos", half_cos)
 	_ground_material.set_shader_parameter("cone_color", _color_to_vec3(col))
-	_ground_material.set_shader_parameter("cone_alpha", alpha * _visibility_alpha)
+	# Independent of _visibility_alpha: the floor cone stays readable when the enemy
+	# body is occluded. The shader's per-pixel LoS still hides cone on unseen ground.
+	_ground_material.set_shader_parameter("cone_alpha", alpha)
 
 
 func _update_search_cone(delta: float) -> void:
@@ -513,7 +515,9 @@ func _update_search_cone(delta: float) -> void:
 	_ground_material.set_shader_parameter("cone_dir", aim)
 	_ground_material.set_shader_parameter("cone_half_angle_cos", half_cos)
 	_ground_material.set_shader_parameter("cone_color", _color_to_vec3(col))
-	_ground_material.set_shader_parameter("cone_alpha", alpha * _visibility_alpha)
+	# Independent of _visibility_alpha (see _update_cone_uniforms): the search cone
+	# stays visible on seen ground even when the enemy itself is behind a wall.
+	_ground_material.set_shader_parameter("cone_alpha", alpha)
 
 
 func _detection_color(d: float) -> Color:
