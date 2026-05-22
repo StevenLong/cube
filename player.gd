@@ -169,6 +169,36 @@ func _can_move(delta_world: Vector3) -> bool:
 	return not _move_cast.is_colliding()
 
 
+func _can_move_cuboid(dir: Vector2i, dist: int) -> bool:
+	# Tumble collision for an extended cuboid: sweep the base box along dir by dist
+	# at every cell offset perpendicular to the roll, covering the cuboid's full
+	# perpendicular width (a tumble preserves that width; the along-roll extent is
+	# already covered by dist). Without this only the base cell is checked and the
+	# extended cells clip through walls.
+	var perp: Vector3
+	var lo: int
+	var hi: int
+	if dir.x != 0:
+		perp = Vector3(0.0, 0.0, 1.0)
+		lo = -int(_ext[EXT_FWD])
+		hi = int(_ext[EXT_BACK])
+	else:
+		perp = Vector3(1.0, 0.0, 0.0)
+		lo = -int(_ext[EXT_LEFT])
+		hi = int(_ext[EXT_RIGHT])
+	var delta_world := Vector3(dir.x * dist, 0.0, dir.y * dist)
+	var clear := true
+	for j in range(lo, hi + 1):
+		_move_cast.position = perp * float(j)
+		_move_cast.target_position = delta_world
+		_move_cast.force_shapecast_update()
+		if _move_cast.is_colliding():
+			clear = false
+			break
+	_move_cast.position = Vector3.ZERO
+	return clear
+
+
 func _count_covered_sides() -> int:
 	var count := 0
 	for r in _wall_rays:
@@ -185,8 +215,52 @@ func _axis_total(side: int) -> int:
 
 
 func _try_extend(side: int) -> void:
-	if _axis_total(side) < 2:
-		_ext[side] += 1
+	if _axis_total(side) >= 2:
+		return
+	if not _extend_side_clear(side):
+		return
+	_ext[side] += 1
+
+
+func _extend_side_clear(side: int) -> bool:
+	# An extension may not grow into a wall. EXT_UP grows into the air (no ground
+	# cells), so it is always clear; otherwise check every new footprint cell the
+	# extension would add along that side.
+	if side == EXT_UP:
+		return true
+	var minx: int = grid_pos.x - _ext[EXT_LEFT]
+	var maxx: int = grid_pos.x + _ext[EXT_RIGHT]
+	var minz: int = grid_pos.y - _ext[EXT_FWD]
+	var maxz: int = grid_pos.y + _ext[EXT_BACK]
+	match side:
+		EXT_LEFT:
+			for z in range(minz, maxz + 1):
+				if not _extend_cell_clear(Vector2i(minx - 1, z)):
+					return false
+		EXT_RIGHT:
+			for z in range(minz, maxz + 1):
+				if not _extend_cell_clear(Vector2i(maxx + 1, z)):
+					return false
+		EXT_FWD:
+			for x in range(minx, maxx + 1):
+				if not _extend_cell_clear(Vector2i(x, minz - 1)):
+					return false
+		EXT_BACK:
+			for x in range(minx, maxx + 1):
+				if not _extend_cell_clear(Vector2i(x, maxz + 1)):
+					return false
+	return true
+
+
+func _extend_cell_clear(cell: Vector2i) -> bool:
+	# True if the cell has no wall to grow into. Queries live physics (layer 1), so
+	# it respects the perimeter and the gate's current open/closed collision state.
+	var space := get_world_3d().direct_space_state
+	var params := PhysicsPointQueryParameters3D.new()
+	params.position = Vector3(cell.x, 0.5, cell.y)
+	params.collision_mask = 1
+	params.collide_with_areas = false
+	return space.intersect_point(params).is_empty()
 
 
 func _reset_extensions() -> void:
@@ -343,7 +417,7 @@ func _begin_tumble(dir: Vector2i) -> void:
 	else:
 		return
 
-	if not _can_move(Vector3(dir.x * move, 0, dir.y * move)):
+	if not _can_move_cuboid(dir, move):
 		return
 
 	_pivot = Vector3(pivot_x, 0.0, pivot_z)
