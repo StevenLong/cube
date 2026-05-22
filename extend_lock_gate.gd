@@ -12,13 +12,13 @@ const COLOR_OPEN := Color(0.25, 0.9, 0.35, 0.3)
 @onready var _shape: CollisionShape3D = $CollisionShape3D
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
 
-var _player: Node3D
+var _player: Player
 var _material: StandardMaterial3D
 var _open := false
 
 
 func _ready() -> void:
-	_player = get_node("../Player")
+	_player = get_node("../Player") as Player
 	_material = (_mesh.get_surface_override_material(0) as StandardMaterial3D).duplicate()
 	_mesh.set_surface_override_material(0, _material)
 	_apply(false)

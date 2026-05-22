@@ -82,7 +82,7 @@ var _state_timer := 0.0
 var _detection := 0.0
 var _last_seen_pos := Vector3.ZERO
 var _material: StandardMaterial3D
-var _player: Node3D
+var _player: Player
 var _pending_sounds: Array = []
 var _ground_material: ShaderMaterial
 var _nav_blocked: Dictionary = {}
@@ -109,7 +109,7 @@ func _ready() -> void:
 	_material = (_mesh.get_surface_override_material(0) as StandardMaterial3D).duplicate()
 	_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_mesh.set_surface_override_material(0, _material)
-	_player = get_node("../Player")
+	_player = get_node("../Player") as Player
 	_player.noise_emitted.connect(_on_player_noise)
 	_ground_material = get_node("../Ground/MeshInstance3D").get_surface_override_material(0)
 	_hum_player.stream = _make_hum_sound()
