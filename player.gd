@@ -22,6 +22,7 @@ const FOCUS_SMOOTH_RATE := 25.0
 const COLOR_NORMAL := Color(0.9, 0.9, 0.9)
 const COLOR_BLENDING := Color(0.4, 0.4, 0.45)
 const COLOR_MARKED := Color(0.25, 0.35, 0.55)
+const COLOR_LOCKED := Color(0.85, 0.5, 0.15)  # extend-locked: committed to a forced shape
 
 const EXT_LEFT  := 0
 const EXT_RIGHT := 1
@@ -62,7 +63,8 @@ var _ext := [0, 0, 0, 0, 0]
 var _pending_ext := [0, 0, 0, 0, 0]
 var _tumble_distance := 1
 var _smoothed_focus := Vector3.ZERO
-var _rb_extended_this_press := false
+var _dodge_held_consumed := false  # a dodge press that collapsed an extension; suppresses dodge until released
+var _extend_locked := false
 var is_blending := false
 var _ground_material: ShaderMaterial
 var _player_material: StandardMaterial3D
@@ -83,15 +85,6 @@ var _orient: Basis = Basis.IDENTITY
 @onready var _wall_rays: Array[RayCast3D] = [
 	$WallRayN, $WallRayS, $WallRayE, $WallRayW
 ]
-
-
-func _input(event: InputEvent) -> void:
-	if event.is_action_pressed("extend"):
-		_rb_extended_this_press = false
-
-	if event.is_action_released("extend"):
-		if not _rb_extended_this_press:
-			_reset_extensions()
 
 
 func _ready() -> void:
@@ -220,6 +213,43 @@ func get_extension_sum() -> int:
 	# mirrors the noise size factor in _play_step.
 	var total: int = _ext[EXT_LEFT] + _ext[EXT_RIGHT] + _ext[EXT_UP] + _ext[EXT_FWD] + _ext[EXT_BACK]
 	return total
+
+
+func get_dimensions() -> Vector3i:
+	# Current cuboid dimensions in cells: (width x, height y, depth z). The
+	# extend-lock zone compares this against its required_dims.
+	return Vector3i(
+		1 + _ext[EXT_LEFT] + _ext[EXT_RIGHT],
+		1 + _ext[EXT_UP],
+		1 + _ext[EXT_FWD] + _ext[EXT_BACK]
+	)
+
+
+func set_extend_locked(value: bool) -> void:
+	_extend_locked = value
+
+
+func is_extend_locked() -> bool:
+	return _extend_locked
+
+
+func is_moving() -> bool:
+	return _tumbling or _dodging
+
+
+func get_footprint_min() -> Vector2i:
+	# Min-corner (smallest x, smallest z) cell of the cuboid footprint. Invariant to
+	# how the extension is distributed (left vs right, fwd vs back), so it pins the
+	# footprint's location regardless of how the shape was built.
+	return Vector2i(grid_pos.x - _ext[EXT_LEFT], grid_pos.y - _ext[EXT_FWD])
+
+
+func footprint_covers(cell: Vector2i) -> bool:
+	var minx: int = grid_pos.x - _ext[EXT_LEFT]
+	var minz: int = grid_pos.y - _ext[EXT_FWD]
+	var w: int = 1 + _ext[EXT_LEFT] + _ext[EXT_RIGHT]
+	var d: int = 1 + _ext[EXT_FWD] + _ext[EXT_BACK]
+	return cell.x >= minx and cell.x < minx + w and cell.y >= minz and cell.y < minz + d
 
 
 func is_dodging() -> bool:
@@ -512,21 +542,16 @@ func _process(delta: float) -> void:
 		_update_mesh()
 		return
 
-	if Input.is_action_pressed("extend"):
+	if Input.is_action_pressed("extend") and not _extend_locked:
 		if Input.is_action_just_pressed("move_left"):
-			_rb_extended_this_press = true
 			_try_extend(EXT_LEFT)
 		elif Input.is_action_just_pressed("move_right"):
-			_rb_extended_this_press = true
 			_try_extend(EXT_RIGHT)
 		elif Input.is_action_just_pressed("move_forward"):
-			_rb_extended_this_press = true
 			_try_extend(EXT_UP)
 		if Input.is_action_just_pressed("extend_depth_fwd"):
-			_rb_extended_this_press = true
 			_try_extend(EXT_FWD)
 		elif Input.is_action_just_pressed("extend_depth_back"):
-			_rb_extended_this_press = true
 			_try_extend(EXT_BACK)
 		_update_mesh()
 		return
@@ -540,8 +565,20 @@ func _process(delta: float) -> void:
 		_update_mesh()
 		return
 
+	# Collapse lives on the dodge button (idle while extended), not the extend
+	# button, so collapsing mid-move can't accidentally re-extend. The dodge press
+	# that collapses is consumed until released, so it can't also fire a dodge the
+	# instant you become a cube again.
+	if not Input.is_action_pressed("dodge"):
+		_dodge_held_consumed = false
+	if _is_extended() and not _extend_locked and Input.is_action_just_pressed("dodge"):
+		_reset_extensions()
+		_dodge_held_consumed = true
+		_update_mesh()
+		return
+
 	var move := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
-	var dodge_primed := Input.is_action_pressed("dodge") and _dodge_cooldown_t <= 0.0 and not _is_extended()
+	var dodge_primed := Input.is_action_pressed("dodge") and _dodge_cooldown_t <= 0.0 and not _is_extended() and not _dodge_held_consumed
 
 	if dodge_primed and move.length() > 0.5:
 		_begin_dodge(_pick_dir(move))
@@ -731,6 +768,8 @@ func _any_marked() -> bool:
 func _current_color() -> Color:
 	if is_blending:
 		return COLOR_BLENDING
+	if _extend_locked:
+		return COLOR_LOCKED
 	if _any_marked():
 		return COLOR_MARKED
 	return COLOR_NORMAL
