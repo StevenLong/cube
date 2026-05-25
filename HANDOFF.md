@@ -1,149 +1,147 @@
-# Handoff, 2026-05-22
+# Handoff, 2026-05-25
 
 ## Where we are
-**Phase 7 (Reactive Stealth Depth) is COMPLETE.** This session built the last item,
-the extend-lock system (spine + gate + ghost blueprint), added an enemy-free
-mechanics sandbox, and fixed a run of collision/input bugs. Phase 8 (Tutorials) is
-next. All cube code committed to `main`; task list updated in the game-dev repo.
+Phase 7 (Reactive Stealth Depth) was already complete. This session opened a new
+**Phase 8: Presentation and Mechanic Completeness** (in the task list, ahead of the
+old tutorials phase, which is now Phase 9) and worked through the first two clusters:
+**A (extended-state mechanic gaps)** and **B (blend redesign)**. All code is on
+`main` but UNCOMMITTED at the time of writing this paragraph (commit happens at
+wrap-up). Nothing has been run in Godot this session (no Godot binary in WSL), so
+everything below needs an in-editor verification pass.
 
-Next session you wanted to recap and plan; see "Directions from here" below.
+## The Phase 8 backlog (task list has the canonical checkboxes)
+Clusters, in the order we planned them:
+- **A. Extended-state mechanic gaps** — DONE this session.
+- **B. Blend redesign (auto-blend)** — DONE this session.
+- **C. Floating void world** — no edge walls, grid edge = level edge, depth under
+  floor, fall off level. NOT STARTED. Foundational + biggest visual payoff.
+- **D. Animation / juice** — extend/collapse anim, spawn rise, death, completion,
+  intro/outro. NOT STARTED. Spawn/death/complete read best after C.
+- **E. Audio** — more SFX, music. NOT STARTED.
+- **F. Parked** — grow tall to see over objects, pre-spawn demo flythrough.
 
 ## Completed this session
 
-### Extend-lock system (Phase 7 item done)
-The puzzle-forward setpiece: a zone requires a specific cuboid shape on specific
-tiles; you must BE that shape there (you choose to extend into it, the zone only
-checks), then you are locked into the shape until you reach an unlock.
-- **Player API** (`player.gd`): `_extend_locked` flag blocks extend/collapse and
-  tints the cube (COLOR_LOCKED); grid accessors `get_dimensions`,
-  `get_footprint_min`, `footprint_covers`, `is_moving`.
-- **Zone** (`extend_lock_zone.gd`, LOCK/UNLOCK modes): grid-exact. LOCK arms when
-  the player's footprint min-corner == the zone cell AND dimensions == required_dims,
-  checked on the integer grid only at rest. So it can't be satisfied a tile off,
-  rotated, or mid-tumble. Orientation matters (deterministic start for later
-  movement challenges). The zone cell is the footprint MIN corner; footprint extends
-  +x, +z. UNLOCK releases when the locked cuboid covers the zone cell.
-- **Gate** (`extend_lock_gate.gd`): a slab driven by lock state. Red and solid when
-  closed, green and passable while locked, so you must commit to the shape to pass
-  and it shuts behind you on release.
-- **Ghost blueprint**: blinking translucent ghost of the required cuboid (conveys
-  height + orientation) over the footprint tiles, hidden once the lock arms. All
-  generated in code from required_dims (no manual marker setup).
-- Sandbox setpiece in both scenes: lock pad (-3,3) needs a 1x1x3 bar, gate at
-  (-5,3), unlock pad (-7,3).
+### Cluster A — extended-state mechanic gaps (player.gd, level.gd)
+- **Extended ink + footprints**: ink contact on a tumble landing now checks the whole
+  resting footprint (`_check_ink_contact_footprint`), and footprint deposit lays a
+  print on every off-ink cell under the down face (`_maybe_deposit_footprint`
+  rewritten), so a marked bar leaves a continuous trail. Removed the orphaned
+  `_puddle_overlap_count` the per-cell ink test made dead.
+- **Extended level-complete** (level.gd): completes when the footprint *covers* the
+  end cell at rest (`footprint_covers(_end_cell)`), not just when the 1x1 base-cell
+  Area3D overlaps it. Cube/dodge-through path unchanged.
+- **Extended bump / wall-knock redesign** (the big one, see Design Decisions): knock
+  is now cube-only; an extended shape that cannot tumble does a "won't-fit" lean +
+  thud instead of knocking.
 
-### Collapse moved to the dodge button
-Collapse was on the extend button's release, where pressing a direction to
-collapse-and-move re-extended. It is now on the dodge button (idle while extended).
-The collapsing dodge press is consumed until released so it can't also fire a dodge.
+### Cluster B — auto-blend (player.gd, project.godot)
+- Blend is automatic: `is_blending = (no move input) and _is_in_cover()`, computed
+  every at-rest frame (so it stays fresh even while extending). No button, no
+  movement-blocking early return (a move just ends blend; collapse still works while
+  blended).
+- Removed the unused `blend` input action from project.godot.
+- **Cover rule rewritten to full-footprint "opposite pair"** (see Design Decisions):
+  `_is_in_cover` + `_column_walled` / `_row_walled`. Replaced `_count_covered_sides`
+  and the `_wall_rays` array (both removed).
 
-### Enemy-free mechanics sandbox
-`mechanics_sandbox.tscn` = `main.tscn` minus the enemy, for testing mechanics/props
-without dodging the sphere. `level.gd` already null-guards the enemy. Open it and
-Run Current Scene (F6).
-
-### Full-footprint wall collision for extended cuboids (two bug fixes)
-- **Tumble**: `_can_move_cuboid` sweeps the base box along the roll at each cell
-  offset perpendicular to it, covering the cuboid's full width, so it can't clip
-  through a wall beside its base. (Cube/dodge unchanged: zero perpendicular extent.)
-- **Extend**: `_try_extend` refuses to grow a side into a wall (point-queries the
-  new footprint cells against layer 1; EXT_UP exempt, grows into air).
-
-### Player class_name (root-cause inference fix)
-`player.gd` now has `class_name Player`, and `_player` is typed `Player` in
-enemy_sphere / extend_lock_zone / extend_lock_gate. Player method calls now carry
-real return types, so `:=` no longer fails to infer on them (what bit `matched`
-and `show_bp`). NOTE: Godot must re-scan to register the class; reload the project
-if you see "Could not find type Player".
-
-## Phase 7 status: COMPLETE
-Graduated detection, focusing cone, nav pass, alert glyph, wall-knock, floor-cone-
-through-walls, state-encoded hum + stings, and extend-lock are all done.
-
-## Directions from here (for next session's plan)
-- **Phase 8 (Tutorials)**: re-scoped so each teaches a signature situation, not a
-  bare mechanic. Tutorials 2-6 (sprint/noise, extension, blend, ink/water, enemy/
-  detection). See task list + Cube Game.md signature situations.
-- **End-of-phase tuning pass**: all Phase 7 systems are in, so the deferred tuning
-  (detection, cone, hum, knock, footprints, nav, extend-lock) can happen as a block.
-  Remove `DEBUG_DETECTION` then.
-- **First real level / signature situations**: compose the 6 signature situations
-  (Cube Game.md) into a designed level now that the toolkit exists.
-- **Open design questions**: pyramid/composite enemies, optional-objective definition,
-  recovery-when-spotted variety (Cube Game.md open questions).
+## Design decisions locked this session
+1. **Knock is a cube-only ability**, consistent with sprint and dodge (both already
+   cube-only). Rule for the player: "extend to commit to a shape, collapse to act."
+   An extended shape pressing into a wall it cannot tumble into gets won't-fit
+   feedback (lean toward the move, scaled by free space so it never clips the wall,
+   then rock back, plus a soft non-alerting thud). No noise wave (not a distraction).
+2. **Auto-blend**: hiding is "freeze in cover," no button. (Updated Cube Game.md.)
+3. **Hiding is purely emergent (no designated spots) and uses the "opposite pair"
+   rule**: you blend when one pair of opposite sides is fully walled (every adjacent
+   cell on both sides is a wall). This is the formalization of "looks like part of a
+   flat wall." One pair is enough, so plugging a gap (2 covered sides) counts; a
+   free-standing or single-wall cube does not. Consequence (accepted): a cube in the
+   middle of a 1-wide corridor blends (same topology as a gap-plug); balanced by
+   patrols walking into you. (Updated Cube Game.md Hiding section.)
 
 ## Temporary / to remove
-- `DEBUG_DETECTION := true` in `enemy_sphere.gd` (top-left detection readout). Drop
-  the flag plus `_setup_debug_label` / `_update_debug_label` / `_state_name` at the
-  tuning pass.
+- Placeholder **thud** for the won't-fit bump reuses the step waveform (low + quiet,
+  `_play_thud`). Replace in the audio pass (cluster E).
+- `DEBUG_DETECTION := true` in enemy_sphere.gd (top-left readout) — still to drop at
+  the end-of-phase tuning pass, with `_setup_debug_label` / `_update_debug_label` /
+  `_state_name`.
 
-## Watch items / project notes
-- After this session, **reload the project** in Godot once: registers `class_name
-  Player` and the new script UIDs (extend_lock_zone/gate). Until then you may see a
-  "Could not find type Player" or an "invalid UID" warning (benign, recovers via
-  path).
-- LoS is a single centre-to-centre ray; can thread the exact point where two walls
-  meet for a frame and grant vision through a corner. Only lets the enemy detect you
-  (then it pursues around via A*), never catch through the wall. Widen if it shows up.
-- PURSUIT -> INVESTIGATE (losing at detection 0.5) has a small colour seam (ladder
-  yellow vs search orange). Aim stays continuous; cosmetic.
-- Two sandboxes diverge: `main.tscn` (with enemy) and `mechanics_sandbox.tscn`
-  (enemy-free copy). New props must be added to both, or pick one as canonical.
-- Extend-lock orientation-agnostic match was tried and reverted: matching is EXACT
-  size + orientation + location on purpose (known starting shape for movement
-  puzzles).
+## Watch items / cleanup
+- **Unused WallRay nodes**: `WallRayN/S/E/W` under `Player` in the scenes are now
+  dead (cover no longer uses raycasts). Delete them in-editor when convenient; they
+  still tick as enabled raycasts otherwise. Left the .tscn files alone to avoid
+  hand-editing both copies.
+- **Tall-pillar false blend**: cover is sensed at ground level, so a 3-tall pillar
+  behind 1-tall walls would wrongly blend. Parked for the wall-height / void pass.
+  Likely resolution: "can't blend while taller than your cover," or factor wall
+  heights in.
+- **Cover counts the perimeter** (layer 1) as wall, so a cube against the arena edge
+  with an opposite wall blends. Becomes moot once C removes edge walls.
+- Two scenes still diverge: main.tscn (with enemy) and mechanics_sandbox.tscn
+  (enemy-free). New props/nodes must go in both, or pick one as canonical.
+- LoS is a single centre-to-centre ray; can thread a wall corner for a frame (only
+  grants detection, never a through-wall catch). Widen if it shows up.
 
-## Tuning backlog (end-of-phase pass)
-- Detection (`DETECT_*`): fill/drain/thresholds; `DETECT_NOISE_SEED` 0.5 sets a
-  knock's starting alarm (drop to ~0.25 for a calmer wide search).
-- Cone: `CONE_FOCUS_COS`, `CONE_*_ALPHA`, `CONE_SEARCH_HALF_COS`, `CONE_SEARCH_SWEEP_RATE` 3.0.
-- Glyph: `GLYPH_POP_SCALE` 1.6, `GLYPH_POP_TIME` 0.25.
-- Hum: `HUM_PITCH` / `HUM_VOL` arrays, `HUM_LERP_RATE` 4.0; sting freq/dur/peak in
-  `_setup_stings`, `_sting_player.volume_db`.
-- Footprints: `FOOTPRINT_FADE_TIME` 12.0, `FOOTPRINT_RETARGET_DIST` 0.3.
-- Knock: `KNOCK_RADIUS` 10.0, `KNOCK_COOLDOWN` 0.4, knock pitch 0.65.
-- Extend-lock: `GHOST_BLINK_RATE` 3.0, `GHOST_ALPHA_MIN/MAX`; gate colours in
-  `extend_lock_gate.gd`; per-zone `required_dims`.
-- Nav: `TURN_CRAWL_FRACTION` 0.5, `CORRIDOR_HYSTERESIS` 0.2, `TURN_RATE` 5.0.
-- Fog: `dark_factor` 0.25 placeholder.
+## Verification still owed (nothing run in Godot this session)
+- A1: extend a bar, tumble through ink then over dry ground → a print on every cell
+  under it (continuous trail).
+- Bump: extend a pillar flush to a wall, press in → thud, no lean, no clipping. Leave
+  one empty cell before the wall → tips in cleanly and rocks back, no clip. A remote
+  block (wall ~3 tiles ahead, adjacent clear) → bump, not a knock at empty space.
+- A3: extend a bar so only its end overlaps the end tile, settle → completes.
+- Cube knock still works: tap a 1x1 into a wall → knock ring at the adjacent wall.
+- Blend: 1x1 cube still in a 1-wide slot (opposite walls) → blend-grey, enemy loses
+  you; step out → exposed. Bar plugging a gap (2 ends walled) → blends. Cube on a
+  single wall or an L-corner (two adjacent, non-opposite walls) → stays exposed.
 
 ## Key files
-- `player.gd`: `class_name Player`. Tumble (footprint-aware wall collision
-  `_can_move_cuboid`), extension (wall-blocked `_try_extend`), dodge, blend, ink,
-  audio waves, footprints (fade), water cleanse, wall-knock, collapse-on-dodge,
-  **extend-lock state + grid accessors**.
+- `player.gd`: `class_name Player`. Tumble (footprint-aware wall collision), extension
+  (wall-blocked), dodge, **auto-blend (opposite-pair cover: `_is_in_cover`,
+  `_column_walled`, `_row_walled`)**, ink (footprint-aware contact + per-cell deposit),
+  audio waves, footprints, water cleanse, **cube-only wall-knock + won't-fit lean/thud
+  (`_begin_blocked_bump`, `_gap_ahead`, `_play_thud`)**, collapse-on-dodge, extend-lock
+  state + grid accessors (`footprint_covers`, `get_dimensions`, etc.).
 - `enemy_sphere.gd`: PATROL/SUSPICIOUS/INVESTIGATE/PURSUIT, graduated detection,
-  detection-driven cone incl. rotating beacon search (cone alpha decoupled from body
-  visibility), alert glyph, noise -> investigate, freshest-footprint follow, 8-conn
-  A* + move-while-turning + corridor hysteresis (blocked-final-target guard),
-  state-encoded hum + stings, debug detection readout (temp).
-- `extend_lock_zone.gd`: grid-exact LOCK/UNLOCK zone + ghost-blueprint telegraph.
-- `extend_lock_gate.gd`: lock-driven red/green gate.
-- `level.gd`: state machine (READY/PLAYING/COMPLETE/CAUGHT), null-guards the enemy.
+  detection-driven cone, alert glyph, noise -> investigate, footprint follow, A* nav,
+  state hum + stings, debug readout (temp). Reads `_player.is_blending` (blend ==
+  invisible).
+- `level.gd`: state machine (READY/PLAYING/COMPLETE/CAUGHT); completion via end-tile
+  Area3D OR `footprint_covers(_end_cell)`; null-guards the enemy.
+- `extend_lock_zone.gd` / `extend_lock_gate.gd`: grid-exact lock zone + ghost
+  blueprint + lock-driven gate.
 - `shaders/grid_ground.gdshader`: grid + waves + vision cone + footprints + LoS fog.
-- `main.tscn`: with-enemy scene; puddles, walls, extend-lock setpiece.
-- `mechanics_sandbox.tscn`: enemy-free copy for testing.
-- `SPEC_graduated_detection.md`: detection model spec (noise -> INVESTIGATE).
+- `main.tscn` (with enemy) / `mechanics_sandbox.tscn` (enemy-free copy).
+- Design: `game-dev/Cube Game.md` (v0.2, hiding section updated). Tasks:
+  `game-dev/Cube Game Tasks.md` (Phase 8 = Presentation/Mechanic Completeness).
 
 ## Input map
 | Action | Controller | Keyboard |
 |--------|-----------|---------|
 | Move | D-pad / left stick | WASD / arrows |
-| Wall-knock | tap move into a wall | tap move into a wall |
+| Wall-knock (cube only) | tap move into a wall | tap move into a wall |
 | Sprint | R2 | Left Shift |
-| Dodge (cube) / Collapse (while extended) | Circle (hold + dir) / Circle | Space |
+| Dodge (cube) / Collapse (while extended) | Circle | Space |
 | Extend mode | R1 | E |
 | Extend depth fwd/back | L1 / L2 (+ R1) | Q / C |
-| Blend (hide) | Square | V |
 | Camera tilt | Right stick Y | R / F |
-| Back to menu / quit menu | (none) | Escape |
+| Back to menu / quit | (none) | Escape |
 
-(Jump cut by design. Wall-knock and collapse reuse existing inputs, no new binds.)
+Blend is now automatic (stand still in cover); the old Square / V blend button was
+removed. Jump cut by design. Won't-fit lean and knock reuse the move input.
+
+## Tuning backlog (end-of-phase pass)
+- Won't-fit bump: `BUMP_DURATION` 0.25, `BUMP_ANGLE` PI/10 (push toward ~PI/5 for a
+  visible distance gradient), `BUMP_CLEARANCE` 0.15, thud volume 0.35 / pitch 0.5.
+- Detection (`DETECT_*`), cone (`CONE_*`), glyph, hum/stings, footprints
+  (`FOOTPRINT_FADE_TIME` 12.0), knock (`KNOCK_RADIUS` 10.0, `KNOCK_COOLDOWN` 0.4),
+  extend-lock (`GHOST_*`), nav (`TURN_*`, `CORRIDOR_HYSTERESIS`), fog `dark_factor`.
 
 ## Memory notes worth checking
 - Read HANDOFF.md first thing at session start.
-- Design direction v0.2 (reactive-stealth, shape-vs-exposure, jump cut).
+- Active verbs (sprint/dodge/knock) are cube-only; extension is a positional
+  commitment. Apply to any new active ability.
+- Design v0.2 (reactive-stealth, shape-vs-exposure, jump cut).
 - No Co-Authored-By trailer; no em/en dashes; commit at session end or on request.
-- `class_name Player` now exists; type `_player: Player` for inferable method calls.
-- Transform3D row-major; ink/water binary cleanse.
-- Task list at `/home/steven_long/game-dev/Cube Game Tasks.md`; design at Cube Game.md.
+- Transform3D row-major; ink/water binary cleanse; GDScript inference with untyped
+  arrays.

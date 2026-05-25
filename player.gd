@@ -12,8 +12,11 @@ const DODGE_DISTANCE := 5
 const DODGE_DURATION := 0.4
 const DODGE_COOLDOWN := 1.5
 const WAVE_DURATION := 0.4
-const KNOCK_RADIUS := 10.0  # base wall-knock noise radius (cube size adds to it)
+const KNOCK_RADIUS := 10.0  # wall-knock noise radius (knock is a cube-only ability)
 const KNOCK_COOLDOWN := 0.4  # min seconds between wall knocks
+const BUMP_DURATION := 0.25  # won't-fit lean-and-rock-back for a blocked extended move
+const BUMP_ANGLE := PI / 10.0  # peak lean (~18 deg) before rocking back, scaled down near a wall
+const BUMP_CLEARANCE := 0.15  # air gap kept between the lean's leading corner and the wall
 const MAX_WAVES := 8
 const MAX_FOOTPRINTS := 64
 const FOOTPRINT_FADE_TIME := 12.0  # seconds for a deposited print to fade out and clear
@@ -63,6 +66,11 @@ var _slide_last_cell: Vector2i = Vector2i.ZERO
 var _ext := [0, 0, 0, 0, 0]
 var _pending_ext := [0, 0, 0, 0, 0]
 var _tumble_distance := 1
+var _bumping := false
+var _bump_t := 0.0
+var _bump_pivot := Vector3.ZERO
+var _bump_axis := Vector3.ZERO
+var _bump_angle := 0.0
 var _smoothed_focus := Vector3.ZERO
 var _dodge_held_consumed := false  # a dodge press that collapsed an extension; suppresses dodge until released
 var _extend_locked := false
@@ -73,7 +81,6 @@ var _waves: Array = []
 var _footprints: Array = []
 var _box_mesh: BoxMesh
 var _face_marks: Array[bool] = [false, false, false, false, false, false]
-var _puddle_overlap_count: int = 0
 var _water_overlap_count: int = 0
 var _ink_cells: Dictionary = {}
 var _orient: Basis = Basis.IDENTITY
@@ -83,9 +90,6 @@ var _orient: Basis = Basis.IDENTITY
 @onready var _mesh_instance: MeshInstance3D = $MeshInstance3D
 @onready var _move_cast: ShapeCast3D = $MoveCast
 @onready var _detection_area: Area3D = $DetectionArea
-@onready var _wall_rays: Array[RayCast3D] = [
-	$WallRayN, $WallRayS, $WallRayE, $WallRayW
-]
 
 
 func _ready() -> void:
@@ -101,7 +105,6 @@ func _ready() -> void:
 	_detection_area.area_entered.connect(_on_contact)
 	for puddle in get_tree().get_nodes_in_group("ink_puddles"):
 		puddle.area_entered.connect(_on_puddle_entered)
-		puddle.area_exited.connect(_on_puddle_exited)
 	for water in get_tree().get_nodes_in_group("water_puddles"):
 		water.area_entered.connect(_on_water_entered)
 		water.area_exited.connect(_on_water_exited)
@@ -141,15 +144,10 @@ func _on_contact(area: Area3D) -> void:
 
 
 func _on_puddle_entered(area: Area3D) -> void:
-	if area == _detection_area:
-		_puddle_overlap_count += 1
-		if _dodging:
-			_check_ink_contact()
-
-
-func _on_puddle_exited(area: Area3D) -> void:
-	if area == _detection_area:
-		_puddle_overlap_count -= 1
+	# A dodge can slide onto an ink cell between cell-transition checks; recheck on
+	# overlap so the entering face still inks. Off-dodge tumbles ink on landing.
+	if area == _detection_area and _dodging:
+		_check_ink_contact()
 
 
 func _on_water_entered(area: Area3D) -> void:
@@ -199,12 +197,33 @@ func _can_move_cuboid(dir: Vector2i, dist: int) -> bool:
 	return clear
 
 
-func _count_covered_sides() -> int:
-	var count := 0
-	for r in _wall_rays:
-		if r.is_colliding():
-			count += 1
-	return count
+func _is_in_cover() -> bool:
+	# Blend gate: hidden when one pair of opposite footprint sides is fully walled
+	# (every adjacent cell on that side is a wall). That is exactly "looks like part
+	# of a flat wall": from the two open directions the cube's face lines up coplanar
+	# with the flanking walls; from the walled directions it is buried. One pair is
+	# enough, so an entrance-plug (two opposite sides walled, two open ends) counts.
+	var minx: int = grid_pos.x - _ext[EXT_LEFT]
+	var maxx: int = grid_pos.x + _ext[EXT_RIGHT]
+	var minz: int = grid_pos.y - _ext[EXT_FWD]
+	var maxz: int = grid_pos.y + _ext[EXT_BACK]
+	if _column_walled(minx - 1, minz, maxz) and _column_walled(maxx + 1, minz, maxz):
+		return true
+	return _row_walled(minz - 1, minx, maxx) and _row_walled(maxz + 1, minx, maxx)
+
+
+func _column_walled(x: int, z0: int, z1: int) -> bool:
+	for z in range(z0, z1 + 1):
+		if _extend_cell_clear(Vector2i(x, z)):
+			return false
+	return true
+
+
+func _row_walled(z: int, x0: int, x1: int) -> bool:
+	for x in range(x0, x1 + 1):
+		if _extend_cell_clear(Vector2i(x, z)):
+			return false
+	return true
 
 
 func _axis_total(side: int) -> int:
@@ -451,6 +470,77 @@ func _begin_dodge(dir: Vector2i) -> void:
 	_dodging = true
 
 
+func _begin_blocked_bump(dir: Vector2i) -> void:
+	# Won't-fit feedback: the extended shape tips toward dir and rocks back, like
+	# bouncing off something solid, with a soft thud. No noise wave — this is pure
+	# feedback, not a distraction (knock is the only deliberate noise, and it is
+	# cube-only). Pivot is the leading bottom edge, so it reads as the start of a
+	# tumble that couldn't complete.
+	#
+	# Scale the lean by the free space ahead so it never tips into the wall: the
+	# top-leading corner reaches height * sin(angle) forward, so cap sin(angle) at
+	# (gap / height). Flush against a wall (gap 0) leaves no room — just thud.
+	var height: float = 1.0 + float(_ext[EXT_UP])
+	var gap: float = float(_gap_ahead(dir))
+	var mag: float = minf(BUMP_ANGLE, asin(clampf((gap - BUMP_CLEARANCE) / height, 0.0, 1.0)))
+	if mag <= 0.001:
+		_play_thud()
+		return
+	_start_pos = position
+	_start_basis = basis
+	var pivot_x: float = position.x
+	var pivot_z: float = position.z
+	if dir.x == 1:
+		pivot_x = position.x + 0.5 + float(_ext[EXT_RIGHT])
+		_bump_axis = Vector3(0, 0, 1)
+		_bump_angle = -mag
+	elif dir.x == -1:
+		pivot_x = position.x - 0.5 - float(_ext[EXT_LEFT])
+		_bump_axis = Vector3(0, 0, 1)
+		_bump_angle = mag
+	elif dir.y == -1:
+		pivot_z = position.z - 0.5 - float(_ext[EXT_FWD])
+		_bump_axis = Vector3(1, 0, 0)
+		_bump_angle = -mag
+	elif dir.y == 1:
+		pivot_z = position.z + 0.5 + float(_ext[EXT_BACK])
+		_bump_axis = Vector3(1, 0, 0)
+		_bump_angle = mag
+	else:
+		return
+	_bump_pivot = Vector3(pivot_x, 0.0, pivot_z)
+	_bump_t = 0.0
+	_bumping = true
+	_play_thud()
+
+
+func _gap_ahead(dir: Vector2i) -> int:
+	# Clear cells between the leading face and the nearest obstruction along dir, taken
+	# as the minimum across the face's width (the binding side). Capped at the cuboid
+	# height — past that the lean is already maxed, so more room is irrelevant.
+	var minx: int = grid_pos.x - _ext[EXT_LEFT]
+	var maxx: int = grid_pos.x + _ext[EXT_RIGHT]
+	var minz: int = grid_pos.y - _ext[EXT_FWD]
+	var maxz: int = grid_pos.y + _ext[EXT_BACK]
+	var cap: int = 1 + int(_ext[EXT_UP])
+	var gap: int = cap
+	if dir.x != 0:
+		var lead_x: int = (maxx if dir.x > 0 else minx)
+		for z in range(minz, maxz + 1):
+			var d := 0
+			while d < cap and _extend_cell_clear(Vector2i(lead_x + dir.x * (d + 1), z)):
+				d += 1
+			gap = mini(gap, d)
+	else:
+		var lead_z: int = (maxz if dir.y > 0 else minz)
+		for x in range(minx, maxx + 1):
+			var d := 0
+			while d < cap and _extend_cell_clear(Vector2i(x, lead_z + dir.y * (d + 1))):
+				d += 1
+			gap = mini(gap, d)
+	return gap
+
+
 func _play_step(noise_level: float) -> void:
 	var ext_sum: int = _ext[EXT_LEFT] + _ext[EXT_RIGHT] + _ext[EXT_UP] + _ext[EXT_FWD] + _ext[EXT_BACK]
 	var size_factor := 1.0 + ext_sum * 0.15
@@ -479,24 +569,30 @@ func _play_step(noise_level: float) -> void:
 
 
 func _emit_knock(dir: Vector2i) -> void:
-	# Loud noise sourced at the wall cell the player rapped on. Reuses the step
-	# audio at a lower pitch and the same wave/noise plumbing the enemy hears.
-	var ext_sum: int = _ext[EXT_LEFT] + _ext[EXT_RIGHT] + _ext[EXT_UP] + _ext[EXT_FWD] + _ext[EXT_BACK]
-	var size_factor := 1.0 + ext_sum * 0.15
-	_step_player.volume_db = linear_to_db(size_factor)
+	# Loud noise at the adjacent wall cell the cube rapped on, using the same
+	# wave/noise plumbing the enemy hears. Cube-only (the caller gates on it), so
+	# the origin is just grid_pos + dir and there is no extension size factor.
+	_step_player.volume_db = 0.0
 	_step_player.pitch_scale = 0.65
 	_step_player.play()
 	var origin := Vector2(grid_pos.x + dir.x, grid_pos.y + dir.y)
-	var max_radius := KNOCK_RADIUS + ext_sum
 	if _waves.size() >= MAX_WAVES:
 		_waves.pop_front()
 	_waves.append({
 		"origin": origin,
 		"half_extent": Vector2.ZERO,
 		"t": 0.0,
-		"max_radius": max_radius
+		"max_radius": KNOCK_RADIUS
 	})
-	noise_emitted.emit(origin, max_radius, WAVE_DURATION)
+	noise_emitted.emit(origin, KNOCK_RADIUS, WAVE_DURATION)
+
+
+func _play_thud() -> void:
+	# Soft, non-alerting bump cue for a blocked extended move. Reuses the step
+	# waveform, low and quiet; placeholder until the audio pass adds a real thud.
+	_step_player.volume_db = linear_to_db(0.35)
+	_step_player.pitch_scale = 0.5
+	_step_player.play()
 
 
 func _instant_focus() -> Vector3:
@@ -611,11 +707,31 @@ func _process(delta: float) -> void:
 			_orient = _quantize_basis(Basis(_axis, _angle) * _orient)
 			_ext = _pending_ext
 			_play_step(TUMBLE_DURATION / per_cell)
-			_check_ink_contact()
+			_check_ink_contact_footprint()
 			_maybe_deposit_footprint()
 			move_settled.emit()
 		_update_mesh()
 		return
+
+	if _bumping:
+		_bump_t = minf(_bump_t + delta / BUMP_DURATION, 1.0)
+		var lean := sin(_bump_t * PI) * _bump_angle
+		position = _bump_pivot + (_start_pos - _bump_pivot).rotated(_bump_axis, lean)
+		basis = Basis(_bump_axis, lean) * _start_basis
+		if _bump_t >= 1.0:
+			_bumping = false
+			position = Vector3(grid_pos.x, 0.5, grid_pos.y)
+			basis = Basis.IDENTITY
+		_update_mesh()
+		return
+
+	# Auto-blend: standing still wedged between two opposite walls makes you
+	# undetectable, no button. Evaluated every at-rest frame (moves returned above) so
+	# it stays fresh even while extending — pressing a direction or growing out of
+	# cover drops it.
+	var move := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
+	is_blending = move.length() <= 0.5 and _is_in_cover()
+	_player_material.albedo_color = _current_color()
 
 	if Input.is_action_pressed("extend") and not _extend_locked:
 		if Input.is_action_just_pressed("move_left"):
@@ -631,15 +747,6 @@ func _process(delta: float) -> void:
 		_update_mesh()
 		return
 
-	# Blend: while button held and 3+ sides covered, the player is undetectable
-	# and movement is blocked (committing to the spot).
-	is_blending = Input.is_action_pressed("blend") and _count_covered_sides() >= 3
-	_player_material.albedo_color = _current_color()
-
-	if is_blending:
-		_update_mesh()
-		return
-
 	# Collapse lives on the dodge button (idle while extended), not the extend
 	# button, so collapsing mid-move can't accidentally re-extend. The dodge press
 	# that collapses is consumed until released, so it can't also fire a dodge the
@@ -652,7 +759,6 @@ func _process(delta: float) -> void:
 		_update_mesh()
 		return
 
-	var move := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	var dodge_primed := Input.is_action_pressed("dodge") and _dodge_cooldown_t <= 0.0 and not _is_extended() and not _dodge_held_consumed
 
 	if dodge_primed and move.length() > 0.5:
@@ -660,22 +766,46 @@ func _process(delta: float) -> void:
 	elif not dodge_primed and move.length() > 0.5:
 		_begin_tumble(_pick_dir(move))
 
-	# Wall-knock: a deliberate directional tap that hits a wall (no tumble started)
-	# emits a loud noise enemies investigate. The just-pressed edge means holding a
-	# direction into a wall can't spam it; you re-press to knock.
+	# A directional tap that couldn't tumble (no move started). A cube raps the
+	# adjacent wall: a loud knock enemies investigate. An extended shape can't fit
+	# and bounces back with a soft thud (won't-fit feedback), never knocking — knock
+	# is cube-only, like sprint and dodge. The just-pressed edge stops a held
+	# direction into a wall from spamming either; you re-press.
 	if (not _tumbling and not _dodging and not dodge_primed
-			and _knock_cooldown_t <= 0.0 and move.length() > 0.5 and _move_just_pressed()):
-		_emit_knock(_pick_dir(move))
-		_knock_cooldown_t = KNOCK_COOLDOWN
+			and move.length() > 0.5 and _move_just_pressed()):
+		if _is_extended():
+			_begin_blocked_bump(_pick_dir(move))
+		elif _knock_cooldown_t <= 0.0:
+			_emit_knock(_pick_dir(move))
+			_knock_cooldown_t = KNOCK_COOLDOWN
 
 	_update_mesh()
 
 
 func _check_ink_contact() -> void:
-	# Cell-based so it stays in sync with a fast dodge slide (the Area3D overlap
-	# count lags the position lerp). Inks the current down face on an ink cell.
-	if not _ink_cells.has(Vector2i(roundi(position.x), roundi(position.z))):
-		return
+	# Single cell at the render position, so it stays in sync with a fast dodge
+	# slide (the Area3D overlap count lags the position lerp). The dodge path is
+	# cube-only (dodge is locked while extended), so 1x1 is correct here.
+	if _ink_cells.has(Vector2i(roundi(position.x), roundi(position.z))):
+		_ink_face_contact()
+
+
+func _check_ink_contact_footprint() -> void:
+	# Tumble-landing check across the whole resting footprint, so an extended
+	# cuboid inks its down face if ANY cell beneath it is an ink cell.
+	var minx: int = grid_pos.x - _ext[EXT_LEFT]
+	var maxx: int = grid_pos.x + _ext[EXT_RIGHT]
+	var minz: int = grid_pos.y - _ext[EXT_FWD]
+	var maxz: int = grid_pos.y + _ext[EXT_BACK]
+	for cx in range(minx, maxx + 1):
+		for cz in range(minz, maxz + 1):
+			if _ink_cells.has(Vector2i(cx, cz)):
+				_ink_face_contact()
+				return
+
+
+func _ink_face_contact() -> void:
+	# Mark the current down face (binary, whole-face) and splash, once per face.
 	var face: int = _down_face_id()
 	if _face_marks[face]:
 		return
@@ -694,16 +824,27 @@ func _check_water_cleanse() -> void:
 
 
 func _maybe_deposit_footprint() -> void:
+	# Lay a print on every off-ink cell beneath the resting down face. For a cube
+	# that's the single base cell; for an extended cuboid it's the whole footprint,
+	# so a marked bar leaves a continuous trail the enemy can follow. Cells sitting
+	# on ink are skipped (the puddle is the mark there). Per-cell ink test replaces
+	# the old base-cell-only puddle-overlap gate so a cuboid straddling ink is
+	# handled correctly.
 	if not _face_marks[_down_face_id()]:
 		return
-	if _puddle_overlap_count > 0:
-		return
-	var origin := Vector2(
-		grid_pos.x + (_ext[EXT_RIGHT] - _ext[EXT_LEFT]) * 0.5,
-		grid_pos.y + (_ext[EXT_BACK] - _ext[EXT_FWD]) * 0.5
-	)
-	_add_footprint(origin)
-	_update_footprint_uniforms()
+	var minx: int = grid_pos.x - _ext[EXT_LEFT]
+	var maxx: int = grid_pos.x + _ext[EXT_RIGHT]
+	var minz: int = grid_pos.y - _ext[EXT_FWD]
+	var maxz: int = grid_pos.y + _ext[EXT_BACK]
+	var deposited := false
+	for cx in range(minx, maxx + 1):
+		for cz in range(minz, maxz + 1):
+			if _ink_cells.has(Vector2i(cx, cz)):
+				continue
+			_add_footprint(Vector2(cx, cz))
+			deposited = true
+	if deposited:
+		_update_footprint_uniforms()
 
 
 func _deposit_streak_cell(cell: Vector2i) -> void:

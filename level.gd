@@ -15,6 +15,7 @@ var spotted: bool = false
 var _pulse_t: float = 0.0
 var _complete_t: float = 0.0
 var _pending_complete: bool = false
+var _end_cell: Vector2i = Vector2i.ZERO
 var _start_material: StandardMaterial3D
 var _end_material: StandardMaterial3D
 
@@ -37,6 +38,7 @@ func _ready() -> void:
 	_start_tile.set_surface_override_material(0, _start_material)
 	_end_material = (_end_tile.get_surface_override_material(0) as StandardMaterial3D).duplicate()
 	_end_tile.set_surface_override_material(0, _end_material)
+	_end_cell = Vector2i(roundi(_end_tile.position.x), roundi(_end_tile.position.z))
 	_player.tumbled.connect(_on_player_tumbled)
 	_player.move_settled.connect(_on_player_move_settled)
 	_player.caught.connect(_on_player_caught)
@@ -153,5 +155,11 @@ func _on_end_exited(_area: Area3D) -> void:
 
 
 func _on_player_move_settled() -> void:
-	if state == State.PLAYING and _pending_complete:
+	# Pending covers the cube/dodge path (EndTile Area3D overlaps the 1x1 base cell).
+	# The footprint check adds the extended case: a cuboid whose base cell is off the
+	# end tile but whose footprint covers it still completes, matching extend-lock
+	# UNLOCK semantics (covers, not fully on).
+	if state != State.PLAYING:
+		return
+	if _pending_complete or _player.footprint_covers(_end_cell):
 		_enter_complete()
