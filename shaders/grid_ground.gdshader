@@ -105,11 +105,14 @@ void fragment() {
 	}
 	vec3 with_cone = mix(with_waves, cone_color, cone_intensity * visibility);
 
-	// Ink footprints: small dark blobs at deposited cells
+	// Ink footprints: each print is a soft-edge tile centered on its cell, so
+	// adjacent per-cell prints from one deposit (cube down-face or extended
+	// cuboid down-face) tile into a continuous oblong matching the shape.
 	float ink_total = 0.0;
 	for (int i = 0; i < 64; i++) {
-		float d = length(world_xz - footprint_positions[i]);
-		float in_range = 1.0 - smoothstep(0.25, 0.4, d);
+		vec2 d = max(vec2(0.0), abs(world_xz - footprint_positions[i]) - vec2(0.4));
+		float dist = length(d);
+		float in_range = 1.0 - smoothstep(0.0, 0.1, dist);
 		ink_total = clamp(ink_total + in_range * footprint_alphas[i], 0.0, 1.0);
 	}
 

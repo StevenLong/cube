@@ -21,10 +21,11 @@ const MAX_WAVES := 8
 const MAX_FOOTPRINTS := 64
 const FOOTPRINT_FADE_TIME := 12.0  # seconds for a deposited print to fade out and clear
 const MAX_WALLS := 16
-const SLIDE_SUBSAMPLES := 4
 const FOCUS_SMOOTH_RATE := 25.0
+const BLEND_ENTER_TIME := 0.4  # seconds in cover + still before is_blending engages (and visual fully fades)
+const BLEND_EXIT_TIME := 0.15  # faster fade-out so peeking out is visible to enemies sooner than re-blending
 const COLOR_NORMAL := Color(0.9, 0.9, 0.9)
-const COLOR_BLENDING := Color(0.4, 0.4, 0.45)
+const COLOR_BLENDING := Color(0.4, 0.4, 0.45)  # fallback when no wall material can be sampled
 const COLOR_MARKED := Color(0.25, 0.35, 0.55)
 const COLOR_LOCKED := Color(0.85, 0.5, 0.15)  # extend-locked: committed to a forced shape
 
@@ -61,7 +62,6 @@ var _dodge_end_pos := Vector3.ZERO
 var _dodge_cooldown_t := 0.0
 var _knock_cooldown_t := 0.0
 var _dodge_duration := DODGE_DURATION
-var _slide_dir: Vector2i = Vector2i.ZERO
 var _slide_last_cell: Vector2i = Vector2i.ZERO
 var _ext := [0, 0, 0, 0, 0]
 var _pending_ext := [0, 0, 0, 0, 0]
@@ -74,15 +74,21 @@ var _bump_angle := 0.0
 var _smoothed_focus := Vector3.ZERO
 var _dodge_held_consumed := false  # a dodge press that collapsed an extension; suppresses dodge until released
 var _extend_locked := false
-var is_blending := false
+var is_blending := false  # gameplay state (enemy invisibility); true only at full phase
+var is_hiding := false  # at-rest + in cover + not animating; enemy nav treats hiding cells as walls so investigations don't barge through
+var _blend_phase: float = 0.0  # 0 exposed -> 1 hidden; rises over BLEND_ENTER_TIME, falls over BLEND_EXIT_TIME
+var _cover_color: Color = COLOR_BLENDING  # sampled from a covering wall on blend entry, else fallback
+var _was_wanting_blend := false  # for one-shot cover-color sampling at the transition
 var _ground_material: ShaderMaterial
 var _player_material: StandardMaterial3D
 var _waves: Array = []
 var _footprints: Array = []
 var _box_mesh: BoxMesh
+var _detection_shape: BoxShape3D  # owned copy so resizing doesn't mutate the wall shape (both use BoxShape3D_1)
+var _detection_collider: CollisionShape3D  # cached so _update_mesh can re-pose it with the visual mesh
 var _face_marks: Array[bool] = [false, false, false, false, false, false]
-var _water_overlap_count: int = 0
 var _ink_cells: Dictionary = {}
+var _water_cells: Dictionary = {}
 var _orient: Basis = Basis.IDENTITY
 
 @onready var _step_player: AudioStreamPlayer = $StepSound
@@ -102,23 +108,29 @@ func _ready() -> void:
 	_player_material = (_mesh_instance.get_surface_override_material(0) as StandardMaterial3D).duplicate()
 	_mesh_instance.set_surface_override_material(0, _player_material)
 	_smoothed_focus = _mesh_instance.global_position
+	_detection_collider = _detection_area.get_node("CollisionShape3D") as CollisionShape3D
+	_detection_shape = (_detection_collider.shape as BoxShape3D).duplicate() as BoxShape3D
+	_detection_collider.shape = _detection_shape
 	_detection_area.area_entered.connect(_on_contact)
 	for puddle in get_tree().get_nodes_in_group("ink_puddles"):
 		puddle.area_entered.connect(_on_puddle_entered)
-	for water in get_tree().get_nodes_in_group("water_puddles"):
-		water.area_entered.connect(_on_water_entered)
-		water.area_exited.connect(_on_water_exited)
-	_build_ink_cells()
+	_build_puddle_cells()
 
 
-func _build_ink_cells() -> void:
-	# Record every cell an ink puddle covers, so ink contact reads off the current
-	# position rather than the Area3D overlap count (which lags the render-frame
-	# position lerp during a dodge and would swallow the first tiles of the trail).
-	# Reads each puddle's BoxShape3D footprint, so multi-cell puddles and clusters
-	# of adjacent puddles both work. Assumes axis-aligned boxes, like the walls.
-	_ink_cells.clear()
-	for puddle in get_tree().get_nodes_in_group("ink_puddles"):
+func _build_puddle_cells() -> void:
+	# Record every cell ink and water puddles cover, so contact and cleanse can read
+	# off the current footprint rather than an Area3D overlap count (which lags the
+	# render-frame position lerp during a dodge AND is sized to the 1x1 DetectionArea,
+	# so it misses cells touched only by an extended cuboid). Reads each puddle's
+	# BoxShape3D footprint to support multi-cell puddles and clusters. Assumes
+	# axis-aligned boxes, like the walls.
+	_ink_cells = _collect_puddle_cells("ink_puddles")
+	_water_cells = _collect_puddle_cells("water_puddles")
+
+
+func _collect_puddle_cells(group: String) -> Dictionary:
+	var out: Dictionary = {}
+	for puddle in get_tree().get_nodes_in_group(group):
 		var area := puddle as Area3D
 		if area == null:
 			continue
@@ -130,12 +142,13 @@ func _build_ink_cells() -> void:
 				box = child.shape as BoxShape3D
 				break
 		if box == null:
-			_ink_cells[Vector2i(roundi(center.x), roundi(center.z))] = true
+			out[Vector2i(roundi(center.x), roundi(center.z))] = true
 			continue
 		var half := box.size * 0.5
 		for cx in range(ceili(center.x - half.x), floori(center.x + half.x) + 1):
 			for cz in range(ceili(center.z - half.z), floori(center.z + half.z) + 1):
-				_ink_cells[Vector2i(cx, cz)] = true
+				out[Vector2i(cx, cz)] = true
+	return out
 
 
 func _on_contact(area: Area3D) -> void:
@@ -150,15 +163,6 @@ func _on_puddle_entered(area: Area3D) -> void:
 		_check_ink_contact()
 
 
-func _on_water_entered(area: Area3D) -> void:
-	if area == _detection_area:
-		_water_overlap_count += 1
-		_check_water_cleanse()
-
-
-func _on_water_exited(area: Area3D) -> void:
-	if area == _detection_area:
-		_water_overlap_count -= 1
 
 
 func _can_move(delta_world: Vector3) -> bool:
@@ -226,6 +230,58 @@ func _row_walled(z: int, x0: int, x1: int) -> bool:
 	return true
 
 
+func _sample_cover_color() -> Color:
+	# Camouflage: read the albedo of the first standard-material wall adjacent to
+	# the footprint. Walk the perimeter (N, E, S, W) and return the first hit;
+	# fall back to COLOR_BLENDING if none of the touching walls have a usable
+	# material (e.g. perimeter walls without a surface override).
+	var minx: int = grid_pos.x - _ext[EXT_LEFT]
+	var maxx: int = grid_pos.x + _ext[EXT_RIGHT]
+	var minz: int = grid_pos.y - _ext[EXT_FWD]
+	var maxz: int = grid_pos.y + _ext[EXT_BACK]
+	for x in range(minx, maxx + 1):
+		var c := _cell_wall_color(Vector2i(x, minz - 1))
+		if c.a > 0.0:
+			return c
+	for z in range(minz, maxz + 1):
+		var c := _cell_wall_color(Vector2i(maxx + 1, z))
+		if c.a > 0.0:
+			return c
+	for x in range(maxx, minx - 1, -1):
+		var c := _cell_wall_color(Vector2i(x, maxz + 1))
+		if c.a > 0.0:
+			return c
+	for z in range(maxz, minz - 1, -1):
+		var c := _cell_wall_color(Vector2i(minx - 1, z))
+		if c.a > 0.0:
+			return c
+	return COLOR_BLENDING
+
+
+func _cell_wall_color(cell: Vector2i) -> Color:
+	# Albedo of a StandardMaterial3D on the wall at this cell, or transparent
+	# sentinel if no wall / no usable material. Looks at surface_override_material
+	# first, then the mesh's own surface material as fallback.
+	var space := get_world_3d().direct_space_state
+	var params := PhysicsPointQueryParameters3D.new()
+	params.position = Vector3(cell.x, 0.5, cell.y)
+	params.collision_mask = 1
+	params.collide_with_areas = false
+	var hits := space.intersect_point(params, 1)
+	if hits.is_empty():
+		return Color(0, 0, 0, 0)
+	var body: Object = hits[0].collider
+	for child in (body as Node).get_children():
+		if child is MeshInstance3D:
+			var mi := child as MeshInstance3D
+			var mat: Material = mi.get_surface_override_material(0)
+			if mat == null and mi.mesh != null:
+				mat = mi.mesh.surface_get_material(0)
+			if mat is StandardMaterial3D:
+				return (mat as StandardMaterial3D).albedo_color
+	return Color(0, 0, 0, 0)
+
+
 func _axis_total(side: int) -> int:
 	match side:
 		EXT_LEFT, EXT_RIGHT: return _ext[EXT_LEFT] + _ext[EXT_RIGHT]
@@ -239,6 +295,16 @@ func _try_extend(side: int) -> void:
 	if not _extend_side_clear(side):
 		return
 	_ext[side] += 1
+	# Extension is a shape change at rest, same family of event as a tumble settle.
+	# Mirror that path so growing over ink marks the down face, growing over water
+	# cleanses marks, a marked extension deposits prints across the new footprint,
+	# and the level can complete when the footprint reaches the end cell without a
+	# follow-up tumble.
+	if side != EXT_UP:
+		_check_ink_contact_footprint()
+		_check_water_contact_footprint()
+		_maybe_deposit_footprint()
+	move_settled.emit()
 
 
 func _extend_side_clear(side: int) -> bool:
@@ -373,19 +439,23 @@ func _update_mesh() -> void:
 	# Mesh always lives in the parent's local frame with identity basis.
 	# At rest, parent.basis == IDENTITY so the mesh is world-aligned.
 	# During a tumble, parent.basis rotates so the mesh visibly tumbles with it.
-	_box_mesh.size = Vector3(
+	# DetectionArea's shape is resized and re-posed to match, so an enemy touching
+	# any cell of the extended footprint triggers caught (the 1x1 shape used to
+	# miss the extended portion).
+	var size := Vector3(
 		1.0 + _ext[EXT_LEFT] + _ext[EXT_RIGHT],
 		1.0 + _ext[EXT_UP],
 		1.0 + _ext[EXT_FWD] + _ext[EXT_BACK]
 	)
-	_mesh_instance.transform = Transform3D(
-		Basis.IDENTITY,
-		Vector3(
-			(_ext[EXT_RIGHT] - _ext[EXT_LEFT]) * 0.5,
-			_ext[EXT_UP] * 0.5,
-			(_ext[EXT_BACK] - _ext[EXT_FWD]) * 0.5
-		)
+	var offset := Vector3(
+		(_ext[EXT_RIGHT] - _ext[EXT_LEFT]) * 0.5,
+		_ext[EXT_UP] * 0.5,
+		(_ext[EXT_BACK] - _ext[EXT_FWD]) * 0.5
 	)
+	_box_mesh.size = size
+	_mesh_instance.transform = Transform3D(Basis.IDENTITY, offset)
+	_detection_shape.size = size
+	_detection_collider.transform = Transform3D(Basis.IDENTITY, offset)
 
 
 func _begin_tumble(dir: Vector2i) -> void:
@@ -463,7 +533,6 @@ func _begin_dodge(dir: Vector2i) -> void:
 		grid_pos.y + dir.y * max_dist
 	)
 	grid_pos += dir * max_dist
-	_slide_dir = dir
 	_slide_last_cell = Vector2i(roundi(_dodge_start_pos.x), roundi(_dodge_start_pos.z))
 	_dodge_t = 0.0
 	_dodge_duration = DODGE_DURATION * float(max_dist) / float(DODGE_DISTANCE)
@@ -673,6 +742,23 @@ func _process(delta: float) -> void:
 	if _knock_cooldown_t > 0.0:
 		_knock_cooldown_t = maxf(_knock_cooldown_t - delta, 0.0)
 
+	# Blend phase: rises only when at rest, still, and in cover; forced toward 0
+	# during animations so the cube visibly fades back as motion starts. Enter is
+	# slow (the delay IS the fade), exit is fast so peeking out is detectable
+	# almost instantly. is_blending (gameplay) flips only at full phase.
+	var move := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
+	var is_animating := _dodging or _tumbling or _bumping
+	var wants_blend := not is_animating and move.length() <= 0.5 and _is_in_cover()
+	is_hiding = wants_blend  # nav-block flag for enemies: kicks in immediately on entering cover at rest, before the visual fade completes
+	if wants_blend and not _was_wanting_blend:
+		_cover_color = _sample_cover_color()
+	_was_wanting_blend = wants_blend
+	var blend_target := 1.0 if wants_blend else 0.0
+	var blend_rate := delta / (BLEND_ENTER_TIME if wants_blend else BLEND_EXIT_TIME)
+	_blend_phase = move_toward(_blend_phase, blend_target, blend_rate)
+	is_blending = _blend_phase >= 1.0
+	_player_material.albedo_color = _base_color().lerp(_cover_color, _blend_phase)
+
 	if _dodging:
 		_dodge_t = minf(_dodge_t + delta / _dodge_duration, 1.0)
 		var t_eased := 1.0 - pow(1.0 - _dodge_t, 3.0)
@@ -681,6 +767,7 @@ func _process(delta: float) -> void:
 		if current_cell != _slide_last_cell:
 			_slide_last_cell = current_cell
 			_check_ink_contact()
+			_check_water_contact()
 			if not _ink_cells.has(current_cell) and _face_marks[_down_face_id()]:
 				_deposit_streak_cell(current_cell)
 		if _dodge_t >= 1.0:
@@ -688,6 +775,7 @@ func _process(delta: float) -> void:
 			position = _dodge_end_pos
 			_dodge_cooldown_t = DODGE_COOLDOWN
 			_check_ink_contact()
+			_check_water_contact()
 			move_settled.emit()
 		_update_mesh()
 		return
@@ -708,6 +796,7 @@ func _process(delta: float) -> void:
 			_ext = _pending_ext
 			_play_step(TUMBLE_DURATION / per_cell)
 			_check_ink_contact_footprint()
+			_check_water_contact_footprint()
 			_maybe_deposit_footprint()
 			move_settled.emit()
 		_update_mesh()
@@ -724,14 +813,6 @@ func _process(delta: float) -> void:
 			basis = Basis.IDENTITY
 		_update_mesh()
 		return
-
-	# Auto-blend: standing still wedged between two opposite walls makes you
-	# undetectable, no button. Evaluated every at-rest frame (moves returned above) so
-	# it stays fresh even while extending — pressing a direction or growing out of
-	# cover drops it.
-	var move := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
-	is_blending = move.length() <= 0.5 and _is_in_cover()
-	_player_material.albedo_color = _current_color()
 
 	if Input.is_action_pressed("extend") and not _extend_locked:
 		if Input.is_action_just_pressed("move_left"):
@@ -813,9 +894,29 @@ func _ink_face_contact() -> void:
 	_splash_player.play()
 
 
-func _check_water_cleanse() -> void:
-	if _water_overlap_count <= 0:
-		return
+func _check_water_contact() -> void:
+	# Single cell at render position; for dodge (cube-only, locked while extended).
+	# Slides cross cells faster than Area3D enter signals, so a dictionary lookup
+	# is the responsive path.
+	if _water_cells.has(Vector2i(roundi(position.x), roundi(position.z))):
+		_try_cleanse()
+
+
+func _check_water_contact_footprint() -> void:
+	# Full-footprint check for tumble landings and extensions. Any covered water
+	# cell cleanses marks once; subsequent covered cells find nothing to clear.
+	var minx: int = grid_pos.x - _ext[EXT_LEFT]
+	var maxx: int = grid_pos.x + _ext[EXT_RIGHT]
+	var minz: int = grid_pos.y - _ext[EXT_FWD]
+	var maxz: int = grid_pos.y + _ext[EXT_BACK]
+	for cx in range(minx, maxx + 1):
+		for cz in range(minz, maxz + 1):
+			if _water_cells.has(Vector2i(cx, cz)):
+				_try_cleanse()
+				return
+
+
+func _try_cleanse() -> void:
 	if not _any_marked():
 		return
 	for i in _face_marks.size():
@@ -848,14 +949,10 @@ func _maybe_deposit_footprint() -> void:
 
 
 func _deposit_streak_cell(cell: Vector2i) -> void:
-	# Spread SLIDE_SUBSAMPLES footprints across this cell along the slide
-	# direction so adjacent cells merge into a continuous streak instead of
-	# discrete blobs. The caller gates this on the cell being off-ink.
-	var dir := Vector2(_slide_dir.x, _slide_dir.y)
-	for i in SLIDE_SUBSAMPLES:
-		var t: float = -0.375 + i * 0.25
-		var pos := Vector2(cell.x, cell.y) + dir * t
-		_add_footprint(pos)
+	# One soft-tile footprint at the cell centre. Adjacent dodge cells merge
+	# in the shader since each tile's soft edge reaches the cell boundary.
+	# The caller gates this on the cell being off-ink.
+	_add_footprint(Vector2(cell.x, cell.y))
 	_update_footprint_uniforms()
 
 
@@ -981,9 +1078,10 @@ func _any_marked() -> bool:
 	return false
 
 
-func _current_color() -> Color:
-	if is_blending:
-		return COLOR_BLENDING
+func _base_color() -> Color:
+	# Color the player would be ignoring blend. The blend fade in _process lerps
+	# from this toward _cover_color by _blend_phase, so locked/marked states stay
+	# visible until cover-fade is complete.
 	if _extend_locked:
 		return COLOR_LOCKED
 	if _any_marked():

@@ -200,6 +200,26 @@ surface_material_override/0 = SubResource("StandardMaterial3D_3")
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Wall3" unique_id=1028427986]
 shape = SubResource("BoxShape3D_1")
 
+[node name="GapWallW" type="StaticBody3D" parent="." unique_id=2100100001]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -7, 0.5, -5)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="GapWallW" unique_id=2100100002]
+mesh = SubResource("BoxMesh_1")
+surface_material_override/0 = SubResource("StandardMaterial3D_3")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="GapWallW" unique_id=2100100003]
+shape = SubResource("BoxShape3D_1")
+
+[node name="GapWallE" type="StaticBody3D" parent="." unique_id=2100200001]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -3, 0.5, -5)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="GapWallE" unique_id=2100200002]
+mesh = SubResource("BoxMesh_1")
+surface_material_override/0 = SubResource("StandardMaterial3D_3")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="GapWallE" unique_id=2100200003]
+shape = SubResource("BoxShape3D_1")
+
 [node name="PerimeterN" type="StaticBody3D" parent="." unique_id=376459046]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, -14.5)
 

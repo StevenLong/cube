@@ -81,6 +81,7 @@ var _state: State = State.PATROL
 var _state_timer := 0.0
 var _detection := 0.0
 var _last_seen_pos := Vector3.ZERO
+var _last_visible_sample := Vector3.ZERO  # cell that passed _is_seeing_player this tick; sometimes the player's center, sometimes an exposed end of an extended bar
 var _material: StandardMaterial3D
 var _player: Player
 var _pending_sounds: Array = []
@@ -127,7 +128,10 @@ func _process(delta: float) -> void:
 	_advance_pending_sounds(delta)
 	var seeing := _is_seeing_player()
 	if seeing:
-		_last_seen_pos = _player.position
+		# Use the actually-visible cell, not the player's centre, so investigating
+		# after losing sight heads toward where the exposed end was, not the (hidden)
+		# base of an extended bar.
+		_last_seen_pos = _last_visible_sample
 	_update_detection(delta, seeing)
 
 	var footprint_pos := Vector3.INF
@@ -417,29 +421,41 @@ func _on_sound_heard(origin: Vector2) -> void:
 
 
 func _is_seeing_player() -> bool:
-	# Cone + LoS check. A single forward RayCast3D was too narrow — the cube
-	# would slip past the line and never register. INVESTIGATE drops the cone
-	# filter (active 360° scan).
+	# Cone + LoS check across the player's whole footprint, not just its centre,
+	# so an extended bar's end poking out of cover is detectable even when the
+	# base cell's ray is occluded by a wall. INVESTIGATE drops the cone filter
+	# (active 360° scan). First sample cell that passes all gates wins.
 	if _player.is_blending:
 		return false
-	var to_player := _player.global_position - global_position
-	to_player.y = 0.0
-	var dist := to_player.length()
-	if dist < 0.01 or dist > VIEW_RADIUS:
-		return false
-	if _state != State.INVESTIGATE:
-		var forward := -global_transform.basis.z
+	var cone_active := _state != State.INVESTIGATE
+	var forward := Vector3.ZERO
+	if cone_active:
+		forward = -global_transform.basis.z
 		forward.y = 0.0
 		var fl := forward.length()
 		if fl < 0.0001:
 			return false
 		forward /= fl
-		if (to_player / dist).dot(forward) < VIEW_CONE_COS:
-			return false
 	var space := get_world_3d().direct_space_state
-	var query := PhysicsRayQueryParameters3D.create(global_position, _player.global_position)
-	query.collide_with_areas = false
-	return space.intersect_ray(query).is_empty()
+	var fmin: Vector2i = _player.get_footprint_min()
+	var dims: Vector3i = _player.get_dimensions()
+	var sample_y := _player.global_position.y
+	for dx in range(dims.x):
+		for dz in range(dims.z):
+			var sample := Vector3(fmin.x + dx, sample_y, fmin.y + dz)
+			var to_sample := sample - global_position
+			to_sample.y = 0.0
+			var dist := to_sample.length()
+			if dist < 0.01 or dist > VIEW_RADIUS:
+				continue
+			if cone_active and (to_sample / dist).dot(forward) < VIEW_CONE_COS:
+				continue
+			var query := PhysicsRayQueryParameters3D.create(global_position, sample)
+			query.collide_with_areas = false
+			if space.intersect_ray(query).is_empty():
+				_last_visible_sample = sample
+				return true
+	return false
 
 
 func _visible_footprint_pos() -> Vector3:
@@ -636,7 +652,18 @@ func _build_nav_grid() -> void:
 func _cell_blocked(cell: Vector2i) -> bool:
 	if cell.x < NAV_MIN or cell.x > NAV_MAX or cell.y < NAV_MIN or cell.y > NAV_MAX:
 		return true
-	return _nav_blocked.has(cell)
+	if _nav_blocked.has(cell):
+		return true
+	# A hiding player counts as a wall to pathfinding: they "look like part of
+	# the wall," so the enemy plans around the footprint instead of barging in.
+	# Gated on is_hiding (still + in cover) not is_blending (full phase), so the
+	# nav block engages the moment the player settles into cover, before the visual
+	# fade completes; the 0.4s ramp window would otherwise let the enemy walk in.
+	# _find_path already snaps a blocked goal to the nearest open neighbour, so
+	# investigating a noise at the player's cell ends at the cell next to them.
+	if _player.is_hiding and _player.footprint_covers(cell):
+		return true
+	return false
 
 
 func _world_to_cell(p: Vector3) -> Vector2i:
