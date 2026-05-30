@@ -1,6 +1,35 @@
-[gd_resource type="ShaderMaterial" load_steps=2 format=3 uid="uid://b8q4grgrmat0001"]
+[gd_resource type="ShaderMaterial" format=3 uid="uid://c7jonbjvw30nk"]
 
-[ext_resource type="Shader" path="res://shaders/grid_ground.gdshader" id="1"]
+[ext_resource type="Shader" uid="uid://c5f1mah4u1lp4" path="res://shaders/grid_ground.gdshader" id="1"]
 
 [resource]
+render_priority = 0
 shader = ExtResource("1")
+shader_parameter/wave_origins = PackedVector2Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+shader_parameter/wave_half_extents = PackedVector2Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+shader_parameter/wave_radii = PackedFloat32Array(0, 0, 0, 0, 0, 0, 0, 0)
+shader_parameter/wave_alphas = PackedFloat32Array(0, 0, 0, 0, 0, 0, 0, 0)
+shader_parameter/footprint_positions = PackedVector2Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+shader_parameter/footprint_alphas = PackedFloat32Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+shader_parameter/cone_origin = Vector2(0, 0)
+shader_parameter/cone_dir = Vector2(0, 0)
+shader_parameter/cone_half_angle_cos = 0.0
+shader_parameter/cone_radius = 0.0
+shader_parameter/cone_color = Vector3(0, 0, 0)
+shader_parameter/cone_alpha = 0.0
+shader_parameter/player_xz = Vector2(0, 0)
+shader_parameter/wall_mins = PackedVector2Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+shader_parameter/wall_maxs = PackedVector2Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+shader_parameter/wall_count = 0
+shader_parameter/dark_factor = 0.25
+shader_parameter/top_base_color = Color(0.06, 0.06, 0.12, 1)
+shader_parameter/side_color = Color(0.04, 0.04, 0.08, 1)
+shader_parameter/grid_line_color = Color(0, 1, 1, 1)
+shader_parameter/line_core_width = 0.0050000002375
+shader_parameter/line_falloff_width = 0.5
+shader_parameter/line_falloff_exp = 10.0
+shader_parameter/line_glow_strength = 1.5
+shader_parameter/side_line_core_width = 0.010000000475
+shader_parameter/side_line_falloff_width = 0.0
+shader_parameter/side_line_falloff_exp = 1.0
+shader_parameter/side_line_glow_strength = 0.0

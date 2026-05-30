@@ -3,10 +3,10 @@
 [ext_resource type="Material" path="res://grid_ground_material.tres" id="1"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_FloorTile"]
-size = Vector3(1, 1, 1)
+size = Vector3(1, 2, 1)
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_FloorTile"]
-size = Vector3(1, 1, 1)
+size = Vector3(1, 2, 1)
 
 [node name="FloorTile" type="StaticBody3D" groups=["floor_tiles"]]
 collision_layer = 1

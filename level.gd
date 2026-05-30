@@ -10,6 +10,11 @@ const RESTART_DELAY := 0.5
 
 const FLOOR_TILE_SCENE := preload("res://FloorTile.tscn")
 
+const SAFETY_EDGE_Y := 0.02  # lifts strip just above floor top to avoid z-fighting
+const SAFETY_EDGE_PERP := 0.04  # perpendicular-to-edge thickness (the "width" lying flat)
+const SAFETY_EDGE_VERT := 0.02  # vertical thickness; keep low so the line reads as paint not bar
+const SAFETY_EDGE_ENERGY := 0.6  # emission multiplier; subtler than mid-wall warning bars
+
 var state: State = State.READY
 var moves: int = 0
 var time_elapsed: float = 0.0
@@ -230,7 +235,7 @@ func _build_floor() -> void:
 	for tile in get_tree().get_nodes_in_group("floor_tiles"):
 		var t: Node3D = tile
 		var cell := Vector2i(roundi(t.position.x), roundi(t.position.z))
-		t.position = Vector3(cell.x, -0.5, cell.y)
+		t.position = Vector3(cell.x, -1.0, cell.y)
 		_floor_cells[cell] = true
 		pre_placed[cell] = true
 
@@ -238,7 +243,7 @@ func _build_floor() -> void:
 		if pre_placed.has(cell):
 			continue
 		var tile: Node3D = FLOOR_TILE_SCENE.instantiate()
-		tile.position = Vector3(cell.x, -0.5, cell.y)
+		tile.position = Vector3(cell.x, -1.0, cell.y)
 		root.add_child(tile)
 
 
@@ -276,18 +281,19 @@ func _wall_at_cell(space: PhysicsDirectSpaceState3D, cell: Vector2i) -> bool:
 
 
 func _make_safety_edge_mesh(floor_cell: Vector2i, dir: Vector2i, mat: Material) -> MeshInstance3D:
-	# Thin emissive bar sitting on the cell boundary between floor_cell and
-	# floor_cell + dir, 0.5u above floor top. Long axis follows the edge.
+	# Thin emissive strip painted along the cell boundary between floor_cell
+	# and floor_cell + dir, lying just above floor top. Long axis follows the
+	# edge; the perpendicular dim sits flat on the floor.
 	var mi := MeshInstance3D.new()
 	var box := BoxMesh.new()
 	if dir.x != 0:
-		box.size = Vector3(0.05, 0.05, 1.0)
+		box.size = Vector3(SAFETY_EDGE_PERP, SAFETY_EDGE_VERT, 1.0)
 	else:
-		box.size = Vector3(1.0, 0.05, 0.05)
+		box.size = Vector3(1.0, SAFETY_EDGE_VERT, SAFETY_EDGE_PERP)
 	mi.mesh = box
 	mi.position = Vector3(
 		floor_cell.x + dir.x * 0.5,
-		0.5,
+		SAFETY_EDGE_Y,
 		floor_cell.y + dir.y * 0.5
 	)
 	mi.material_override = mat
@@ -299,6 +305,6 @@ func _make_safety_edge_material() -> StandardMaterial3D:
 	m.albedo_color = Color(0.9, 0.15, 0.15)
 	m.emission_enabled = true
 	m.emission = Color(0.9, 0.15, 0.15)
-	m.emission_energy_multiplier = 1.5
+	m.emission_energy_multiplier = SAFETY_EDGE_ENERGY
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	return m

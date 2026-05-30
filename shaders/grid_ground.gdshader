@@ -31,6 +31,21 @@ uniform vec3 top_base_color : source_color = vec3(0.06, 0.06, 0.12);
 uniform vec3 side_color : source_color = vec3(0.04, 0.04, 0.08);
 uniform vec3 grid_line_color : source_color = vec3(0.0, 1.0, 1.0);
 
+// Top-face edge line: thin bright core + power-curve glow halo. The glow
+// drops fast at first (high exp) and lingers further than smoothstep would.
+uniform float line_core_width : hint_range(0.0, 0.05) = 0.008;
+uniform float line_falloff_width : hint_range(0.0, 0.5) = 0.3;
+uniform float line_falloff_exp : hint_range(1.0, 10.0) = 4.0;
+uniform float line_glow_strength : hint_range(0.0, 1.5) = 0.7;
+
+// Side-face vertical-corner line: thinner core, glow-dominated. Lights up
+// only the vertical edges where two side faces meet (the slab's corners),
+// running from floor top down to the slab bottom.
+uniform float side_line_core_width : hint_range(0.0, 0.05) = 0.002;
+uniform float side_line_falloff_width : hint_range(0.0, 0.5) = 0.25;
+uniform float side_line_falloff_exp : hint_range(1.0, 10.0) = 4.0;
+uniform float side_line_glow_strength : hint_range(0.0, 1.5) = 0.8;
+
 varying vec3 v_world_pos;
 varying vec3 v_world_norm;
 
@@ -38,6 +53,18 @@ void vertex() {
 	v_world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	v_world_norm = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
 }
+
+// Dual core+glow intensity profile. The core is a hard smoothstep within
+// core_width (the bright line itself); the glow is a power-curve falloff
+// out to falloff_width (the lingering halo). Combined via max so neither
+// component saturates the other.
+float edge_line_intensity(float d, float core_w, float falloff_w, float falloff_exp, float glow_strength) {
+	float core = 1.0 - smoothstep(0.0, max(core_w, 0.0001), d);
+	float glow_t = clamp(d / max(falloff_w, 0.0001), 0.0, 1.0);
+	float glow = pow(1.0 - glow_t, falloff_exp) * glow_strength;
+	return max(core, glow);
+}
+
 
 // 2D segment-vs-AABB slab test. Returns true if the segment from a to b passes
 // through any wall AABB in wall_mins/wall_maxs.
@@ -73,21 +100,46 @@ bool segment_blocked(vec2 a, vec2 b) {
 }
 
 void fragment() {
-	// Side / bottom faces get a flat darker color. Threshold .5 separates the
-	// +Y top from every other cardinal face.
+	// Threshold .5 separates the +Y top from every other cardinal face.
 	if (v_world_norm.y < 0.5) {
-		ALBEDO = side_color;
+		// Side / bottom face. Light up just the vertical corner edges where
+		// two side faces meet; ignore the horizontal top/bottom edges. The
+		// relevant axis is whichever XZ axis is perpendicular to the face
+		// normal (X face -> Z corners, Z face -> X corners).
+		float perp_coord;
+		if (abs(v_world_norm.x) > 0.5) {
+			perp_coord = v_world_pos.z;
+		} else {
+			perp_coord = v_world_pos.x;
+		}
+		float perp_uv = fract(perp_coord + 0.5);
+		float side_edge_d = min(perp_uv, 1.0 - perp_uv);
+		float side_intensity = edge_line_intensity(
+			side_edge_d,
+			side_line_core_width,
+			side_line_falloff_width,
+			side_line_falloff_exp,
+			side_line_glow_strength
+		);
+		ALBEDO = mix(side_color, grid_line_color, side_intensity);
 	} else {
 		vec2 world_xz = v_world_pos.xz;
 
-		// Grid: thin cyan lines on integer cell boundaries. Cell centers sit at
-		// integer XZ, so fract(x + 0.5) ramps 0..1 across one cell.
+		// Top face per-cell edge line: thin bright core plus power-curve glow
+		// that drops fast at first and lingers far into the tile. Distance
+		// edge_d is from this fragment to the nearest of the cell's four
+		// edges (0 at edge, 0.5 at center).
 		vec2 cell_uv = fract(world_xz + vec2(0.5));
-		float lw = 0.08;
-		float gx = step(1.0 - lw, cell_uv.x) + step(cell_uv.x, lw);
-		float gy = step(1.0 - lw, cell_uv.y) + step(cell_uv.y, lw);
-		float on_line = clamp(gx + gy, 0.0, 1.0);
-		vec3 grid_color = mix(top_base_color, grid_line_color, on_line);
+		vec2 edge_dist_xy = min(cell_uv, vec2(1.0) - cell_uv);
+		float edge_d = min(edge_dist_xy.x, edge_dist_xy.y);
+		float line_intensity = edge_line_intensity(
+			edge_d,
+			line_core_width,
+			line_falloff_width,
+			line_falloff_exp,
+			line_glow_strength
+		);
+		vec3 grid_color = mix(top_base_color, grid_line_color, line_intensity);
 
 		// Noise waves: each emanates from a rectangular footprint.
 		vec2 cell_center = round(world_xz);

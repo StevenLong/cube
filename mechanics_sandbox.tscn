@@ -1,15 +1,15 @@
 [gd_scene format=3 uid="uid://b1q3ys71y3idn"]
 
-[ext_resource type="Script" path="res://player.gd" id="2"]
-[ext_resource type="Script" path="res://camera_controller.gd" id="3"]
-[ext_resource type="Script" path="res://level.gd" id="5"]
-[ext_resource type="Script" path="res://extend_lock_zone.gd" id="6"]
-[ext_resource type="Script" path="res://extend_lock_gate.gd" id="7"]
-[ext_resource type="Script" path="res://floor_rect.gd" id="8"]
+[ext_resource type="Script" uid="uid://imjs3qgnnax" path="res://player.gd" id="2"]
+[ext_resource type="Script" uid="uid://cjpdmrd4ev3o8" path="res://camera_controller.gd" id="3"]
+[ext_resource type="Script" uid="uid://dw6hiashyk0sh" path="res://level.gd" id="5"]
+[ext_resource type="Script" uid="uid://cexwlw0or75id" path="res://extend_lock_zone.gd" id="6"]
+[ext_resource type="Script" uid="uid://bb3cmwun237qc" path="res://extend_lock_gate.gd" id="7"]
+[ext_resource type="Script" uid="uid://ceu0wffmv3bb5" path="res://floor_rect.gd" id="8"]
 
 [sub_resource type="Environment" id="Environment_1"]
 background_mode = 1
-background_color = Color(0.1, 0.1, 0.12, 1)
+background_color = Color(0.2, 0.2, 0.24, 1)
 
 [sub_resource type="BoxMesh" id="BoxMesh_1"]
 
@@ -87,10 +87,9 @@ size = Vector3(0.4, 1.5, 3)
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=269945299]
 environment = SubResource("Environment_1")
 
-[node name="FloorRect" type="Node3D" parent="."]
+[node name="FloorRect" type="Node3D" parent="." unique_id=1340891343]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -13, 0, -13)
 script = ExtResource("8")
-size = Vector2i(27, 27)
 
 [node name="Camera3D" type="Camera3D" parent="." unique_id=1711588723]
 transform = Transform3D(1, 0, 0, 0, 0.707107, 0.707107, 0, -0.707107, 0.707107, 0, 8, 8)
