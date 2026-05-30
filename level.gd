@@ -1,3 +1,4 @@
+class_name Level
 extends Node
 
 enum State { READY, PLAYING, COMPLETE, CAUGHT }
@@ -6,6 +7,8 @@ const PULSE_BASE := 1.5
 const PULSE_AMPLITUDE := 1.0
 const PULSE_RATE := 2.5
 const RESTART_DELAY := 0.5
+
+const FLOOR_TILE_SCENE := preload("res://FloorTile.tscn")
 
 var state: State = State.READY
 var moves: int = 0
@@ -18,6 +21,7 @@ var _pending_complete: bool = false
 var _end_cell: Vector2i = Vector2i.ZERO
 var _start_material: StandardMaterial3D
 var _end_material: StandardMaterial3D
+var _floor_cells: Dictionary = {}
 
 @onready var _player: Node3D = get_node("../Player")
 @onready var _enemy: Node3D = get_node_or_null("../Enemy")
@@ -34,6 +38,10 @@ var _end_material: StandardMaterial3D
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	# Defer tile and edge spawning until after the scene finishes loading;
+	# add_child() into the world root errors out with "Parent node is busy
+	# setting up children" while scene instantiation is still in flight.
+	_build_world.call_deferred()
 	_start_material = (_start_tile.get_surface_override_material(0) as StandardMaterial3D).duplicate()
 	_start_tile.set_surface_override_material(0, _start_material)
 	_end_material = (_end_tile.get_surface_override_material(0) as StandardMaterial3D).duplicate()
@@ -163,3 +171,134 @@ func _on_player_move_settled() -> void:
 		return
 	if _pending_complete or _player.footprint_covers(_end_cell):
 		_enter_complete()
+
+
+func is_floor(cell: Vector2i) -> bool:
+	return _floor_cells.has(cell)
+
+
+func get_floor_bounds() -> Rect2i:
+	# Tight rect around every floor cell, or empty if there is no floor. Used for
+	# debug and any system that needs a quick reach estimate.
+	if _floor_cells.is_empty():
+		return Rect2i()
+	var first: Vector2i = _floor_cells.keys()[0]
+	var minx: int = first.x
+	var maxx: int = first.x
+	var minz: int = first.y
+	var maxz: int = first.y
+	for cell in _floor_cells.keys():
+		var c: Vector2i = cell
+		minx = mini(minx, c.x)
+		maxx = maxi(maxx, c.x)
+		minz = mini(minz, c.y)
+		maxz = maxi(maxz, c.y)
+	return Rect2i(minx, minz, maxx - minx + 1, maxz - minz + 1)
+
+
+func _build_world() -> void:
+	# Single deferred entry point: floor tiles must exist before safety edges
+	# are computed (edges read _floor_cells and place red lines on edges where
+	# a floor cell meets a wall cell).
+	_build_floor()
+	_build_safety_edges()
+
+
+func _build_floor() -> void:
+	# Resolve floor cells from FloorRect/FloorMissing config nodes and any
+	# pre-placed FloorTile instances, then spawn missing tiles. Pre-placed tiles
+	# override FloorMissing (you can fill back into a carved hole). Tiles are
+	# snap-positioned so the top sits at y=0 even if a designer dragged off-grid.
+	_floor_cells.clear()
+	var root: Node = get_parent()
+
+	for child in root.get_children():
+		if child is FloorRect:
+			var r: Rect2i = (child as FloorRect).cell_rect()
+			for x in range(r.position.x, r.position.x + r.size.x):
+				for z in range(r.position.y, r.position.y + r.size.y):
+					_floor_cells[Vector2i(x, z)] = true
+
+	for child in root.get_children():
+		if child is FloorMissing:
+			var r: Rect2i = (child as FloorMissing).cell_rect()
+			for x in range(r.position.x, r.position.x + r.size.x):
+				for z in range(r.position.y, r.position.y + r.size.y):
+					_floor_cells.erase(Vector2i(x, z))
+
+	var pre_placed: Dictionary = {}
+	for tile in get_tree().get_nodes_in_group("floor_tiles"):
+		var t: Node3D = tile
+		var cell := Vector2i(roundi(t.position.x), roundi(t.position.z))
+		t.position = Vector3(cell.x, -0.5, cell.y)
+		_floor_cells[cell] = true
+		pre_placed[cell] = true
+
+	for cell in _floor_cells.keys():
+		if pre_placed.has(cell):
+			continue
+		var tile: Node3D = FLOOR_TILE_SCENE.instantiate()
+		tile.position = Vector3(cell.x, -0.5, cell.y)
+		root.add_child(tile)
+
+
+func _build_safety_edges() -> void:
+	# Mark every boundary where a floor cell meets a wall-without-floor with a
+	# thin red emissive bar 0.5u above the floor. Open-void edges (no wall at the
+	# neighbor) get no marker: their absence IS the "you can fall here" signal.
+	# Wall query uses a layer-1 point at y=0.5, which sits above floor tiles
+	# (y in [-1, 0]) and inside walls (y in [0, 1]), so floor tiles can't false-
+	# positive.
+	var root: Node3D = get_parent() as Node3D
+	var edges_parent := Node3D.new()
+	edges_parent.name = "SafetyEdges"
+	root.add_child(edges_parent)
+	var space := root.get_world_3d().direct_space_state
+	var material := _make_safety_edge_material()
+	var dirs := [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
+	for cell in _floor_cells.keys():
+		var c: Vector2i = cell
+		for d in dirs:
+			var n: Vector2i = c + d
+			if _floor_cells.has(n):
+				continue
+			if not _wall_at_cell(space, n):
+				continue
+			edges_parent.add_child(_make_safety_edge_mesh(c, d, material))
+
+
+func _wall_at_cell(space: PhysicsDirectSpaceState3D, cell: Vector2i) -> bool:
+	var params := PhysicsPointQueryParameters3D.new()
+	params.position = Vector3(cell.x, 0.5, cell.y)
+	params.collision_mask = 1
+	params.collide_with_areas = false
+	return not space.intersect_point(params).is_empty()
+
+
+func _make_safety_edge_mesh(floor_cell: Vector2i, dir: Vector2i, mat: Material) -> MeshInstance3D:
+	# Thin emissive bar sitting on the cell boundary between floor_cell and
+	# floor_cell + dir, 0.5u above floor top. Long axis follows the edge.
+	var mi := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	if dir.x != 0:
+		box.size = Vector3(0.05, 0.05, 1.0)
+	else:
+		box.size = Vector3(1.0, 0.05, 0.05)
+	mi.mesh = box
+	mi.position = Vector3(
+		floor_cell.x + dir.x * 0.5,
+		0.5,
+		floor_cell.y + dir.y * 0.5
+	)
+	mi.material_override = mat
+	return mi
+
+
+func _make_safety_edge_material() -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(0.9, 0.15, 0.15)
+	m.emission_enabled = true
+	m.emission = Color(0.9, 0.15, 0.15)
+	m.emission_energy_multiplier = 1.5
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	return m

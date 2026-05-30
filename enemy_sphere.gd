@@ -2,6 +2,8 @@ extends Node3D
 
 signal entered_pursuit
 
+const GROUND_MATERIAL := preload("res://grid_ground_material.tres")
+
 const COLOR_PATROL := Color(0.7, 0.7, 0.75)
 const COLOR_SUSPICIOUS := Color(1.0, 0.85, 0.0)
 const COLOR_INVESTIGATE := Color(1.0, 0.55, 0.0)
@@ -22,8 +24,6 @@ const TURN_CRAWL_FRACTION := 0.5  # min fraction of speed kept through sharp tur
 const CORRIDOR_HYSTERESIS := 0.2  # corridor must stay clear this long before off-grid pursuit engages
 const SQRT2 := 1.4142135623730951  # diagonal step cost for 8-connected A*
 
-const NAV_MIN := -13
-const NAV_MAX := 13
 const NEIGHBORS_8: Array[Vector2i] = [
 	Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1),
 	Vector2i(-1, 0), Vector2i(1, 0),
@@ -104,6 +104,7 @@ var _sting_standdown: AudioStreamWAV
 
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
 @onready var _hum_player: AudioStreamPlayer3D = $HumSound
+@onready var _level: Level = get_node("../Level")
 
 
 func _ready() -> void:
@@ -112,7 +113,7 @@ func _ready() -> void:
 	_mesh.set_surface_override_material(0, _material)
 	_player = get_node("../Player") as Player
 	_player.noise_emitted.connect(_on_player_noise)
-	_ground_material = get_node("../Ground/MeshInstance3D").get_surface_override_material(0)
+	_ground_material = GROUND_MATERIAL
 	_hum_player.stream = _make_hum_sound()
 	_hum_player.play()
 	_setup_stings()
@@ -641,7 +642,8 @@ func _update_alert_glyph(delta: float) -> void:
 
 func _build_nav_grid() -> void:
 	# Static walls only — interior Wall* nodes at integer cells. Perimeter walls
-	# sit outside the playable band and are handled by the NAV_MIN/MAX bounds.
+	# don't match the "Wall*" prefix and would land on non-floor cells anyway,
+	# so they fall through the is_floor gate in _cell_blocked.
 	_nav_blocked.clear()
 	for child in get_parent().get_children():
 		if child is StaticBody3D and child.name.begins_with("Wall"):
@@ -650,7 +652,10 @@ func _build_nav_grid() -> void:
 
 
 func _cell_blocked(cell: Vector2i) -> bool:
-	if cell.x < NAV_MIN or cell.x > NAV_MAX or cell.y < NAV_MIN or cell.y > NAV_MAX:
+	# Floor is the new bounds source: non-floor = off the level = unreachable.
+	# Interior walls still contribute via _nav_blocked. NAV_MIN/MAX is gone now
+	# that floor data carries the play-area shape.
+	if not _level.is_floor(cell):
 		return true
 	if _nav_blocked.has(cell):
 		return true

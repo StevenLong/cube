@@ -1,18 +1,9 @@
 [gd_scene format=3 uid="uid://b8level010001"]
 
-[ext_resource type="Shader" path="res://shaders/grid_ground.gdshader" id="1"]
 [ext_resource type="Script" path="res://player.gd" id="2"]
 [ext_resource type="Script" path="res://camera_controller.gd" id="3"]
 [ext_resource type="Script" path="res://level.gd" id="5"]
-
-[sub_resource type="ShaderMaterial" id="ShaderMaterial_1"]
-resource_local_to_scene = true
-shader = ExtResource("1")
-
-[sub_resource type="PlaneMesh" id="PlaneMesh_1"]
-size = Vector2(30, 30)
-
-[sub_resource type="WorldBoundaryShape3D" id="WorldBoundaryShape3D_1"]
+[ext_resource type="Script" path="res://floor_rect.gd" id="8"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_1"]
 
@@ -27,7 +18,7 @@ size = Vector3(0.9, 0.9, 0.9)
 
 [sub_resource type="Environment" id="Environment_1"]
 background_mode = 1
-background_color = Color(0, 0, 0, 1)
+background_color = Color(0.1, 0.1, 0.12, 1)
 
 [sub_resource type="PlaneMesh" id="PlaneMesh_Tile"]
 size = Vector2(0.95, 0.95)
@@ -45,10 +36,21 @@ emission = Color(1, 0.75, 0.2, 1)
 [sub_resource type="BoxShape3D" id="BoxShape3D_EndArea"]
 size = Vector3(0.9, 0.5, 0.9)
 
+[sub_resource type="BoxShape3D" id="BoxShape3D_PerimeterNS"]
+size = Vector3(30, 1, 1)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_PerimeterEW"]
+size = Vector3(1, 1, 30)
+
 [node name="Node3D" type="Node3D"]
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource("Environment_1")
+
+[node name="FloorRect" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -13, 0, -13)
+script = ExtResource("8")
+size = Vector2i(27, 27)
 
 [node name="Camera3D" type="Camera3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 0.707107, 0.707107, 0, -0.707107, 0.707107, 0, 8, 8)
@@ -97,14 +99,29 @@ collision_mask = 1
 target_position = Vector3(-1, 0, 0)
 collision_mask = 1
 
-[node name="Ground" type="StaticBody3D" parent="."]
+[node name="PerimeterN" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, -14.5)
 
-[node name="MeshInstance3D" type="MeshInstance3D" parent="Ground"]
-mesh = SubResource("PlaneMesh_1")
-surface_material_override/0 = SubResource("ShaderMaterial_1")
+[node name="CollisionShape3D" type="CollisionShape3D" parent="PerimeterN"]
+shape = SubResource("BoxShape3D_PerimeterNS")
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="Ground"]
-shape = SubResource("WorldBoundaryShape3D_1")
+[node name="PerimeterS" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 14.5)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="PerimeterS"]
+shape = SubResource("BoxShape3D_PerimeterNS")
+
+[node name="PerimeterE" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 14.5, 0.5, 0)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="PerimeterE"]
+shape = SubResource("BoxShape3D_PerimeterEW")
+
+[node name="PerimeterW" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -14.5, 0.5, 0)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="PerimeterW"]
+shape = SubResource("BoxShape3D_PerimeterEW")
 
 [node name="StartTile" type="MeshInstance3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.01, 0)

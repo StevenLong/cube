@@ -35,6 +35,8 @@ const EXT_FWD   := 2
 const EXT_BACK  := 3
 const EXT_UP    := 4
 
+const GROUND_MATERIAL := preload("res://grid_ground_material.tres")
+
 # Face IDs map cube-local axis directions to indices 0-5.
 # Used to track which physical face is in contact with ground/puddles.
 const FACE_X_POS := 0
@@ -96,12 +98,15 @@ var _orient: Basis = Basis.IDENTITY
 @onready var _mesh_instance: MeshInstance3D = $MeshInstance3D
 @onready var _move_cast: ShapeCast3D = $MoveCast
 @onready var _detection_area: Area3D = $DetectionArea
+@onready var _level: Level = get_node("../Level")
 
 
 func _ready() -> void:
 	_step_player.stream = _make_step_sound()
 	_splash_player.stream = _make_splash_sound()
-	_ground_material = get_node("../Ground/MeshInstance3D").get_surface_override_material(0)
+	# Shared resource across every FloorTile and this player; uniforms set on it
+	# here push to every tile's top surface in one go.
+	_ground_material = GROUND_MATERIAL
 	_push_walls_to_shader()
 	_box_mesh = _mesh_instance.mesh.duplicate() as BoxMesh
 	_mesh_instance.mesh = _box_mesh
@@ -308,9 +313,10 @@ func _try_extend(side: int) -> void:
 
 
 func _extend_side_clear(side: int) -> bool:
-	# An extension may not grow into a wall. EXT_UP grows into the air (no ground
-	# cells), so it is always clear; otherwise check every new footprint cell the
-	# extension would add along that side.
+	# An extension may not grow into a wall or out over void. EXT_UP grows into
+	# the air (no ground cells), so it is always clear; otherwise check every
+	# new footprint cell the extension would add along that side via
+	# _cell_buildable (wall + floor combined).
 	if side == EXT_UP:
 		return true
 	var minx: int = grid_pos.x - _ext[EXT_LEFT]
@@ -320,32 +326,45 @@ func _extend_side_clear(side: int) -> bool:
 	match side:
 		EXT_LEFT:
 			for z in range(minz, maxz + 1):
-				if not _extend_cell_clear(Vector2i(minx - 1, z)):
+				if not _cell_buildable(Vector2i(minx - 1, z)):
 					return false
 		EXT_RIGHT:
 			for z in range(minz, maxz + 1):
-				if not _extend_cell_clear(Vector2i(maxx + 1, z)):
+				if not _cell_buildable(Vector2i(maxx + 1, z)):
 					return false
 		EXT_FWD:
 			for x in range(minx, maxx + 1):
-				if not _extend_cell_clear(Vector2i(x, minz - 1)):
+				if not _cell_buildable(Vector2i(x, minz - 1)):
 					return false
 		EXT_BACK:
 			for x in range(minx, maxx + 1):
-				if not _extend_cell_clear(Vector2i(x, maxz + 1)):
+				if not _cell_buildable(Vector2i(x, maxz + 1)):
 					return false
 	return true
 
 
 func _extend_cell_clear(cell: Vector2i) -> bool:
 	# True if the cell has no wall to grow into. Queries live physics (layer 1), so
-	# it respects the perimeter and the gate's current open/closed collision state.
+	# it respects the perimeter walls (now collision-only) and the gate's current
+	# open/closed collision state. "Clear" here means "not a wall" — cover
+	# detection uses this to decide whether a neighbor is open from that side.
+	# A void cell (no floor) is also "clear" by this definition; cover logic
+	# wants that, since you're exposed across a void, not hidden by it.
 	var space := get_world_3d().direct_space_state
 	var params := PhysicsPointQueryParameters3D.new()
 	params.position = Vector3(cell.x, 0.5, cell.y)
 	params.collision_mask = 1
 	params.collide_with_areas = false
 	return space.intersect_point(params).is_empty()
+
+
+func _cell_buildable(cell: Vector2i) -> bool:
+	# True if the cell has no wall AND is a floor cell. Extending or tumbling an
+	# extended cuboid into void is blocked the same as into a wall: extension is
+	# a positional commitment, so a bar won't lay out over a gap. Use this for
+	# extension growth and won't-fit-bump gap measurement; cover detection still
+	# uses _extend_cell_clear.
+	return _extend_cell_clear(cell) and _level.is_floor(cell)
 
 
 func _reset_extensions() -> void:
@@ -509,6 +528,20 @@ func _begin_tumble(dir: Vector2i) -> void:
 	if not _can_move_cuboid(dir, move):
 		return
 
+	# Extended cuboid is a positional commitment: refuse to tumble into a
+	# landing footprint that contains void. Cube tumbles (not extended) still
+	# go over the edge — they fall, handled in slice 2.
+	if _is_extended():
+		var new_pos: Vector2i = grid_pos + dir * move
+		var minx: int = new_pos.x - new_ext[EXT_LEFT]
+		var maxx: int = new_pos.x + new_ext[EXT_RIGHT]
+		var minz: int = new_pos.y - new_ext[EXT_FWD]
+		var maxz: int = new_pos.y + new_ext[EXT_BACK]
+		for x in range(minx, maxx + 1):
+			for z in range(minz, maxz + 1):
+				if not _level.is_floor(Vector2i(x, z)):
+					return
+
 	_pivot = Vector3(pivot_x, 0.0, pivot_z)
 	_pending_ext = new_ext
 	_tumble_distance = move
@@ -584,9 +617,11 @@ func _begin_blocked_bump(dir: Vector2i) -> void:
 
 
 func _gap_ahead(dir: Vector2i) -> int:
-	# Clear cells between the leading face and the nearest obstruction along dir, taken
-	# as the minimum across the face's width (the binding side). Capped at the cuboid
-	# height — past that the lean is already maxed, so more room is irrelevant.
+	# Buildable cells between the leading face and the nearest obstruction along
+	# dir, taken as the minimum across the face's width (the binding side).
+	# Capped at the cuboid height — past that the lean is already maxed, so more
+	# room is irrelevant. Void counts as blocking the same as a wall (we don't
+	# tip an extended shape into a fall hazard).
 	var minx: int = grid_pos.x - _ext[EXT_LEFT]
 	var maxx: int = grid_pos.x + _ext[EXT_RIGHT]
 	var minz: int = grid_pos.y - _ext[EXT_FWD]
@@ -597,14 +632,14 @@ func _gap_ahead(dir: Vector2i) -> int:
 		var lead_x: int = (maxx if dir.x > 0 else minx)
 		for z in range(minz, maxz + 1):
 			var d := 0
-			while d < cap and _extend_cell_clear(Vector2i(lead_x + dir.x * (d + 1), z)):
+			while d < cap and _cell_buildable(Vector2i(lead_x + dir.x * (d + 1), z)):
 				d += 1
 			gap = mini(gap, d)
 	else:
 		var lead_z: int = (maxz if dir.y > 0 else minz)
 		for x in range(minx, maxx + 1):
 			var d := 0
-			while d < cap and _extend_cell_clear(Vector2i(x, lead_z + dir.y * (d + 1))):
+			while d < cap and _cell_buildable(Vector2i(x, lead_z + dir.y * (d + 1))):
 				d += 1
 			gap = mini(gap, d)
 	return gap

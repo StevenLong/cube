@@ -1,163 +1,192 @@
-# Handoff, 2026-05-26
+# Handoff, 2026-05-29
 
 ## Where we are
-Phase 8 (Presentation and Mechanic Completeness) progressing. Last session
-landed clusters **A (extended-state mechanic gaps)** and **B (auto-blend)**.
-This session was a **deep-clean follow-up pass**: every reported bug got
-fixed, a parallel-bug scan found three more in the same family (extended
-vs cube parity), those got fixed too, and the blend visual got the polish
-it was missing. All in-editor verification was done as we went; remaining
-work in Phase 8 is unchanged (clusters C, D, E).
+Phase 8 cluster **C (floating void world)** slice 1 of 3 done. The world is
+now a finite cell-set of floor tiles in a void background, perimeter visuals
+are gone, edges are marked with auto-generated red safety lines, and
+extension + enemy nav read floor data instead of a hardcoded NAV band.
+Falling off works in a placeholder sense (cube ends at y=0.5 in mid-air).
+Slice 2 (real fall + Fell results panel) and slice 3 (a non-trivial demo
+shape) remain.
 
-Headless Godot 4.6 CLI is now installed in WSL at `~/.local/bin/godot`,
-used for parse-check + scene smoke-load before handing back changes.
-Does not replace in-editor verification (no rendering). Setup details in
-the memory file `project-godot-headless`.
+Verified clean: headless parse-check + smoke-load of `main.tscn`,
+`mechanics_sandbox.tscn`, and `levels/level_01_movement.tscn`. No in-editor
+verification yet from the user; that's the immediate next step.
 
-## The Phase 8 backlog (task list has canonical checkboxes)
-- **A. Extended-state mechanic gaps**: DONE (last session + this session's deep-clean).
-- **B. Blend redesign (auto-blend + visual polish)**: DONE (this session added delay/fade/wall-color).
-- **C. Floating void world**: no edge walls, grid edge = level edge, depth under floor, fall off. NOT STARTED. Foundational + biggest visual payoff.
-- **D. Animation / juice**: extend/collapse anim, spawn rise, death, completion, intro/outro. NOT STARTED. Spawn/death/complete read best after C.
+## The Phase 8 backlog
+- **A. Extended-state mechanic gaps**: DONE.
+- **B. Blend redesign (auto-blend + visual polish)**: DONE.
+- **C. Floating void world**:
+  - Slice 1 (data model + per-tile rendering + perimeter visuals stripped +
+    red safety lines + extension/nav rewired): **DONE this session**.
+  - Slice 2 (real fall behavior: animation, camera follow, Fell results
+    panel): NOT STARTED.
+  - Slice 3 (build a non-trivial demo shape: tightrope, notch, or gap, to
+    prove the painting workflow): NOT STARTED.
+- **D. Animation / juice**: extend/collapse anim, spawn rise, death,
+  completion, intro/outro. NOT STARTED.
 - **E. Audio**: more SFX, music. NOT STARTED.
 - **F. Parked**: grow tall to see over objects, pre-spawn demo flythrough.
 
 ## Completed this session
 
-### Cluster A deep-clean (extended/cube parity)
-Each fix follows the same pattern: replace 1x1 center-cell behavior with
-full-footprint behavior, mirroring what the ink fix already did last session.
+### Floor data model
+- `Level.is_floor(cell)` + `Level.get_floor_bounds()` are the new bounds
+  source. Both player and enemy reach Level via `@onready var _level`.
+- `Level._build_world` is deferred from `_ready` (via `call_deferred`)
+  because spawning floor tiles into the world root during the scene's load
+  chain raises Godot's "Parent node is busy setting up children" error.
+- Build pipeline: phase 1 adds cells from every `FloorRect`, phase 2 carves
+  cells under every `FloorMissing`, phase 3 walks pre-placed `FloorTile`
+  instances (they override missing and are snap-positioned), phase 4
+  instantiates a `FloorTile` for every remaining cell.
 
-- **Extension is a shape-change event** (player.gd, `_try_extend`): now
-  calls `_check_ink_contact_footprint`, `_check_water_contact_footprint`,
-  `_maybe_deposit_footprint`, then emits `move_settled`. Fixes three bugs at
-  once: growing onto ink wasn't marking the face, growing onto water wasn't
-  cleansing, and the level wouldn't complete when an extended bar covered the
-  end tile without a follow-up tumble.
-- **Water cleanse is cell-based** (player.gd): replaced `_water_overlap_count`
-  + the two `_on_water_*` handlers with a `_water_cells` dictionary built at
-  `_ready` (same loop as ink, via shared helper `_collect_puddle_cells`). New
-  `_check_water_contact` (single-cell, dodge) and `_check_water_contact_footprint`
-  (tumble/extend) called at the same sites as the ink checks. Refactored
-  `_check_water_cleanse` into `_try_cleanse` shared by both entry points.
-- **Enemy contact: full-footprint DetectionArea** (player.gd, `_update_mesh`):
-  the DetectionArea's `BoxShape3D` is duplicated at `_ready` (otherwise it's
-  shared with walls via `BoxShape3D_1`) and resized + re-posed every frame to
-  match the visual cuboid. An enemy touching any cell of the extended footprint
-  now triggers caught. Was: only the 1x1 base cell registered.
-- **Enemy LoS: per-cell raycasts** (enemy_sphere.gd, `_is_seeing_player`):
-  iterates the player's footprint cells; for each runs the same range + cone
-  + LoS test, returns true on the first that passes. A bar's end poking out
-  of cover is now detectable when the base cell's ray is occluded by a wall.
-  Added `_last_visible_sample` so `_last_seen_pos` captures the cell that was
-  actually visible, not the player's center; investigation pathing aims at
-  the exposed end, not the hidden base.
-- **Nav block while hiding** (player.gd + enemy_sphere.gd, `_cell_blocked`):
-  new `is_hiding` flag on Player (at-rest + in cover + not animating, regardless
-  of fade phase). Enemy treats hiding-player cells as walls; `_find_path`'s
-  existing goal-blocked fallback snaps to the nearest open neighbour, so
-  investigating a noise at the player's cell ends adjacent to the footprint,
-  not on it. Gated on `is_hiding` not `is_blending` so the block engages the
-  moment the player settles, before the 0.4s visual fade completes.
+### Authoring helpers
+- `floor_tile.tscn` (named `FloorTile.tscn` on disk): StaticBody3D on layer
+  1, BoxMesh + BoxShape3D (1u cube), shared shader material via
+  `grid_ground_material.tres`, in group `"floor_tiles"`. Drop one anywhere
+  in a level scene to add a single cell.
+- `floor_rect.gd` (`class_name FloorRect`): Node3D with exported
+  `size: Vector2i` (default 27x27). Position is the min-corner cell.
+- `floor_missing.gd` (`class_name FloorMissing`): same shape, marks the
+  rect for removal during the floor build.
 
-### Cluster B blend polish (player.gd)
-- **Delay + fade**: blend driven by `_blend_phase` (0→1). Rises over
-  `BLEND_ENTER_TIME = 0.4s`, falls over `BLEND_EXIT_TIME = 0.15s`. `is_blending`
-  (enemy invisibility) flips true only at full phase; the slower enter is the
-  fade, the faster exit means peeking out is detectable almost instantly.
-- **Camouflage colour**: `_sample_cover_color` walks the footprint perimeter
-  and reads the first `StandardMaterial3D.albedo_color` it finds on a touching
-  wall. Cached in `_cover_color` on the wants-blend transition. Fallback
-  `COLOR_BLENDING` if no usable material. `_player_material.albedo_color =
-  _base_color().lerp(_cover_color, _blend_phase)`.
-- **Phase decays during animations**: lifted the blend update before the
-  `_dodging`/`_tumbling`/`_bumping` early-returns, with `is_animating` forcing
-  `wants_blend` false. The cube visibly fades back out as motion starts
-  instead of freezing mid-fade.
-- **Refactored** `_current_color` → `_base_color` (no blend branch); the lerp
-  applies in `_process`.
+### Shader rewrite
+- `shaders/grid_ground.gdshader` uses world-space vertex position
+  (`MODEL_MATRIX * VERTEX`) and world-space normal as varyings. Top face
+  (world_norm.y > 0.5) renders the full pipeline: grid lines, waves,
+  footprints, LoS-gated cone, fog. Side and bottom faces flat-fill with
+  `side_color`.
+- `cull_disabled` dropped (boxes don't need it). `return` inside `fragment`
+  is not legal in Godot's shading language, so the top-vs-side branch is a
+  single `if`/`else`.
+- Three new color uniforms exposed for tuning: `top_base_color`,
+  `side_color`, `grid_line_color`. Defaults match the previous look.
+- `grid_ground_material.tres`: single `ShaderMaterial` resource referenced
+  by every FloorTile via the scene's `surface_material_override`, and by
+  Player and Enemy via `preload`. Uniforms set once on the shared resource
+  propagate to every tile.
 
-### Footprint visual (slice 2, player.gd + shaders/grid_ground.gdshader)
-- Shader: each footprint draws as a 0.8u soft-edge tile (rectangle-distance
-  with half-extent 0.4 and a 0.1u smoothstep falloff), so adjacent same-deposit
-  cells tile into a continuous oblong matching the down-face shape. A 1x3 bar
-  deposit reads as one 3x1 mark, not three separate dots.
-- `_deposit_streak_cell` simplified to one footprint per slide cell (was 4
-  sub-samples). Removed `SLIDE_SUBSAMPLES` and `_slide_dir` (dead).
-- Data model unchanged (`_footprints` still position+alpha), so the enemy's
-  `get_footprint_positions` and `consume_footprints_in_cell` still work.
+### Auto safety-edge red lines
+- `Level._build_safety_edges` walks every floor cell and each cardinal
+  neighbor. When the neighbor is non-floor AND a layer-1 physics point
+  query at `(cell.x, 0.5, cell.y)` hits a wall, a thin red emissive box
+  (0.05 x 0.05 x 1) is spawned 0.5u above the floor edge. Open-void
+  neighbors get nothing: their absence IS the "you can fall here" signal.
+- Mesh + material made in code (`_make_safety_edge_mesh`,
+  `_make_safety_edge_material`); single shared material per scene.
+- The wall query at y=0.5 sits above floor tiles (`y in [-1, 0]`) and
+  inside walls (`y in [0, 1]`), so floor tiles never false-positive.
 
-### Sandbox (mechanics_sandbox.tscn)
-- Added `GapWallW` at (-7, 0.5, -5) and `GapWallE` at (-3, 0.5, -5): two walls
-  three cells apart along x. A horizontal bar at (-5,-5) with EXT_LEFT=1 and
-  EXT_RIGHT=1 plugs the gap; opposite-column-pair rule triggers blend. Test
-  spot for the bar-plug-blend case that previously had nowhere to verify.
+### Player + enemy rewiring
+- New `Player._cell_buildable(cell)`: `_extend_cell_clear(cell) and
+  _level.is_floor(cell)`. Used by `_extend_side_clear` and `_gap_ahead`.
+  Extension growing over void is blocked the same as into a wall.
+- Cube tumble over void: still allowed (placeholder fall). Extended
+  cuboid tumble over void: blocked in `_begin_tumble` after
+  `_can_move_cuboid` passes, by checking every new-footprint cell against
+  `_level.is_floor`. Falls through to `_begin_blocked_bump`, which with
+  gap=0 plays a soft thud.
+- `_extend_cell_clear` keeps its original "no wall" semantics (cover
+  detection still uses it; void must count as exposed-from-that-direction).
+- Enemy `_cell_blocked` now uses `not _level.is_floor(cell)` instead of
+  the hardcoded `NAV_MIN/NAV_MAX = ±13`. Constants deleted.
+- Player + Enemy `_ground_material` populated from
+  `preload("res://grid_ground_material.tres")` instead of reaching into
+  the deleted Ground node.
+
+### Scene migration
+- `main.tscn`, `mechanics_sandbox.tscn`, `levels/level_01_movement.tscn`:
+  - `Ground` node deleted (PlaneMesh + ShaderMaterial + WorldBoundary).
+  - PerimeterN/S/E/W: MeshInstance3D child deleted, StaticBody +
+    CollisionShape kept. Walls now invisible; red lines auto-render.
+  - `FloorRect` added at (-13, 0, -13) with size (27, 27).
+  - `WorldEnvironment.background_color` bumped from black to
+    `Color(0.1, 0.1, 0.12)` so the slab reads against the void.
+  - Tutorial level (`level_01_movement.tscn`) didn't have perimeter walls
+    before; added invisible collision so the tutorial doesn't accidentally
+    become a fall-off tutorial.
 
 ## Watch items / known edge cases
-- **Stale enemy path through a freshly-hiding cell**: a path computed BEFORE
-  the player started hiding stays valid; the enemy keeps walking along it.
-  Investigates only re-path on new footprint detection, not on `is_hiding`
-  changes. Rare in practice (the user-reported scenario is correctly fixed).
-  Close it later by adding a per-step `_cell_blocked` check in `_follow_path`,
-  or wiring an "is_hiding changed" signal that forces a re-path.
-- **Search-through-corner**: when a noise originates in a spot only reachable
-  through an impassable wall-corner gap, the enemy walks to the closest
-  reachable cell adjacent to the corner and "stares through" it. Decided this
-  is acceptable (it IS investigating where it heard the noise) and a
-  **level-design** concern: avoid hiding spots behind corner gaps when
-  building levels. No code fix.
-- **Wall-colour camouflage caches at blend entry**. If the player extends to a
-  cell with a differently-coloured wall while already hiding, the cached
-  `_cover_color` doesn't refresh. Minor; only matters with multi-coloured
-  walls in the same shape. Upgrade to per-frame sampling later if needed
-  (cheap; 4-8 physics queries).
-- **Pursuit's direct-line `_move_toward`** doesn't consult `_cell_blocked`.
-  But pursuit only runs while the enemy sees the player, which requires
-  is_blending = false. Player can't enter the blend ramp during pursuit
-  (visible to enemy), so this is a non-issue in normal flow.
-- **Unused WallRay nodes** (`WallRayN/S/E/W` under Player in scenes): still
-  dead from last session. Delete in-editor when convenient.
-- **DEBUG_DETECTION := true** in enemy_sphere.gd (top-left readout): to drop
-  at end-of-phase tuning.
-- **Tall-pillar false blend**: cover sensed at ground level, so a 3-tall
-  pillar behind 1-tall walls would wrongly blend. Parked for the wall-height
-  / void pass (cluster C territory).
-- **Cover counts the perimeter** (layer 1). Moot once C removes edge walls.
-- **Two scenes still diverge**: main.tscn (with enemy) and mechanics_sandbox.tscn
-  (enemy-free). New props/nodes go in both, or pick one as canonical.
-- **LoS now multi-cell**, but still a centre-to-centre ray per cell. A bar's
-  end could still thread a corner for a frame. Wider rays not needed for now.
+
+### New this session
+- **Cube fall-off is placeholder**: cube ends up at world y=0.5 over void.
+  Slice 2 turns that into a real fall + Fell panel.
+- **Background / side / top contrast is untuned in-editor**: defaults are
+  background `(0.1, 0.1, 0.12)`, top `(0.06, 0.06, 0.12)`, side
+  `(0.04, 0.04, 0.08)`. May need a tweak after eyes-on.
+- **Floor build is deferred one tick**: between scene `_ready` and the
+  first idle frame, `_floor_cells` is empty. Player and enemy only query
+  it from `_process` / pathfinding, so this is invisible in practice, but
+  any future code that needs the floor synchronously from `_ready` should
+  also defer or `await`.
+- **No FloorRect editor gizmo**: dragging the node in the viewport gives
+  no visual hint of which cells it'll spawn. Worth a small gizmo plugin
+  later if authoring gets tedious.
+- **Cover still counts the perimeter**: `_is_in_cover` reads physics walls
+  via `_extend_cell_clear`. Perimeter walls have collision, so blending
+  against an edge still works. Slice 1 doesn't change this behavior. If
+  it ever feels wrong design-wise, gate cover on `is_floor` neighbors.
+- **`FloorTile.tscn` is PascalCase on disk** while other scenes are
+  snake_case. Cosmetic; rename later if it bugs you.
+
+### Carried from last session (still applicable)
+- **Stale enemy path through a freshly-hiding cell**: same as before.
+- **Search-through-corner**: same; level-design concern.
+- **Wall-colour camouflage caches at blend entry**: same.
+- **Pursuit's direct-line `_move_toward`**: same; non-issue in normal flow,
+  and now also bypasses the floor check, so pursuit will chase the player
+  off a cliff. Slice 2 fall will end the chase naturally.
+- **Unused WallRay nodes** under Player: still dead. Delete when convenient.
+- **DEBUG_DETECTION := true** in enemy_sphere.gd: drop at end of phase.
+- **Tall-pillar false blend**: same; parked.
+- **`GapWall*` and `Perimeter*` absent from shader LoS** because the
+  `_push_walls_to_shader` name filter is `Wall*`. Pre-existing. Not a
+  regression: the perimeter walls weren't in the LoS list before either.
+- **Two scenes still diverge**: main + sandbox.
+- **LoS multi-cell but centre-to-centre per cell**: same.
 
 ## Verification status
-All fixes verified in-editor by the user as we went. The corner-search
-behaviour was reviewed and accepted as level-design territory. Nothing
-outstanding from this session.
+None in-editor yet. Slice 1 needs eyes-on for: void contrast, slab look,
+red lines on perimeter, waves / footprints / cone all still rendering on
+tiles, enemy stays inside the floor, extension blocked at the edge,
+extended tumble blocked at the edge, cube tumble off the edge ends in
+placeholder mid-air (slice 2 will fix). User should verify before
+starting slice 2.
 
 ## Key files
-- `player.gd`: `class_name Player`. Tumble (footprint-aware wall collision), extension
-  (wall-blocked + shape-change side effects), dodge, **auto-blend with phase
-  delay/fade + wall-colour sampling (`_is_in_cover`, `_sample_cover_color`,
-  `_blend_phase`, `is_hiding`)**, ink + water (cell-set + footprint-aware
-  contact, shared `_try_cleanse`), audio waves, footprints (per-cell tile),
-  water cleanse, **cube-only wall-knock + won't-fit lean/thud**,
-  collapse-on-dodge, extend-lock state + grid accessors (`footprint_covers`,
-  `get_dimensions`, etc.), **DetectionArea resized to footprint** (`_update_mesh`,
-  duplicates shape at `_ready`).
-- `enemy_sphere.gd`: PATROL/SUSPICIOUS/INVESTIGATE/PURSUIT, graduated detection,
-  detection-driven cone, alert glyph, noise -> investigate, footprint follow,
-  A* nav with **hiding-player cells blocked** (`_cell_blocked`), **multi-cell LoS**
-  (`_is_seeing_player`, `_last_visible_sample`), state hum + stings, debug
-  readout (temp).
-- `level.gd`: state machine (READY/PLAYING/COMPLETE/CAUGHT); completion via end-tile
-  Area3D OR `footprint_covers(_end_cell)`; null-guards the enemy.
-- `extend_lock_zone.gd` / `extend_lock_gate.gd`: grid-exact lock zone + ghost
-  blueprint + lock-driven gate.
-- `shaders/grid_ground.gdshader`: grid + waves + vision cone + **footprint tile
-  rendering** (soft-edge rectangle, adjacent cells tile into oblong) + LoS fog.
-- `main.tscn` (with enemy) / `mechanics_sandbox.tscn` (enemy-free copy, includes
-  gap-plug test walls at z=-5).
-- Design: `game-dev/Cube Game.md` (v0.2, hiding section updated). Tasks:
-  `game-dev/Cube Game Tasks.md` (Phase 8 = Presentation/Mechanic Completeness).
+- `player.gd`: `class_name Player`. Tumble (footprint-aware wall + extended-
+  shape void block), extension via `_cell_buildable` (wall + floor combined),
+  dodge, auto-blend, ink + water, audio waves, footprints,
+  collapse-on-dodge, extend-lock state, grid accessors, DetectionArea
+  resized to footprint. `_ground_material` from
+  `preload("res://grid_ground_material.tres")`. `@onready _level` for
+  `is_floor` lookups.
+- `enemy_sphere.gd`: PATROL/SUSPICIOUS/INVESTIGATE/PURSUIT, graduated
+  detection, detection-driven cone, alert glyph, noise -> investigate,
+  footprint follow, A* nav with floor-data bounds (`_level.is_floor` in
+  `_cell_blocked`), multi-cell LoS, state hum + stings, debug readout.
+  `_ground_material` from preload.
+- `level.gd`: `class_name Level`. State machine (READY/PLAYING/COMPLETE/
+  CAUGHT); completion via end-tile Area3D OR `footprint_covers(_end_cell)`;
+  null-guards the enemy. NEW: `_floor_cells`, `is_floor`,
+  `get_floor_bounds`, `_build_world` (deferred), `_build_floor`,
+  `_build_safety_edges`.
+- `floor_rect.gd` / `floor_missing.gd`: `class_name` config nodes;
+  `size: Vector2i`; `cell_rect()` returns an absolute Rect2i using the
+  node's XZ position as min corner.
+- `FloorTile.tscn` + `grid_ground_material.tres`: per-cell unit; shared
+  shader material.
+- `shaders/grid_ground.gdshader`: world-space vertex + normal varyings;
+  top face = grid + waves + footprints + cone + fog; side = flat
+  `side_color`. Color uniforms: `top_base_color`, `side_color`,
+  `grid_line_color`.
+- `extend_lock_zone.gd` / `extend_lock_gate.gd`: unchanged.
+- `main.tscn` / `mechanics_sandbox.tscn` / `levels/level_01_movement.tscn`:
+  FloorRect-based floor; perimeter walls invisible-collision-only; void
+  background `(0.1, 0.1, 0.12)`.
+- Design: `game-dev/Cube Game.md` (v0.2). Tasks:
+  `game-dev/Cube Game Tasks.md` (Phase 8).
 
 ## Input map
 | Action | Controller | Keyboard |
@@ -171,28 +200,35 @@ outstanding from this session.
 | Camera tilt | Right stick Y | R / F |
 | Back to menu / quit | (none) | Escape |
 
-Blend is automatic (stand still in cover). Jump cut by design. Won't-fit
-lean and knock reuse the move input.
+Blend is automatic (stand still in cover). Jump cut by design.
 
 ## Tuning backlog (end-of-phase pass)
-- **Blend**: `BLEND_ENTER_TIME` 0.4, `BLEND_EXIT_TIME` 0.15. Footprint tile
-  half-extent 0.4 and falloff 0.1 (hardcoded in `grid_ground.gdshader`).
-- Won't-fit bump: `BUMP_DURATION` 0.25, `BUMP_ANGLE` PI/10 (push toward
-  ~PI/5 for a visible distance gradient), `BUMP_CLEARANCE` 0.15, thud
-  volume 0.35 / pitch 0.5.
+- **Floor / void contrast** (slice 1): WorldEnvironment background
+  `(0.1, 0.1, 0.12)`, shader uniforms `top_base_color` `(0.06, 0.06, 0.12)`,
+  `side_color` `(0.04, 0.04, 0.08)`, `grid_line_color` `(0, 1, 1)`. Tune
+  any of these without code changes via the `.tres` and the
+  WorldEnvironment.
+- **Safety edge** (slice 1): hardcoded red `(0.9, 0.15, 0.15)` with
+  emission energy 1.5, box (0.05 x 0.05 x 1), y=0.5. Lift into named
+  constants when tuning.
+- Blend: `BLEND_ENTER_TIME` 0.4, `BLEND_EXIT_TIME` 0.15. Footprint tile
+  half-extent 0.4 and falloff 0.1.
+- Won't-fit bump: `BUMP_DURATION` 0.25, `BUMP_ANGLE` PI/10,
+  `BUMP_CLEARANCE` 0.15, thud volume 0.35 / pitch 0.5.
 - Detection (`DETECT_*`), cone (`CONE_*`), glyph, hum/stings, footprints
-  (`FOOTPRINT_FADE_TIME` 12.0), knock (`KNOCK_RADIUS` 10.0, `KNOCK_COOLDOWN`
-  0.4), extend-lock (`GHOST_*`), nav (`TURN_*`, `CORRIDOR_HYSTERESIS`),
-  fog `dark_factor`.
+  (`FOOTPRINT_FADE_TIME` 12.0), knock (`KNOCK_RADIUS` 10.0,
+  `KNOCK_COOLDOWN` 0.4), extend-lock (`GHOST_*`), nav (`TURN_*`,
+  `CORRIDOR_HYSTERESIS`), fog `dark_factor` 0.25.
 
 ## Memory notes worth checking
 - Read HANDOFF.md first thing at session start.
-- Godot headless CLI at `~/.local/bin/godot` (WSL only). Parse-check via
-  `godot --headless --editor --quit 2>&1 | grep -E "SCRIPT ERROR|Parse Error"`.
-  Exit code is 0 even on parse errors so always grep.
-- Active verbs (sprint/dodge/knock) are cube-only; extension is a positional
-  commitment. Apply to any new active ability.
+- Godot headless CLI at `~/.local/bin/godot`. Parse-check via
+  `godot --headless --editor --quit 2>&1 | grep -E "SCRIPT ERROR|Parse Error|SHADER ERROR"`.
+  Smoke-load a scene via `godot --headless --quit-after 30 <scene>` and
+  grep for `ERROR|error`. Exit code is 0 even on errors, so always grep.
+- Active verbs (sprint/dodge/knock) are cube-only; extension is a
+  positional commitment, including the "won't tumble into void" rule.
 - Design v0.2 (reactive-stealth, shape-vs-exposure, jump cut).
 - No Co-Authored-By trailer; no em/en dashes; commit at session end or on
-  request. Transform3D row-major; ink/water binary cleanse; GDScript inference
-  with untyped arrays.
+  request. Transform3D row-major; ink/water binary cleanse; GDScript
+  inference with untyped arrays.
