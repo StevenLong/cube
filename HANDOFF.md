@@ -1,192 +1,190 @@
-# Handoff, 2026-05-29
+# Handoff, 2026-05-30
 
 ## Where we are
-Phase 8 cluster **C (floating void world)** slice 1 of 3 done. The world is
-now a finite cell-set of floor tiles in a void background, perimeter visuals
-are gone, edges are marked with auto-generated red safety lines, and
-extension + enemy nav read floor data instead of a hardcoded NAV band.
-Falling off works in a placeholder sense (cube ends at y=0.5 in mid-air).
-Slice 2 (real fall + Fell results panel) and slice 3 (a non-trivial demo
-shape) remain.
+Phase 8 cluster **C (floating void world)** slice 2 in progress with one
+known design bug. Slice 1 done and polished last session. Slice 2 brought
+in the fall mechanic, stability rules, tipping animation, and a wedge
+check. The wedge logic is correct in geometry but emits the fail signal
+too eagerly: `fell.emit()` fires the moment a wedge is detected, which
+pauses the tree on the same frame and pops the results panel before the
+tip or wedge is ever visible. Fix is small but design-touched; deferred
+to next session along with a roundi sanity check that may also be
+contributing.
 
-Verified clean: headless parse-check + smoke-load of `main.tscn`,
-`mechanics_sandbox.tscn`, and `levels/level_01_movement.tscn`. No in-editor
-verification yet from the user; that's the immediate next step.
+Slice 3 (build a real demo level shape) is still open and unchanged.
+
+Verified headless: parse-check + smoke-load of all three scenes after
+every change in this session. In-editor verification of the fall family
+done piecewise by the user; the wedge regression was caught visually.
 
 ## The Phase 8 backlog
 - **A. Extended-state mechanic gaps**: DONE.
-- **B. Blend redesign (auto-blend + visual polish)**: DONE.
+- **B. Blend redesign**: DONE.
 - **C. Floating void world**:
-  - Slice 1 (data model + per-tile rendering + perimeter visuals stripped +
-    red safety lines + extension/nav rewired): **DONE this session**.
-  - Slice 2 (real fall behavior: animation, camera follow, Fell results
-    panel): NOT STARTED.
-  - Slice 3 (build a non-trivial demo shape: tightrope, notch, or gap, to
-    prove the painting workflow): NOT STARTED.
-- **D. Animation / juice**: extend/collapse anim, spawn rise, death,
-  completion, intro/outro. NOT STARTED.
-- **E. Audio**: more SFX, music. NOT STARTED.
-- **F. Parked**: grow tall to see over objects, pre-spawn demo flythrough.
+  - Slice 1 (data model + per-tile render + perimeter visuals stripped +
+    red safety lines + extension/nav rewired): DONE.
+  - Slice 1 polish (Tron neon edges, doubled slab height, lighter void):
+    DONE.
+  - Slice 2 (real fall behavior): IN PROGRESS. Center-of-gravity
+    stability, tumble + extension allowed over void, tip animation,
+    wedge detection all in. **Open bug**: wedge fires the fail signal
+    instantly, hiding the tip and wedge from the player. Details below.
+  - Slice 3 (build a non-trivial demo shape): NOT STARTED.
+- **D. Animation / juice**: NOT STARTED.
+- **E. Audio**: NOT STARTED.
+- **F. Parked**: grow tall, pre-spawn demo flythrough.
 
 ## Completed this session
 
-### Floor data model
-- `Level.is_floor(cell)` + `Level.get_floor_bounds()` are the new bounds
-  source. Both player and enemy reach Level via `@onready var _level`.
-- `Level._build_world` is deferred from `_ready` (via `call_deferred`)
-  because spawning floor tiles into the world root during the scene's load
-  chain raises Godot's "Parent node is busy setting up children" error.
-- Build pipeline: phase 1 adds cells from every `FloorRect`, phase 2 carves
-  cells under every `FloorMissing`, phase 3 walks pre-placed `FloorTile`
-  instances (they override missing and are snap-positioned), phase 4
-  instantiates a `FloorTile` for every remaining cell.
+### Fall mechanic (slice 2 v1)
+- New `Player.fell` signal, `Level.State.FELL`, mirror of `CAUGHT` with
+  title "Fell". Restart key handler covers FELL like the other end states.
+- `_falling` + `_fall_vel` + `FALL_GRAVITY` (25 units/s^2) + `FALL_END_Y`
+  (-6.0) on Player. Falling block in `_process` skips blend / input /
+  animation; gravity Y until threshold, then `fell.emit()`.
+- `_check_fall_at_settle` called after every settle event (tumble end,
+  dodge end, extension, collapse). Idempotent so a second settle inside
+  the same fall doesn't restart it.
 
-### Authoring helpers
-- `floor_tile.tscn` (named `FloorTile.tscn` on disk): StaticBody3D on layer
-  1, BoxMesh + BoxShape3D (1u cube), shared shader material via
-  `grid_ground_material.tres`, in group `"floor_tiles"`. Drop one anywhere
-  in a level scene to add a single cell.
-- `floor_rect.gd` (`class_name FloorRect`): Node3D with exported
-  `size: Vector2i` (default 27x27). Position is the min-corner cell.
-- `floor_missing.gd` (`class_name FloorMissing`): same shape, marks the
-  rect for removal during the floor build.
+### Stability model
+- `_is_stable_at(grid_pos, ext)`: cuboid is stable iff its geometric
+  centre sits strictly inside the axis-aligned bounding box of supported
+  (floor) footprint cells. Strict so a 1x2 with one cell over void
+  (centre exactly on the boundary) counts as a tip.
+- Falls through every common bridge / overhang / knife-edge case
+  consistently with user spec:
+  - 1x3 bridging (both ends supported, void centre): stable.
+  - 1x3 with only centre supported: stable.
+  - 1x3 with end-only support: unstable.
+  - 1x2 with one cell over void: unstable (knife edge).
+- Bounding box not convex hull: loose for diagonal supports, but every
+  common case lands the same answer either way.
 
-### Shader rewrite
-- `shaders/grid_ground.gdshader` uses world-space vertex position
-  (`MODEL_MATRIX * VERTEX`) and world-space normal as varyings. Top face
-  (world_norm.y > 0.5) renders the full pipeline: grid lines, waves,
-  footprints, LoS-gated cone, fog. Side and bottom faces flat-fill with
-  `side_color`.
-- `cull_disabled` dropped (boxes don't need it). `return` inside `fragment`
-  is not legal in Godot's shading language, so the top-vs-side branch is a
-  single `if`/`else`.
-- Three new color uniforms exposed for tuning: `top_base_color`,
-  `side_color`, `grid_line_color`. Defaults match the previous look.
-- `grid_ground_material.tres`: single `ShaderMaterial` resource referenced
-  by every FloorTile via the scene's `surface_material_override`, and by
-  Player and Enemy via `preload`. Uniforms set once on the shared resource
-  propagate to every tile.
+### Extension / tumble void rules (revised by user)
+- Initial slice-2 design blocked unstable extensions ("positional
+  commitment"). User flipped this: extensions are now allowed even if
+  unstable, and the resulting unstable shape falls, same as a tumble.
+  Rationale: removes an arbitrary asymmetry with tumble, opens up the
+  "self-yeet" move, gives the player faster feedback on bad gap
+  judgement.
+- `_extend_side_clear` and `_gap_ahead` reverted to `_extend_cell_clear`
+  (wall-only); `_cell_buildable` is gone. `_begin_tumble`'s slice-1
+  floor-block is gone. The settle check handles all cases.
+- Settle-time side effects (`_play_step`, ink / water contact, footprint
+  deposit, `move_settled.emit`) are gated on `not _falling` so the cube
+  doesn't make footstep noise on a step into air or fire level
+  completion mid-fall.
 
-### Auto safety-edge red lines
-- `Level._build_safety_edges` walks every floor cell and each cardinal
-  neighbor. When the neighbor is non-floor AND a layer-1 physics point
-  query at `(cell.x, 0.5, cell.y)` hits a wall, a thin red emissive box
-  (0.05 x 0.05 x 1) is spawned 0.5u above the floor edge. Open-void
-  neighbors get nothing: their absence IS the "you can fall here" signal.
-- Mesh + material made in code (`_make_safety_edge_mesh`,
-  `_make_safety_edge_material`); single shared material per scene.
-- The wall query at y=0.5 sits above floor tiles (`y in [-1, 0]`) and
-  inside walls (`y in [0, 1]`), so floor tiles never false-positive.
+### Tipping animation
+- When a settle puts the cuboid in an unstable state and any footprint
+  cell IS supported, the cube tips around the support-bbox edge nearest
+  the centre of mass. Pivot point + tip axis computed in `_setup_tip`;
+  axis is horizontal, perpendicular to the overhang direction.
+- Knife-edge case (centre exactly on the support boundary, e.g., 1x2
+  with one cell over void) uses footprint-centre vs support-centre as
+  the tip direction; `TIP_INITIAL_VEL = 1.5 rad/s` gives the equilibrium
+  a kick so it doesn't stall.
+- Constant angular acceleration `TIP_ANGULAR_ACCEL = 25.0 rad/s^2`.
+- At `TIP_END_ANGLE = PI/2` the cube has cleared the edge; transitions
+  to straight gravity drop, inheriting the tangent's downward component
+  as initial `_fall_vel` for a smooth blend.
+- With no support at all (cube tumbled or collapsed onto void): no
+  pivot, straight drop, no tip.
 
-### Player + enemy rewiring
-- New `Player._cell_buildable(cell)`: `_extend_cell_clear(cell) and
-  _level.is_floor(cell)`. Used by `_extend_side_clear` and `_gap_ahead`.
-  Extension growing over void is blocked the same as into a wall.
-- Cube tumble over void: still allowed (placeholder fall). Extended
-  cuboid tumble over void: blocked in `_begin_tumble` after
-  `_can_move_cuboid` passes, by checking every new-footprint cell against
-  `_level.is_floor`. Falls through to `_begin_blocked_bump`, which with
-  gap=0 plays a soft thud.
-- `_extend_cell_clear` keeps its original "no wall" semantics (cover
-  detection still uses it; void must count as exposed-from-that-direction).
-- Enemy `_cell_blocked` now uses `not _level.is_floor(cell)` instead of
-  the hardcoded `NAV_MIN/NAV_MAX = ±13`. Constants deleted.
-- Player + Enemy `_ground_material` populated from
-  `preload("res://grid_ground_material.tres")` instead of reaching into
-  the deleted Ground node.
+### Wedge detection (the bug)
+- `_tip_collides_at(angle)` walks the cuboid's 8 corners, rotates them
+  to the test angle around the pivot, and returns true if any corner
+  dips below y=0 (floor surface) at an xz on a floor cell. Geometry is
+  correct: cuboid is convex so corners bound its lowest reach.
+- Triggers in real configurations like a tall+deep cuboid tipping back
+  into a 1-cell gap with floor behind it: the top-rear corner reaches
+  floor on the far side at roughly 63 degrees, before TIP_END_ANGLE.
+- **Bug**: when collision is detected, `fell.emit()` fires on the same
+  frame. Level's `_enter_fell` immediately pauses the tree and shows the
+  results panel. Player never sees the tip or the wedge. From the user's
+  POV: as soon as the unbalanced state begins, the game ends.
 
-### Scene migration
-- `main.tscn`, `mechanics_sandbox.tscn`, `levels/level_01_movement.tscn`:
-  - `Ground` node deleted (PlaneMesh + ShaderMaterial + WorldBoundary).
-  - PerimeterN/S/E/W: MeshInstance3D child deleted, StaticBody +
-    CollisionShape kept. Walls now invisible; red lines auto-render.
-  - `FloorRect` added at (-13, 0, -13) with size (27, 27).
-  - `WorldEnvironment.background_color` bumped from black to
-    `Color(0.1, 0.1, 0.12)` so the slab reads against the void.
-  - Tutorial level (`level_01_movement.tscn`) didn't have perimeter walls
-    before; added invisible collision so the tutorial doesn't accidentally
-    become a fall-off tutorial.
+## Open items / next session
 
-## Watch items / known edge cases
+### Wedge bug fix (highest priority before slice 3)
+Two things probably need to happen together:
 
-### New this session
-- **Cube fall-off is placeholder**: cube ends up at world y=0.5 over void.
-  Slice 2 turns that into a real fall + Fell panel.
-- **Background / side / top contrast is untuned in-editor**: defaults are
-  background `(0.1, 0.1, 0.12)`, top `(0.06, 0.06, 0.12)`, side
-  `(0.04, 0.04, 0.08)`. May need a tweak after eyes-on.
-- **Floor build is deferred one tick**: between scene `_ready` and the
-  first idle frame, `_floor_cells` is empty. Player and enemy only query
-  it from `_process` / pathfinding, so this is invisible in practice, but
-  any future code that needs the floor synchronously from `_ready` should
-  also defer or `await`.
-- **No FloorRect editor gizmo**: dragging the node in the viewport gives
-  no visual hint of which cells it'll spawn. Worth a small gizmo plugin
-  later if authoring gets tedious.
-- **Cover still counts the perimeter**: `_is_in_cover` reads physics walls
-  via `_extend_cell_clear`. Perimeter walls have collision, so blending
-  against an edge still works. Slice 1 doesn't change this behavior. If
-  it ever feels wrong design-wise, gate cover on `is_floor` neighbors.
-- **`FloorTile.tscn` is PascalCase on disk** while other scenes are
-  snake_case. Cosmetic; rename later if it bugs you.
+1. **Hold the wedge before emitting.** Add a `_wedged` state that holds
+   the cube frozen at the wedged angle for ~0.7-1.0s with the tree
+   running, then emits `fell`. Could be a simple timer or a frame
+   countdown. Same shape as the straight-drop path's FALL_END_Y delay
+   that the player implicitly sees as "cube falls out of view, then
+   panel".
+2. **Audit cell mapping for spurious immediate detections.** `roundi(1.5)`
+   in Godot 4 may not return what the wedge check assumes. The bottom-rear
+   corner of a tipping cuboid sits exactly on a cell boundary at angle 0
+   and moves slightly past it on the first frame; if `roundi` flips the
+   wrong way, the corner maps to the supported cell, registers a floor
+   hit, and the wedge fires immediately. Verify what `roundi(0.5)` and
+   `roundi(1.5)` actually return in Godot 4, and either:
+   - switch to `int(floor(x + 0.5 + epsilon))` with `epsilon` biased in
+     the corner's motion direction, or
+   - inset the corner sample by a small amount toward the pivot before
+     rounding, or
+   - exclude cells inside the support bbox from the wedge hit set (those
+     cells are the ones the corner is rotating AWAY from, so they
+     shouldn't register).
 
-### Carried from last session (still applicable)
-- **Stale enemy path through a freshly-hiding cell**: same as before.
-- **Search-through-corner**: same; level-design concern.
-- **Wall-colour camouflage caches at blend entry**: same.
-- **Pursuit's direct-line `_move_toward`**: same; non-issue in normal flow,
-  and now also bypasses the floor check, so pursuit will chase the player
-  off a cliff. Slice 2 fall will end the chase naturally.
-- **Unused WallRay nodes** under Player: still dead. Delete when convenient.
-- **DEBUG_DETECTION := true** in enemy_sphere.gd: drop at end of phase.
-- **Tall-pillar false blend**: same; parked.
-- **`GapWall*` and `Perimeter*` absent from shader LoS** because the
-  `_push_walls_to_shader` name filter is `Wall*`. Pre-existing. Not a
-  regression: the perimeter walls weren't in the LoS list before either.
-- **Two scenes still diverge**: main + sandbox.
-- **LoS multi-cell but centre-to-centre per cell**: same.
+The combination should give the player a visible tip + wedge before the
+panel.
 
-## Verification status
-None in-editor yet. Slice 1 needs eyes-on for: void contrast, slab look,
-red lines on perimeter, waves / footprints / cone all still rendering on
-tiles, enemy stays inside the floor, extension blocked at the edge,
-extended tumble blocked at the edge, cube tumble off the edge ends in
-placeholder mid-air (slice 2 will fix). User should verify before
-starting slice 2.
+### Test recipe once fixed
+Sandbox setup (will need a `FloorMissing` node added in editor):
+- `FloorMissing` at `(0, 0, 2)` size `(1, 1)` for a single-cell gap at
+  cell `(0, 2)` running between start cells and the existing walls.
 
-## Key files
-- `player.gd`: `class_name Player`. Tumble (footprint-aware wall + extended-
-  shape void block), extension via `_cell_buildable` (wall + floor combined),
-  dodge, auto-blend, ink + water, audio waves, footprints,
-  collapse-on-dodge, extend-lock state, grid accessors, DetectionArea
-  resized to footprint. `_ground_material` from
-  `preload("res://grid_ground_material.tres")`. `@onready _level` for
-  `is_floor` lookups.
+Cases to step through:
+1. Cube tumble onto the void → straight drop, "Fell" panel.
+2. Cube dodge OVER the void → safe; dodge that lands ON the void → falls.
+3. Extend right at `(1, 0)` toward void at `(2, 0)`: now creates a 1x2
+   unstable → tips into the hole.
+4. Build a 1x2 left-bar from a cell two south of the void, then extend
+   into the void cell: 1x3 with both ends supported → stable bridge.
+5. Get tall (EXT_UP twice), tumble across the gap: lands as a horizontal
+   1x3 spanning the gap → bridge.
+6. **The wedge case**: build a 1x2x2 (2 deep + 2 tall) two cells north
+   of the gap; tumble south once; the bar should tip back into the gap
+   and wedge against the floor north of it for ~1s, then "Fell".
+
+### Smaller open items
+- `roundi` behavior verified in Godot 4 (small unknown; doc check needed).
+- Tip axis can be diagonal in pathological 2x2 cases with corner-only
+  support; current code handles it but the wedge corner check loops
+  rotate around an arbitrary axis. Should still be correct but untested
+  visually.
+- Camera stays put during the fall; cube exits view from the bottom.
+  Slice D juice will refine this (follow Y, fog, fade).
+- No fall SFX. Cluster E will add it.
+- Stale enemy path / search-through-corner / pursuit's direct-line
+  `_move_toward` / unused WallRay nodes / `DEBUG_DETECTION = true` /
+  tall-pillar false blend / `Cover counts the perimeter` / two scenes
+  diverge / LoS centre-to-centre per cell: all carried from previous
+  handoffs, all unchanged.
+
+## Key files (slice 2 additions in **bold**)
+- `player.gd`: `class_name Player`. Tumble, extension (now allowed
+  unstable), dodge, auto-blend, ink + water, audio waves, footprints,
+  collapse-on-dodge, extend-lock state. **`fell` signal**;
+  **`_is_stable_at`, `_check_fall_at_settle`, `_begin_fall`,
+  `_setup_tip`, `_tip_collides_at`**; **falling block in `_process`
+  handling tip + drop + wedge**; **settle-time side-effect gates on
+  `not _falling`**.
 - `enemy_sphere.gd`: PATROL/SUSPICIOUS/INVESTIGATE/PURSUIT, graduated
-  detection, detection-driven cone, alert glyph, noise -> investigate,
-  footprint follow, A* nav with floor-data bounds (`_level.is_floor` in
-  `_cell_blocked`), multi-cell LoS, state hum + stings, debug readout.
-  `_ground_material` from preload.
-- `level.gd`: `class_name Level`. State machine (READY/PLAYING/COMPLETE/
-  CAUGHT); completion via end-tile Area3D OR `footprint_covers(_end_cell)`;
-  null-guards the enemy. NEW: `_floor_cells`, `is_floor`,
-  `get_floor_bounds`, `_build_world` (deferred), `_build_floor`,
-  `_build_safety_edges`.
-- `floor_rect.gd` / `floor_missing.gd`: `class_name` config nodes;
-  `size: Vector2i`; `cell_rect()` returns an absolute Rect2i using the
-  node's XZ position as min corner.
-- `FloorTile.tscn` + `grid_ground_material.tres`: per-cell unit; shared
-  shader material.
-- `shaders/grid_ground.gdshader`: world-space vertex + normal varyings;
-  top face = grid + waves + footprints + cone + fog; side = flat
-  `side_color`. Color uniforms: `top_base_color`, `side_color`,
-  `grid_line_color`.
-- `extend_lock_zone.gd` / `extend_lock_gate.gd`: unchanged.
+  detection, A* nav via `Level.is_floor` in `_cell_blocked`. Unchanged
+  this session.
+- `level.gd`: `class_name Level`. **`State.FELL` + `_enter_fell` +
+  `_on_player_fell`; restart key handler now covers FELL.** Floor data,
+  safety edges, completion logic otherwise unchanged.
+- `floor_rect.gd` / `floor_missing.gd` / `FloorTile.tscn` /
+  `grid_ground_material.tres` / `shaders/grid_ground.gdshader`: slice 1
+  + polish. Unchanged this session.
 - `main.tscn` / `mechanics_sandbox.tscn` / `levels/level_01_movement.tscn`:
-  FloorRect-based floor; perimeter walls invisible-collision-only; void
-  background `(0.1, 0.1, 0.12)`.
-- Design: `game-dev/Cube Game.md` (v0.2). Tasks:
-  `game-dev/Cube Game Tasks.md` (Phase 8).
+  slice 1. Unchanged this session.
 
 ## Input map
 | Action | Controller | Keyboard |
@@ -202,33 +200,35 @@ starting slice 2.
 
 Blend is automatic (stand still in cover). Jump cut by design.
 
-## Tuning backlog (end-of-phase pass)
+## Tuning backlog
+- **Fall**: `FALL_GRAVITY` 25.0, `FALL_END_Y` -6.0. ~0.7s straight drop.
+- **Tip**: `TIP_ANGULAR_ACCEL` 25.0, `TIP_INITIAL_VEL` 1.5,
+  `TIP_END_ANGLE` PI/2. ~0.3s tip then drop.
+- **Wedge hold (proposed)**: 0.7-1.0s freeze before `fell.emit()`.
 - **Floor / void contrast** (slice 1): WorldEnvironment background
-  `(0.1, 0.1, 0.12)`, shader uniforms `top_base_color` `(0.06, 0.06, 0.12)`,
-  `side_color` `(0.04, 0.04, 0.08)`, `grid_line_color` `(0, 1, 1)`. Tune
-  any of these without code changes via the `.tres` and the
-  WorldEnvironment.
-- **Safety edge** (slice 1): hardcoded red `(0.9, 0.15, 0.15)` with
-  emission energy 1.5, box (0.05 x 0.05 x 1), y=0.5. Lift into named
-  constants when tuning.
-- Blend: `BLEND_ENTER_TIME` 0.4, `BLEND_EXIT_TIME` 0.15. Footprint tile
-  half-extent 0.4 and falloff 0.1.
+  `(0.2, 0.2, 0.24)`, top_base_color `(0.06, 0.06, 0.12)`, side_color
+  `(0.04, 0.04, 0.08)`. Tron neon edge uniforms tuned in `.tres`:
+  `line_core_width` 0.005, `line_falloff_width` 0.5, `line_falloff_exp`
+  10, `line_glow_strength` 1.5; side core 0.01 with zero glow.
+- **Safety edge** (slice 1): `SAFETY_EDGE_Y` 0.02, `_PERP` 0.04, `_VERT`
+  0.02, `_ENERGY` 0.6.
+- Blend: `BLEND_ENTER_TIME` 0.4, `BLEND_EXIT_TIME` 0.15.
 - Won't-fit bump: `BUMP_DURATION` 0.25, `BUMP_ANGLE` PI/10,
-  `BUMP_CLEARANCE` 0.15, thud volume 0.35 / pitch 0.5.
-- Detection (`DETECT_*`), cone (`CONE_*`), glyph, hum/stings, footprints
-  (`FOOTPRINT_FADE_TIME` 12.0), knock (`KNOCK_RADIUS` 10.0,
-  `KNOCK_COOLDOWN` 0.4), extend-lock (`GHOST_*`), nav (`TURN_*`,
-  `CORRIDOR_HYSTERESIS`), fog `dark_factor` 0.25.
+  `BUMP_CLEARANCE` 0.15.
+- Detection, cone, glyph, hum / stings, footprints, knock, extend-lock,
+  nav, fog: untouched, see previous handoff for the list.
 
 ## Memory notes worth checking
 - Read HANDOFF.md first thing at session start.
 - Godot headless CLI at `~/.local/bin/godot`. Parse-check via
   `godot --headless --editor --quit 2>&1 | grep -E "SCRIPT ERROR|Parse Error|SHADER ERROR"`.
-  Smoke-load a scene via `godot --headless --quit-after 30 <scene>` and
-  grep for `ERROR|error`. Exit code is 0 even on errors, so always grep.
-- Active verbs (sprint/dodge/knock) are cube-only; extension is a
-  positional commitment, including the "won't tumble into void" rule.
+  Smoke-load via `godot --headless --quit-after 30 <scene>` and grep for
+  `ERROR|error`. Exit code is 0 even on errors, always grep.
+- Active verbs (sprint / dodge / knock) are cube-only; extension is a
+  positional commitment for MOTION (no dodge while extended) but NOT a
+  safety lock (extending into an unstable state is allowed; cube falls).
+  This is a deliberate revision from the slice-1 reading.
 - Design v0.2 (reactive-stealth, shape-vs-exposure, jump cut).
-- No Co-Authored-By trailer; no em/en dashes; commit at session end or on
-  request. Transform3D row-major; ink/water binary cleanse; GDScript
+- No Co-Authored-By trailer; no em / en dashes; commit at session end or
+  on request. Transform3D row-major; ink / water binary cleanse; GDScript
   inference with untyped arrays.

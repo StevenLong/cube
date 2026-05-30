@@ -5,6 +5,7 @@ signal tumbled
 signal move_settled
 signal noise_emitted(origin: Vector2, max_radius: float, duration: float)
 signal caught
+signal fell
 
 const TUMBLE_DURATION := 0.3
 const SPRINT_DURATION := 0.15
@@ -17,6 +18,11 @@ const KNOCK_COOLDOWN := 0.4  # min seconds between wall knocks
 const BUMP_DURATION := 0.25  # won't-fit lean-and-rock-back for a blocked extended move
 const BUMP_ANGLE := PI / 10.0  # peak lean (~18 deg) before rocking back, scaled down near a wall
 const BUMP_CLEARANCE := 0.15  # air gap kept between the lean's leading corner and the wall
+const FALL_GRAVITY := 25.0  # units/s^2; accelerates the cube straight down after settling on void
+const FALL_END_Y := -6.0  # cube is below view by here; emit `fell` and let level take over
+const TIP_ANGULAR_ACCEL := 25.0  # rad/s^2 — rotational gravity tipping the cube into the hole
+const TIP_INITIAL_VEL := 1.5  # rad/s initial kick; handles the knife-edge balance case
+const TIP_END_ANGLE := PI / 2.0  # at 90° the cuboid has tipped past the edge; hand off to straight drop
 const MAX_WAVES := 8
 const MAX_FOOTPRINTS := 64
 const FOOTPRINT_FADE_TIME := 12.0  # seconds for a deposited print to fade out and clear
@@ -73,6 +79,15 @@ var _bump_t := 0.0
 var _bump_pivot := Vector3.ZERO
 var _bump_axis := Vector3.ZERO
 var _bump_angle := 0.0
+var _falling := false
+var _fall_vel: float = 0.0
+var _tipping := false
+var _tip_pivot := Vector3.ZERO
+var _tip_axis := Vector3.UP  # recomputed in _setup_tip
+var _tip_angle: float = 0.0
+var _tip_vel: float = 0.0
+var _tip_start_pos := Vector3.ZERO
+var _tip_start_basis := Basis.IDENTITY
 var _smoothed_focus := Vector3.ZERO
 var _dodge_held_consumed := false  # a dodge press that collapsed an extension; suppresses dodge until released
 var _extend_locked := false
@@ -300,23 +315,24 @@ func _try_extend(side: int) -> void:
 	if not _extend_side_clear(side):
 		return
 	_ext[side] += 1
-	# Extension is a shape change at rest, same family of event as a tumble settle.
-	# Mirror that path so growing over ink marks the down face, growing over water
-	# cleanses marks, a marked extension deposits prints across the new footprint,
-	# and the level can complete when the footprint reaches the end cell without a
-	# follow-up tumble.
-	if side != EXT_UP:
+	# Extension is a shape-change settle: run the same fall check tumbles do,
+	# so an extension that tips the cuboid past its support starts falling. The
+	# ink / water / footprint / move_settled side effects gate on not _falling
+	# for parity with the tumble path.
+	_check_fall_at_settle()
+	if not _falling and side != EXT_UP:
 		_check_ink_contact_footprint()
 		_check_water_contact_footprint()
 		_maybe_deposit_footprint()
-	move_settled.emit()
+	if not _falling:
+		move_settled.emit()
 
 
 func _extend_side_clear(side: int) -> bool:
-	# An extension may not grow into a wall or out over void. EXT_UP grows into
-	# the air (no ground cells), so it is always clear; otherwise check every
-	# new footprint cell the extension would add along that side via
-	# _cell_buildable (wall + floor combined).
+	# An extension may not grow into a wall. EXT_UP grows into the air, always
+	# clear; otherwise check every new footprint cell along that side for wall
+	# collision. Floor-vs-void is handled separately by the stability test in
+	# _try_extend: void is reachable if the resulting shape stays balanced.
 	if side == EXT_UP:
 		return true
 	var minx: int = grid_pos.x - _ext[EXT_LEFT]
@@ -326,19 +342,19 @@ func _extend_side_clear(side: int) -> bool:
 	match side:
 		EXT_LEFT:
 			for z in range(minz, maxz + 1):
-				if not _cell_buildable(Vector2i(minx - 1, z)):
+				if not _extend_cell_clear(Vector2i(minx - 1, z)):
 					return false
 		EXT_RIGHT:
 			for z in range(minz, maxz + 1):
-				if not _cell_buildable(Vector2i(maxx + 1, z)):
+				if not _extend_cell_clear(Vector2i(maxx + 1, z)):
 					return false
 		EXT_FWD:
 			for x in range(minx, maxx + 1):
-				if not _cell_buildable(Vector2i(x, minz - 1)):
+				if not _extend_cell_clear(Vector2i(x, minz - 1)):
 					return false
 		EXT_BACK:
 			for x in range(minx, maxx + 1):
-				if not _cell_buildable(Vector2i(x, maxz + 1)):
+				if not _extend_cell_clear(Vector2i(x, maxz + 1)):
 					return false
 	return true
 
@@ -356,15 +372,6 @@ func _extend_cell_clear(cell: Vector2i) -> bool:
 	params.collision_mask = 1
 	params.collide_with_areas = false
 	return space.intersect_point(params).is_empty()
-
-
-func _cell_buildable(cell: Vector2i) -> bool:
-	# True if the cell has no wall AND is a floor cell. Extending or tumbling an
-	# extended cuboid into void is blocked the same as into a wall: extension is
-	# a positional commitment, so a bar won't lay out over a gap. Use this for
-	# extension growth and won't-fit-bump gap measurement; cover detection still
-	# uses _extend_cell_clear.
-	return _extend_cell_clear(cell) and _level.is_floor(cell)
 
 
 func _reset_extensions() -> void:
@@ -528,19 +535,10 @@ func _begin_tumble(dir: Vector2i) -> void:
 	if not _can_move_cuboid(dir, move):
 		return
 
-	# Extended cuboid is a positional commitment: refuse to tumble into a
-	# landing footprint that contains void. Cube tumbles (not extended) still
-	# go over the edge — they fall, handled in slice 2.
-	if _is_extended():
-		var new_pos: Vector2i = grid_pos + dir * move
-		var minx: int = new_pos.x - new_ext[EXT_LEFT]
-		var maxx: int = new_pos.x + new_ext[EXT_RIGHT]
-		var minz: int = new_pos.y - new_ext[EXT_FWD]
-		var maxz: int = new_pos.y + new_ext[EXT_BACK]
-		for x in range(minx, maxx + 1):
-			for z in range(minz, maxz + 1):
-				if not _level.is_floor(Vector2i(x, z)):
-					return
+	# Floor isn't a tumble blocker any more: tumbles may land on void or on
+	# a stable bridge config. The settle-time stability check (run in _process
+	# after the animation finishes) is what decides between "ok landing" and
+	# "tip and fall".
 
 	_pivot = Vector3(pivot_x, 0.0, pivot_z)
 	_pending_ext = new_ext
@@ -570,6 +568,165 @@ func _begin_dodge(dir: Vector2i) -> void:
 	_dodge_t = 0.0
 	_dodge_duration = DODGE_DURATION * float(max_dist) / float(DODGE_DISTANCE)
 	_dodging = true
+
+
+func _check_fall_at_settle() -> void:
+	# Called after every settle event (tumble end, dodge end, collapse). The
+	# shape is stable iff its geometric center is strictly inside the bounding
+	# box of supported (floor) footprint cells. Anything else falls. Idempotent
+	# so a second settle inside the same fall doesn't restart it.
+	if _falling:
+		return
+	if not _is_stable_at(grid_pos, _ext):
+		_begin_fall()
+
+
+func _is_stable_at(test_grid_pos: Vector2i, test_ext: Array) -> bool:
+	# Center-of-gravity model: the cuboid is stable iff its geometric center
+	# (in world XZ) sits strictly inside the axis-aligned bounding box of the
+	# floor cells under its footprint. Strict so a 1x2 with one cell over void
+	# (centre exactly on the boundary) counts as a tip.
+	#
+	# Bounding box (not convex hull) is loose for L-shaped or diagonal support
+	# patterns, but every common case (1xN bars, NxM rectangles with one corner
+	# void) lands the same answer either way. Tighten to a proper hull if a
+	# pathological case shows up.
+	var center_x: float = float(test_grid_pos.x) + float(test_ext[EXT_RIGHT] - test_ext[EXT_LEFT]) * 0.5
+	var center_z: float = float(test_grid_pos.y) + float(test_ext[EXT_BACK] - test_ext[EXT_FWD]) * 0.5
+	var minx: int = test_grid_pos.x - test_ext[EXT_LEFT]
+	var maxx: int = test_grid_pos.x + test_ext[EXT_RIGHT]
+	var minz: int = test_grid_pos.y - test_ext[EXT_FWD]
+	var maxz: int = test_grid_pos.y + test_ext[EXT_BACK]
+	var sup_minx: int = 0
+	var sup_maxx: int = 0
+	var sup_minz: int = 0
+	var sup_maxz: int = 0
+	var found := false
+	for x in range(minx, maxx + 1):
+		for z in range(minz, maxz + 1):
+			if not _level.is_floor(Vector2i(x, z)):
+				continue
+			if not found:
+				sup_minx = x
+				sup_maxx = x
+				sup_minz = z
+				sup_maxz = z
+				found = true
+			else:
+				sup_minx = mini(sup_minx, x)
+				sup_maxx = maxi(sup_maxx, x)
+				sup_minz = mini(sup_minz, z)
+				sup_maxz = maxi(sup_maxz, z)
+	if not found:
+		return false
+	return (
+		center_x > float(sup_minx) - 0.5
+		and center_x < float(sup_maxx) + 0.5
+		and center_z > float(sup_minz) - 0.5
+		and center_z < float(sup_maxz) + 0.5
+	)
+
+
+func _begin_fall() -> void:
+	# Engage the fall: clear in-progress animation flags so _process's falling
+	# branch owns motion outright, and reset blend so the cube doesn't drop
+	# while still tinted with cover color. _setup_tip picks between tipping
+	# around a supported edge or a straight drop based on remaining support.
+	_falling = true
+	_fall_vel = 0.0
+	_tumbling = false
+	_dodging = false
+	_bumping = false
+	is_blending = false
+	is_hiding = false
+	_blend_phase = 0.0
+	_player_material.albedo_color = _base_color()
+	_setup_tip()
+
+
+func _tip_collides_at(angle: float) -> bool:
+	# True if any of the cuboid's 8 corners, rotated to `angle` around the tip
+	# pivot, would dip below floor surface (y < 0) at an xz on a floor cell.
+	# Stops the tip when a tall cuboid would clip into floor on the far side
+	# of the gap instead of swinging clean past it; the cube wedges there.
+	# The cuboid is convex so corners bound its lowest reach in every rotation.
+	var minx: float = float(grid_pos.x) - float(_ext[EXT_LEFT]) - 0.5
+	var maxx: float = float(grid_pos.x) + float(_ext[EXT_RIGHT]) + 0.5
+	var minz: float = float(grid_pos.y) - float(_ext[EXT_FWD]) - 0.5
+	var maxz: float = float(grid_pos.y) + float(_ext[EXT_BACK]) + 0.5
+	var ymax: float = 1.0 + float(_ext[EXT_UP])
+	var xs := [minx, maxx]
+	var ys := [0.0, ymax]
+	var zs := [minz, maxz]
+	for x in xs:
+		for y in ys:
+			for z in zs:
+				var corner := Vector3(x, y, z)
+				var rotated := (corner - _tip_pivot).rotated(_tip_axis, angle) + _tip_pivot
+				if rotated.y >= 0.0:
+					continue
+				var cell := Vector2i(roundi(rotated.x), roundi(rotated.z))
+				if _level.is_floor(cell):
+					return true
+	return false
+
+
+func _setup_tip() -> void:
+	# Decide whether the fall is a tip (any footprint cell still supported) or
+	# a straight drop (none). For a tip, the pivot is the point on the support
+	# bounding box closest to the centre of mass; the axis is perpendicular to
+	# that overhang so positive rotation drops the unsupported side. When the
+	# COG sits exactly on the support boundary (the knife-edge 1x2 case), pick
+	# the tip direction from footprint-centre vs support-centre instead.
+	_tipping = false
+	var center_x: float = float(grid_pos.x) + float(_ext[EXT_RIGHT] - _ext[EXT_LEFT]) * 0.5
+	var center_z: float = float(grid_pos.y) + float(_ext[EXT_BACK] - _ext[EXT_FWD]) * 0.5
+	var minx: int = grid_pos.x - _ext[EXT_LEFT]
+	var maxx: int = grid_pos.x + _ext[EXT_RIGHT]
+	var minz: int = grid_pos.y - _ext[EXT_FWD]
+	var maxz: int = grid_pos.y + _ext[EXT_BACK]
+	var sup_minx: int = 0
+	var sup_maxx: int = 0
+	var sup_minz: int = 0
+	var sup_maxz: int = 0
+	var found := false
+	for x in range(minx, maxx + 1):
+		for z in range(minz, maxz + 1):
+			if not _level.is_floor(Vector2i(x, z)):
+				continue
+			if not found:
+				sup_minx = x
+				sup_maxx = x
+				sup_minz = z
+				sup_maxz = z
+				found = true
+			else:
+				sup_minx = mini(sup_minx, x)
+				sup_maxx = maxi(sup_maxx, x)
+				sup_minz = mini(sup_minz, z)
+				sup_maxz = maxi(sup_maxz, z)
+	if not found:
+		return
+	var pivot_x: float = clampf(center_x, float(sup_minx) - 0.5, float(sup_maxx) + 0.5)
+	var pivot_z: float = clampf(center_z, float(sup_minz) - 0.5, float(sup_maxz) + 0.5)
+	var dx: float = center_x - pivot_x
+	var dz: float = center_z - pivot_z
+	if absf(dx) < 0.001 and absf(dz) < 0.001:
+		var foot_cx: float = float(minx + maxx) * 0.5
+		var foot_cz: float = float(minz + maxz) * 0.5
+		var sup_cx: float = float(sup_minx + sup_maxx) * 0.5
+		var sup_cz: float = float(sup_minz + sup_maxz) * 0.5
+		dx = foot_cx - sup_cx
+		dz = foot_cz - sup_cz
+	if absf(dx) < 0.001 and absf(dz) < 0.001:
+		return
+	_tipping = true
+	_tip_pivot = Vector3(pivot_x, 0.0, pivot_z)
+	_tip_axis = Vector3(dz, 0.0, -dx).normalized()
+	_tip_angle = 0.0
+	_tip_vel = TIP_INITIAL_VEL
+	_tip_start_pos = position
+	_tip_start_basis = basis
 
 
 func _begin_blocked_bump(dir: Vector2i) -> void:
@@ -617,11 +774,12 @@ func _begin_blocked_bump(dir: Vector2i) -> void:
 
 
 func _gap_ahead(dir: Vector2i) -> int:
-	# Buildable cells between the leading face and the nearest obstruction along
-	# dir, taken as the minimum across the face's width (the binding side).
-	# Capped at the cuboid height — past that the lean is already maxed, so more
-	# room is irrelevant. Void counts as blocking the same as a wall (we don't
-	# tip an extended shape into a fall hazard).
+	# Cells clear of walls between the leading face and the nearest obstruction
+	# along dir, taken as the minimum across the face's width (the binding
+	# side). Capped at the cuboid height — past that the lean is maxed, so
+	# more room is irrelevant. Void cells count as clear: the bump animation
+	# only fires when wall-blocked, and the lean magnitude is about how far
+	# the shape can tip before something solid stops it.
 	var minx: int = grid_pos.x - _ext[EXT_LEFT]
 	var maxx: int = grid_pos.x + _ext[EXT_RIGHT]
 	var minz: int = grid_pos.y - _ext[EXT_FWD]
@@ -632,14 +790,14 @@ func _gap_ahead(dir: Vector2i) -> int:
 		var lead_x: int = (maxx if dir.x > 0 else minx)
 		for z in range(minz, maxz + 1):
 			var d := 0
-			while d < cap and _cell_buildable(Vector2i(lead_x + dir.x * (d + 1), z)):
+			while d < cap and _extend_cell_clear(Vector2i(lead_x + dir.x * (d + 1), z)):
 				d += 1
 			gap = mini(gap, d)
 	else:
 		var lead_z: int = (maxz if dir.y > 0 else minz)
 		for x in range(minx, maxx + 1):
 			var d := 0
-			while d < cap and _cell_buildable(Vector2i(x, lead_z + dir.y * (d + 1))):
+			while d < cap and _extend_cell_clear(Vector2i(x, lead_z + dir.y * (d + 1))):
 				d += 1
 			gap = mini(gap, d)
 	return gap
@@ -777,6 +935,45 @@ func _process(delta: float) -> void:
 	if _knock_cooldown_t > 0.0:
 		_knock_cooldown_t = maxf(_knock_cooldown_t - delta, 0.0)
 
+	# Falling: cuboid lost stability. Two phases. While _tipping, rotate the
+	# cube around the supported edge with angular acceleration so the
+	# unsupported side pivots into the hole; if a corner of the cuboid would
+	# clip into floor on the far side of the gap, freeze the rotation (wedge)
+	# and emit fell immediately. At TIP_END_ANGLE the cube has cleared the
+	# edge; hand off to straight gravity, inheriting the tangent's downward
+	# component as initial _fall_vel. With no support to tip around (cube
+	# tumbled alone onto void), skip the tip and drop straight. In the drop
+	# branch, position.y crossing FALL_END_Y triggers the fell signal.
+	if _falling:
+		if _tipping:
+			_tip_vel += TIP_ANGULAR_ACCEL * delta
+			var new_angle := _tip_angle + _tip_vel * delta
+			if _tip_collides_at(new_angle):
+				fell.emit()
+				_falling = false
+				_tipping = false
+				return
+			_tip_angle = new_angle
+			if _tip_angle >= TIP_END_ANGLE:
+				_tip_angle = TIP_END_ANGLE
+				var end_offset := (_tip_start_pos - _tip_pivot).rotated(_tip_axis, _tip_angle)
+				var tangent := _tip_axis.cross(end_offset)
+				_fall_vel = maxf(0.0, -tangent.y * _tip_vel)
+				position = _tip_pivot + end_offset
+				basis = Basis(_tip_axis, _tip_angle) * _tip_start_basis
+				_tipping = false
+			else:
+				position = _tip_pivot + (_tip_start_pos - _tip_pivot).rotated(_tip_axis, _tip_angle)
+				basis = Basis(_tip_axis, _tip_angle) * _tip_start_basis
+		else:
+			_fall_vel += FALL_GRAVITY * delta
+			position.y -= _fall_vel * delta
+		if position.y <= FALL_END_Y:
+			fell.emit()
+			_falling = false
+			_tipping = false
+		return
+
 	# Blend phase: rises only when at rest, still, and in cover; forced toward 0
 	# during animations so the cube visibly fades back as motion starts. Enter is
 	# slow (the delay IS the fade), exit is fast so peeking out is detectable
@@ -809,9 +1006,11 @@ func _process(delta: float) -> void:
 			_dodging = false
 			position = _dodge_end_pos
 			_dodge_cooldown_t = DODGE_COOLDOWN
-			_check_ink_contact()
-			_check_water_contact()
-			move_settled.emit()
+			_check_fall_at_settle()
+			if not _falling:
+				_check_ink_contact()
+				_check_water_contact()
+				move_settled.emit()
 		_update_mesh()
 		return
 
@@ -829,11 +1028,13 @@ func _process(delta: float) -> void:
 			basis = Basis.IDENTITY
 			_orient = _quantize_basis(Basis(_axis, _angle) * _orient)
 			_ext = _pending_ext
-			_play_step(TUMBLE_DURATION / per_cell)
-			_check_ink_contact_footprint()
-			_check_water_contact_footprint()
-			_maybe_deposit_footprint()
-			move_settled.emit()
+			_check_fall_at_settle()
+			if not _falling:
+				_play_step(TUMBLE_DURATION / per_cell)
+				_check_ink_contact_footprint()
+				_check_water_contact_footprint()
+				_maybe_deposit_footprint()
+				move_settled.emit()
 		_update_mesh()
 		return
 
@@ -873,6 +1074,9 @@ func _process(delta: float) -> void:
 		_reset_extensions()
 		_dodge_held_consumed = true
 		_update_mesh()
+		# Collapse shifts grid_pos to the cuboid centre; if that lands on void
+		# (the bridge case collapsing over its gap) the cube starts to fall.
+		_check_fall_at_settle()
 		return
 
 	var dodge_primed := Input.is_action_pressed("dodge") and _dodge_cooldown_t <= 0.0 and not _is_extended() and not _dodge_held_consumed

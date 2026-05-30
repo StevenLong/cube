@@ -1,7 +1,7 @@
 class_name Level
 extends Node
 
-enum State { READY, PLAYING, COMPLETE, CAUGHT }
+enum State { READY, PLAYING, COMPLETE, CAUGHT, FELL }
 
 const PULSE_BASE := 1.5
 const PULSE_AMPLITUDE := 1.0
@@ -55,6 +55,7 @@ func _ready() -> void:
 	_player.tumbled.connect(_on_player_tumbled)
 	_player.move_settled.connect(_on_player_move_settled)
 	_player.caught.connect(_on_player_caught)
+	_player.fell.connect(_on_player_fell)
 	if _enemy != null:
 		_enemy.entered_pursuit.connect(_on_enemy_pursuit)
 	else:
@@ -83,7 +84,7 @@ func _process(delta: float) -> void:
 				_enter_playing()
 		State.PLAYING:
 			time_elapsed += delta
-		State.COMPLETE, State.CAUGHT:
+		State.COMPLETE, State.CAUGHT, State.FELL:
 			_complete_t += delta
 			if _complete_t >= RESTART_DELAY and _restart_pressed():
 				get_tree().reload_current_scene()
@@ -135,6 +136,17 @@ func _enter_caught() -> void:
 	_results_panel.show()
 
 
+func _enter_fell() -> void:
+	state = State.FELL
+	_complete_t = 0.0
+	get_tree().paused = true
+	_result_title.text = "Fell"
+	_result_moves.text = "Moves: %d" % moves
+	_result_time.text = "Time: %.1fs" % time_elapsed
+	_result_spotted.hide()
+	_results_panel.show()
+
+
 func _on_player_tumbled() -> void:
 	if state == State.PLAYING:
 		moves += 1
@@ -147,6 +159,11 @@ func _on_enemy_pursuit() -> void:
 func _on_player_caught() -> void:
 	if state == State.PLAYING:
 		_enter_caught()
+
+
+func _on_player_fell() -> void:
+	if state == State.PLAYING:
+		_enter_fell()
 
 
 func _on_end_entered(_area: Area3D) -> void:

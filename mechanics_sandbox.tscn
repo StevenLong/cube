@@ -1,5 +1,6 @@
 [gd_scene format=3 uid="uid://b1q3ys71y3idn"]
 
+[ext_resource type="Script" uid="uid://clwk1wjf3h2uf" path="res://floor_missing.gd" id="1_q676v"]
 [ext_resource type="Script" uid="uid://imjs3qgnnax" path="res://player.gd" id="2"]
 [ext_resource type="Script" uid="uid://cjpdmrd4ev3o8" path="res://camera_controller.gd" id="3"]
 [ext_resource type="Script" uid="uid://dw6hiashyk0sh" path="res://level.gd" id="5"]
@@ -83,6 +84,7 @@ albedo_color = Color(0.9, 0.2, 0.2, 0.5)
 size = Vector3(0.4, 1.5, 3)
 
 [node name="Node3D" type="Node3D" unique_id=1563203234]
+script = ExtResource("1_q676v")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=269945299]
 environment = SubResource("Environment_1")
@@ -370,3 +372,24 @@ surface_material_override/0 = SubResource("Mat_Gate")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Gate" unique_id=1134448909]
 shape = SubResource("BoxShape3D_Gate")
+
+[node name="FloorMissing" type="Node3D" parent="." unique_id=1272986215]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 0, 0)
+script = ExtResource("1_q676v")
+size = Vector2i(1, 3)
+metadata/_custom_type_script = "uid://clwk1wjf3h2uf"
+
+[node name="FloorMissing2" type="Node3D" parent="." unique_id=1510339873]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 0, 0)
+script = ExtResource("1_q676v")
+metadata/_custom_type_script = "uid://clwk1wjf3h2uf"
+
+[node name="FloorMissing3" type="Node3D" parent="." unique_id=433651632]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 0, 4)
+script = ExtResource("1_q676v")
+metadata/_custom_type_script = "uid://clwk1wjf3h2uf"
+
+[node name="FloorMissing4" type="Node3D" parent="." unique_id=1214943997]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 7, 0, 4)
+script = ExtResource("1_q676v")
+metadata/_custom_type_script = "uid://clwk1wjf3h2uf"
