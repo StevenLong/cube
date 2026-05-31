@@ -1,16 +1,16 @@
 extends Control
 
 
-@onready var _tutorial_button: Button = $VBox/Tutorial1Button
+@onready var _tutorials_button: Button = $VBox/TutorialsButton
 @onready var _sandbox_button: Button = $VBox/SandboxButton
 @onready var _quit_button: Button = $VBox/QuitButton
 
 
 func _ready() -> void:
-	_tutorial_button.pressed.connect(_load.bind("res://levels/level_01_movement.tscn"))
+	_tutorials_button.pressed.connect(_load.bind("res://tutorials_menu.tscn"))
 	_sandbox_button.pressed.connect(_load.bind("res://main.tscn"))
 	_quit_button.pressed.connect(_quit)
-	_tutorial_button.grab_focus()
+	_tutorials_button.grab_focus()
 
 
 func _input(event: InputEvent) -> void:

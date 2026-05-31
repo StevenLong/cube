@@ -1,8 +1,8 @@
-[gd_scene format=3 uid="uid://bwcpmnreak441"]
+[gd_scene format=3 uid="uid://b8tutmenu0001"]
 
-[ext_resource type="Script" path="res://main_menu.gd" id="1"]
+[ext_resource type="Script" path="res://tutorials_menu.gd" id="1"]
 
-[node name="MainMenu" type="Control"]
+[node name="TutorialsMenu" type="Control"]
 anchor_right = 1.0
 anchor_bottom = 1.0
 script = ExtResource("1")
@@ -24,24 +24,24 @@ offset_bottom = 160.0
 theme_override_constants/separation = 12
 
 [node name="Title" type="Label" parent="VBox"]
-text = "Cube"
+text = "Tutorials"
 horizontal_alignment = 1
 theme_override_font_sizes/font_size = 64
 
 [node name="Spacer" type="Control" parent="VBox"]
 custom_minimum_size = Vector2(0, 24)
 
-[node name="TutorialsButton" type="Button" parent="VBox"]
+[node name="Tutorial1Button" type="Button" parent="VBox"]
 custom_minimum_size = Vector2(0, 48)
-text = "Tutorials"
+text = "1: Movement"
 theme_override_font_sizes/font_size = 22
 
-[node name="SandboxButton" type="Button" parent="VBox"]
+[node name="Tutorial2Button" type="Button" parent="VBox"]
 custom_minimum_size = Vector2(0, 48)
-text = "Sandbox"
+text = "2: Maneuvering"
 theme_override_font_sizes/font_size = 22
 
-[node name="QuitButton" type="Button" parent="VBox"]
+[node name="BackButton" type="Button" parent="VBox"]
 custom_minimum_size = Vector2(0, 48)
-text = "Quit"
+text = "Back"
 theme_override_font_sizes/font_size = 22
