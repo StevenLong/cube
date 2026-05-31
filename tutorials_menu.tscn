@@ -41,6 +41,11 @@ custom_minimum_size = Vector2(0, 48)
 text = "2: Maneuvering"
 theme_override_font_sizes/font_size = 22
 
+[node name="Tutorial3Button" type="Button" parent="VBox"]
+custom_minimum_size = Vector2(0, 48)
+text = "3: Extend & bridge"
+theme_override_font_sizes/font_size = 22
+
 [node name="BackButton" type="Button" parent="VBox"]
 custom_minimum_size = Vector2(0, 48)
 text = "Back"

@@ -1,0 +1,264 @@
+[gd_scene format=3 uid="uid://b4w1y4ohvwki1"]
+
+[ext_resource type="Script" path="res://player.gd" id="2"]
+[ext_resource type="Script" path="res://camera_controller.gd" id="3"]
+[ext_resource type="Script" path="res://level.gd" id="5"]
+[ext_resource type="Script" path="res://floor_rect.gd" id="8"]
+[ext_resource type="Script" path="res://floor_missing.gd" id="9"]
+[ext_resource type="Script" path="res://extend_lock_zone.gd" id="10"]
+[ext_resource type="Script" path="res://extend_lock_gate.gd" id="11"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_1"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_1"]
+albedo_color = Color(0.9, 0.9, 0.9, 1)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_1"]
+size = Vector3(1, 1, 1)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_2"]
+size = Vector3(0.9, 0.9, 0.9)
+
+[sub_resource type="Environment" id="Environment_1"]
+background_mode = 1
+background_color = Color(0.2, 0.2, 0.24, 1)
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_Tile"]
+size = Vector2(0.95, 0.95)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_Start"]
+albedo_color = Color(0.2, 0.7, 1, 1)
+emission_enabled = true
+emission = Color(0.2, 0.7, 1, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_End"]
+albedo_color = Color(1, 0.75, 0.2, 1)
+emission_enabled = true
+emission = Color(1, 0.75, 0.2, 1)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_EndArea"]
+size = Vector3(0.9, 0.5, 0.9)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_PerimeterNS"]
+size = Vector3(22, 1, 1)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_PerimeterEW"]
+size = Vector3(1, 1, 3)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_Zone"]
+size = Vector3(0.9, 1, 0.9)
+
+[sub_resource type="BoxMesh" id="BoxMesh_Gate"]
+size = Vector3(0.4, 3, 1)
+
+[sub_resource type="StandardMaterial3D" id="Mat_Gate"]
+transparency = 1
+albedo_color = Color(0.9, 0.2, 0.2, 0.5)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_Gate"]
+size = Vector3(0.4, 3, 1)
+
+[node name="Node3D" type="Node3D"]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_1")
+
+[node name="FloorRect" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+script = ExtResource("8")
+size = Vector2i(20, 1)
+
+[node name="FloorMissing" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 10, 0, 0)
+script = ExtResource("9")
+size = Vector2i(1, 1)
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.707107, 0.707107, 0, -0.707107, 0.707107, 0, 8, 8)
+script = ExtResource("3")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.5, 0.866025, 0, -0.866025, 0.5, 0, 0, 0)
+
+[node name="Player" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
+script = ExtResource("2")
+
+[node name="StepSound" type="AudioStreamPlayer" parent="Player"]
+
+[node name="SplashSound" type="AudioStreamPlayer" parent="Player"]
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Player"]
+mesh = SubResource("BoxMesh_1")
+surface_material_override/0 = SubResource("StandardMaterial3D_1")
+
+[node name="DetectionArea" type="Area3D" parent="Player"]
+collision_layer = 2
+collision_mask = 20
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Player/DetectionArea"]
+shape = SubResource("BoxShape3D_1")
+
+[node name="MoveCast" type="ShapeCast3D" parent="Player"]
+shape = SubResource("BoxShape3D_2")
+collision_mask = 1
+target_position = Vector3(0, 0, 0)
+
+[node name="WallRayN" type="RayCast3D" parent="Player"]
+target_position = Vector3(0, 0, -1)
+collision_mask = 1
+
+[node name="WallRayS" type="RayCast3D" parent="Player"]
+target_position = Vector3(0, 0, 1)
+collision_mask = 1
+
+[node name="WallRayE" type="RayCast3D" parent="Player"]
+target_position = Vector3(1, 0, 0)
+collision_mask = 1
+
+[node name="WallRayW" type="RayCast3D" parent="Player"]
+target_position = Vector3(-1, 0, 0)
+collision_mask = 1
+
+[node name="PerimeterN" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 9.5, 0.5, -1)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="PerimeterN"]
+shape = SubResource("BoxShape3D_PerimeterNS")
+
+[node name="PerimeterS" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 9.5, 0.5, 1)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="PerimeterS"]
+shape = SubResource("BoxShape3D_PerimeterNS")
+
+[node name="PerimeterE" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 20, 0.5, 0)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="PerimeterE"]
+shape = SubResource("BoxShape3D_PerimeterEW")
+
+[node name="PerimeterW" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, 0.5, 0)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="PerimeterW"]
+shape = SubResource("BoxShape3D_PerimeterEW")
+
+[node name="LockZone" type="Area3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4, 0.5, 0)
+collision_layer = 0
+collision_mask = 2
+script = ExtResource("10")
+required_dims = Vector3i(1, 3, 1)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="LockZone"]
+shape = SubResource("BoxShape3D_Zone")
+
+[node name="Gate" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 1.5, 0)
+collision_mask = 0
+script = ExtResource("11")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Gate"]
+mesh = SubResource("BoxMesh_Gate")
+surface_material_override/0 = SubResource("Mat_Gate")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Gate"]
+shape = SubResource("BoxShape3D_Gate")
+
+[node name="UnlockZone" type="Area3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 12, 0.5, 0)
+collision_layer = 0
+collision_mask = 2
+script = ExtResource("10")
+mode = 1
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="UnlockZone"]
+shape = SubResource("BoxShape3D_Zone")
+
+[node name="StartTile" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.01, 0)
+mesh = SubResource("PlaneMesh_Tile")
+surface_material_override/0 = SubResource("StandardMaterial3D_Start")
+
+[node name="EndTile" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 18, 0.01, 0)
+mesh = SubResource("PlaneMesh_Tile")
+surface_material_override/0 = SubResource("StandardMaterial3D_End")
+
+[node name="Area3D" type="Area3D" parent="EndTile"]
+collision_layer = 8
+collision_mask = 2
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="EndTile/Area3D"]
+shape = SubResource("BoxShape3D_EndArea")
+
+[node name="Level" type="Node" parent="."]
+script = ExtResource("5")
+
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="ReadyLabel" type="Label" parent="UI"]
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -240.0
+offset_top = -40.0
+offset_right = 240.0
+offset_bottom = 40.0
+text = "Move to begin"
+horizontal_alignment = 1
+vertical_alignment = 1
+theme_override_font_sizes/font_size = 48
+
+[node name="ResultsPanel" type="ColorRect" parent="UI"]
+visible = false
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -180.0
+offset_top = -140.0
+offset_right = 180.0
+offset_bottom = 140.0
+color = Color(0, 0, 0, 0.7)
+
+[node name="VBox" type="VBoxContainer" parent="UI/ResultsPanel"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 20.0
+offset_top = 20.0
+offset_right = -20.0
+offset_bottom = -20.0
+
+[node name="Title" type="Label" parent="UI/ResultsPanel/VBox"]
+text = "Level Complete"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 36
+
+[node name="Spacer" type="Control" parent="UI/ResultsPanel/VBox"]
+custom_minimum_size = Vector2(0, 12)
+
+[node name="Moves" type="Label" parent="UI/ResultsPanel/VBox"]
+text = "Moves: 0"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 24
+
+[node name="Time" type="Label" parent="UI/ResultsPanel/VBox"]
+text = "Time: 0.0s"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 24
+
+[node name="Spotted" type="Label" parent="UI/ResultsPanel/VBox"]
+text = "Spotted: No"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 24
+
+[node name="Spacer2" type="Control" parent="UI/ResultsPanel/VBox"]
+custom_minimum_size = Vector2(0, 16)
+
+[node name="Hint" type="Label" parent="UI/ResultsPanel/VBox"]
+text = "Any key to restart, Esc for menu"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 18

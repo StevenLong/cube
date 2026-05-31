@@ -3,12 +3,14 @@ extends Control
 
 @onready var _t1_button: Button = $VBox/Tutorial1Button
 @onready var _t2_button: Button = $VBox/Tutorial2Button
+@onready var _t3_button: Button = $VBox/Tutorial3Button
 @onready var _back_button: Button = $VBox/BackButton
 
 
 func _ready() -> void:
 	_t1_button.pressed.connect(_load.bind("res://levels/tutorial_01_move.tscn"))
 	_t2_button.pressed.connect(_load.bind("res://levels/tutorial_02_gaps.tscn"))
+	_t3_button.pressed.connect(_load.bind("res://levels/tutorial_03_bridge.tscn"))
 	_back_button.pressed.connect(_load.bind("res://main_menu.tscn"))
 	_t1_button.grab_focus()
 

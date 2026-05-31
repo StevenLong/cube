@@ -121,6 +121,10 @@ var _orient: Basis = Basis.IDENTITY
 
 
 func _ready() -> void:
+	# Sync grid_pos to the authored start cell so a level can place the player
+	# anywhere. Without this it stays at the (0,0) default and the first settle
+	# snaps position to (0,0)-relative coords, lurching the cube off its start.
+	grid_pos = Vector2i(roundi(position.x), roundi(position.z))
 	_step_player.stream = _make_step_sound()
 	_splash_player.stream = _make_splash_sound()
 	# Shared resource across every FloorTile and this player; uniforms set on it
