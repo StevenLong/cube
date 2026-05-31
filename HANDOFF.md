@@ -1,103 +1,95 @@
 # Handoff, 2026-05-31
 
 ## Where we are
-Two threads this session, both committed:
+First tutorial slice complete and committed: three tutorials (movement,
+maneuvering, extend-and-bridge) plus the Tutorials submenu. The T2 first-move
+desync bug is fixed.
 
-1. **Phase 8 cluster C wedge bug: FIXED** (commit 521d9a6). Verified headless and
-   confirmed in-editor by the user.
-2. **Phase 9 tutorials: STARTED EARLY.** A Tutorials submenu + the first two
-   movement tutorials. One known bug in T2 (below), deferred to next session at the
-   user's request (out of tokens). FIX THAT FIRST.
+Commits this stretch:
+- `521d9a6` Phase 8 C wedge fix (tip/fall spurious triggers).
+- `2a416d3` Phase 9 tutorials: T1 + T2 + submenu.
+- `acca158` Phase 9: T2 grid_pos fix + T3 (extend-lock bridge).
 
-## Wedge fix (done, 521d9a6)
-Three stacked changes in `player.gd` (`_tip_collides_at` + the `_process` falling
-block):
-- Inset the wedge sample box on x, z AND y (`WEDGE_INSET = 0.05`): boundary corners
-  map to the cube's own column (kills a frame-1 false fire), and a snug-fitting cube
-  drops in instead of catching the far rim.
-- `_wedged` / `_wedge_hold_t` hold state (`WEDGE_HOLD_TIME = 0.8`): a real wedge
-  hangs ~0.8s so it is visible before the Fell panel.
-- Cap the tip at `TIP_END_ANGLE` and hand to the straight drop BEFORE the wedge
-  check runs: a step overshoots 90 deg near the end, and past vertical the low
-  corner swings back under the near floor and false-reads as a wedge.
+## Next session (per the user)
+1. **Assessment first, before building more.** Take stock of where the project is
+   and what needs fleshing out before moving on. Status snapshot below to seed it.
+2. **Enemy types and behaviors** are the flagged gap: only one enemy exists
+   (`enemy_sphere.gd`: PATROL / SUSPICIOUS / INVESTIGATE / PURSUIT), no variety, and
+   several stale enemy issues are carried (bottom). The user wants this fleshed out
+   soon.
 
-## Tutorial slice (built + committed this session)
-New "movement-first" tutorial set in its own submenu. NOTE: this framing diverges
-from the task list's Phase 9 ("signature situations, not bare mechanics"); reconcile
-the task list later.
+## Status snapshot (to seed the assessment)
+- **Phase 8 A (extended-state gaps)**: DONE.
+- **Phase 8 B (blend redesign)**: DONE.
+- **Phase 8 C (floating void world)**: data model + per-tile render + fall/tip/wedge
+  DONE (slices 1-2). Slice 3 (a real demo level shape) was SKIPPED; we pivoted to
+  tutorials. The void mechanics still have no showcase level.
+- **Phase 8 D (animation/juice)**: NOT started.
+- **Phase 8 E (audio)**: NOT started.
+- **Phase 9 (tutorials)**: T1-T3 built this slice (a movement-first framing). The
+  task list's Phase 9 lists different tutorials (sprint/noise, extension, blend =
+  "signature situations"); our framing diverges. RECONCILE the task list.
+- **Enemies**: one type (sphere). No variety. Known stale issues carried (bottom).
+  Flagged by the user as the next area to flesh out.
 
-Menu flow: main menu "Tutorials" -> `tutorials_menu.tscn` -> pick a tutorial ->
-level -> finish -> Esc returns to the MAIN menu (not the submenu; minor, refine later).
+## Tutorial slice reference
+Menu: main menu "Tutorials" -> `tutorials_menu.tscn` (buttons 1/2/3 + Back) ->
+tutorial -> finish -> Esc returns to the MAIN menu (not the submenu; minor polish).
 
-Files:
-- `main_menu.tscn` / `main_menu.gd`: old "Tutorial 1" button is now "Tutorials" ->
-  loads `tutorials_menu.tscn`. Sandbox + Quit unchanged.
-- `tutorials_menu.tscn` / `tutorials_menu.gd`: submenu. Buttons "1: Movement",
-  "2: Maneuvering", "Back". Add the T3 button here next.
-- `levels/tutorial_01_move.tscn`: T1. 1x10 corridor, runs left->right along +X
-  (start cell (0,0), finish (9,0)). Bounded by perimeter colliders.
-- `levels/tutorial_02_gaps.tscn`: T2. 20x5, weave through 4 single-gap walls. Start
-  (0,2), finish (19,0). Gaps alternate top/bottom. Walls = grey StaticBody blocks
-  (BoxMesh/BoxShape 1x1x4, mat 0.4,0.4,0.5).
+- `tutorials_menu.tscn` / `.gd`: the submenu. Add future tutorial buttons here.
+- `levels/tutorial_01_move.tscn`: 1x10 corridor, left->right (start (0,0), finish (9,0)).
+- `levels/tutorial_02_gaps.tscn`: 20x5, weave through 4 single-gap walls (start (0,2),
+  finish (19,0)).
+- `levels/tutorial_03_bridge.tscn`: 1x20 corridor. Lock zone (1,3,1) at x=4 -> gate at
+  x=6 (open while locked) -> 1-wide gap at x=10 -> unlock zone at x=12 -> finish x=18.
+- `level_01_movement.tscn` (27x27 open) is ORPHANED; delete whenever.
 
-Conventions established:
-- **Safety edge** = a level boundary: a collision-only perimeter wall, auto-marked
-  by `level.gd` with a red line. `_build_safety_edges` draws the red line where a
-  floor cell meets a WALL collider (layer 1) at the neighbor; OPEN void edges get
-  nothing (blankness = "you can fall here"). Internal walls sit ON floor cells, so
-  they get no red line; only the outer boundary is outlined.
-- New levels are cloned from the `level_01_movement.tscn` rig (Player + casts +
-  Camera + Level + UI). `level.gd` auto-builds the floor from FloorRect/FloorMissing
-  and the safety edges; it reads start from the Player node, end from EndTile.position.
-- `level_01_movement.tscn` (27x27 open) is now ORPHANED (nothing links it). Delete
-  whenever.
+Conventions:
+- **Safety edge** = a collision-only boundary wall; `level.gd._build_safety_edges`
+  auto-draws a red line where a floor cell meets a WALL collider (layer 1). Open void
+  edges get no line (their blankness = "you can fall here").
+- New levels clone the `level_01_movement.tscn` rig. `level.gd` auto-builds floor
+  (FloorRect/FloorMissing) + safety edges; reads start from the Player node, end from
+  EndTile.position. The player start cell now syncs via grid_pos in `_ready`.
 
-## Open bug: T2 first-move north jump (FIX FIRST)
-Repro: in T2 the cube jumps 2 tiles north after its first move, regardless of move
-direction. A first move north clips it through the north safety wall into a fall.
+## T3 watch item (confirm / tune)
+Bridging depends on the player reaching the gap (x=10) on the tumble step where the
+3-tall pillar lays its 1x3 bar across it (x=10 is the middle of a bar-phase from the
+lock at x=4, so it should bridge: ends on floor at 9 and 11, void centre at 10 =
+stable). If on playtest the pillar drops in instead, shift the gap by +/-1 cell.
+Committed as-is; the user opened it in-editor and approved the commit.
 
-Root cause (confirmed): `player.gd:60` defaults `var grid_pos := Vector2i(0, 0)` and
-`_ready()` (line 123) never syncs it to the player's authored node position. T2 places
-the Player at cell (0,2); grid_pos stays (0,0); the first settle snaps position from
-grid_pos (`position = Vector3(grid_pos.x, 0.5, grid_pos.y)`), so z jumps 2 -> 0 (two
-north). T1 was immune only because it starts at (0,0). This is latent and affects ANY
-level not starting the player at (0,0).
+## Extend-lock mechanic reference (for reuse)
+- `extend_lock_zone.gd` (Area3D, monitoring off, grid-checked): `mode` LOCK/UNLOCK,
+  `required_dims` (w x, h y, d z). LOCK arms when the player is at rest, not already
+  locked, dims == required_dims, and footprint_min == the zone's cell; shows a
+  blinking ghost blueprint. UNLOCK releases when the locked cuboid covers its cell.
+  Set the zone's collision_layer = 0 so its shape never blocks the player's MoveCast.
+- `extend_lock_gate.gd` (StaticBody3D, layer 1): collision disabled + green while
+  `player.is_extend_locked()`, else red and blocking.
+- The player forms a 3-tall pillar by holding "extend" and tapping "move_forward"
+  twice (`_try_extend(EXT_UP)`); move_left/right extend in x; extend_depth_fwd/back
+  (Q/C) extend in z.
 
-Fix: in `player.gd _ready()`, add (after the node is in place):
-    grid_pos = Vector2i(roundi(position.x), roundi(position.z))
-Then re-test T2; T1 still starts at (0,0), unaffected.
-
-## Next session
-1. Fix the T2 grid_pos bug (one line in `player.gd _ready()`), re-test T2.
-2. Build T3: extend-lock 3-tall-pillar bridging. ~1x20 corridor: ExtendLockZone
-   (LOCK, required_dims (1,3,1)) -> ExtendLockGate (open while locked) -> a gap to
-   bridge with the locked pillar -> ExtendLockZone (UNLOCK) -> finish. The mechanic
-   ALREADY EXISTS: `extend_lock_zone.gd` (LOCK arms when footprint+dims match a
-   required cuboid; UNLOCK releases when the cuboid covers its cell) and
-   `extend_lock_gate.gd` (open/green while `player.is_extend_locked()`, else
-   closed/red). See `mechanics_sandbox.tscn` for placed Zone + Gate examples and the
-   Gate sub-resources (BoxMesh_Gate 0.4x1.5x3, Mat_Gate red-transparent).
-3. Add the T3 button to `tutorials_menu`.
-
-## Verify recipe (headless, Godot CLI at ~/.local/bin/godot, v4.6)
+## Verify recipe (headless, ~/.local/bin/godot, v4.6)
 - Parse-check: `godot --headless --editor --quit 2>&1 | grep -E "SCRIPT ERROR|Parse Error|SHADER ERROR"`
 - Smoke-load: `godot --headless --quit-after 60 res://<scene> 2>&1 | grep -iE "ERROR|nil|invalid"` (filter vulkan/driver/audio noise)
 - Exit code is 0 even on errors; always grep.
 
-## Carried from earlier (unchanged)
+## Carried (unchanged)
 - Phase 8 D (juice), E (audio): not started. F parked (grow tall, pre-spawn flythrough).
 - Camera stays put during a fall; cube exits the bottom (slice D will refine: follow
   Y, fog, fade). No fall SFX (cluster E).
-- Stale enemy path / search-through-corner / pursuit direct-line `_move_toward` /
-  unused WallRay nodes / `DEBUG_DETECTION = true` / tall-pillar false blend / cover
-  counts the perimeter / two scenes diverge / LoS centre-to-centre per cell: all
-  carried from previous handoffs, all unchanged.
+- **Enemy stale items** (relevant to the enemy fleshing-out next session): stale enemy
+  path / search-through-corner / pursuit direct-line `_move_toward` / unused WallRay
+  nodes / `DEBUG_DETECTION = true` / tall-pillar false blend / cover counts the
+  perimeter / two scenes diverge / LoS centre-to-centre per cell. All carried.
 
-## Memory notes worth checking
+## Memory notes
 - Read HANDOFF.md first at session start.
 - Active verbs (sprint/dodge/knock) are cube-only; extension is a positional
-  commitment for motion but NOT a safety lock (extending into instability is allowed;
+  commitment for motion, not a safety lock (extending into instability is allowed;
   the cube falls).
 - No Co-Authored-By trailer; no em/en dashes; commit at session end or on request.
-  Transform3D row-major; ink/water binary cleanse; GDScript inference with untyped
-  arrays needs annotation.
+  Transform3D row-major; ink/water binary cleanse; GDScript untyped-array inference
+  needs annotation.
