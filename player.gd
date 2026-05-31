@@ -23,6 +23,8 @@ const FALL_END_Y := -6.0  # cube is below view by here; emit `fell` and let leve
 const TIP_ANGULAR_ACCEL := 25.0  # rad/s^2 — rotational gravity tipping the cube into the hole
 const TIP_INITIAL_VEL := 1.5  # rad/s initial kick; handles the knife-edge balance case
 const TIP_END_ANGLE := PI / 2.0  # at 90° the cuboid has tipped past the edge; hand off to straight drop
+const WEDGE_HOLD_TIME := 0.8  # seconds the cube hangs jammed in the wedged pose before fell.emit, so the wedge reads
+const WEDGE_INSET := 0.05  # shrink the sampled box in _tip_collides_at: keeps roundi off cell boundaries, and a snug-fitting cube drops instead of catching on the far rim
 const MAX_WAVES := 8
 const MAX_FOOTPRINTS := 64
 const FOOTPRINT_FADE_TIME := 12.0  # seconds for a deposited print to fade out and clear
@@ -88,6 +90,8 @@ var _tip_angle: float = 0.0
 var _tip_vel: float = 0.0
 var _tip_start_pos := Vector3.ZERO
 var _tip_start_basis := Basis.IDENTITY
+var _wedged := false  # tip hit a wedge; holding the jammed pose before fell.emit
+var _wedge_hold_t := 0.0
 var _smoothed_focus := Vector3.ZERO
 var _dodge_held_consumed := false  # a dodge press that collapsed an extension; suppresses dodge until released
 var _extend_locked := false
@@ -634,6 +638,8 @@ func _begin_fall() -> void:
 	# around a supported edge or a straight drop based on remaining support.
 	_falling = true
 	_fall_vel = 0.0
+	_wedged = false
+	_wedge_hold_t = 0.0
 	_tumbling = false
 	_dodging = false
 	_bumping = false
@@ -655,9 +661,18 @@ func _tip_collides_at(angle: float) -> bool:
 	var minz: float = float(grid_pos.y) - float(_ext[EXT_FWD]) - 0.5
 	var maxz: float = float(grid_pos.y) + float(_ext[EXT_BACK]) + 0.5
 	var ymax: float = 1.0 + float(_ext[EXT_UP])
-	var xs := [minx, maxx]
-	var ys := [0.0, ymax]
-	var zs := [minz, maxz]
+	# Shrink the sampled box by WEDGE_INSET on every side before rounding. Two
+	# jobs. (1) The cube's faces sit exactly on cell boundaries (the ±0.5 above),
+	# and roundi() pushes a boundary corner onto the flanking cell; insetting xz
+	# maps each corner to the cube's own column, so a corner descending cleanly
+	# into a 1-wide gap stops false-firing against the floor beside it. (2)
+	# Insetting y too makes the wedge fire only on real overlap, not a bare touch:
+	# a tall pillar that just fits a snug hole lands its far corner on the far rim
+	# at 90°; without the y inset that rim rounds onto the far floor and wedges
+	# when it should tip in and drop.
+	var xs := [minx + WEDGE_INSET, maxx - WEDGE_INSET]
+	var ys := [WEDGE_INSET, ymax - WEDGE_INSET]
+	var zs := [minz + WEDGE_INSET, maxz - WEDGE_INSET]
 	for x in xs:
 		for y in ys:
 			for z in zs:
@@ -939,22 +954,33 @@ func _process(delta: float) -> void:
 	# cube around the supported edge with angular acceleration so the
 	# unsupported side pivots into the hole; if a corner of the cuboid would
 	# clip into floor on the far side of the gap, freeze the rotation (wedge)
-	# and emit fell immediately. At TIP_END_ANGLE the cube has cleared the
-	# edge; hand off to straight gravity, inheriting the tangent's downward
+	# and hold WEDGE_HOLD_TIME so the jam is visible, then emit fell. At
+	# TIP_END_ANGLE the cube has cleared the edge; hand off to straight gravity,
+	# inheriting the tangent's downward
 	# component as initial _fall_vel. With no support to tip around (cube
 	# tumbled alone onto void), skip the tip and drop straight. In the drop
 	# branch, position.y crossing FALL_END_Y triggers the fell signal.
 	if _falling:
-		if _tipping:
-			_tip_vel += TIP_ANGULAR_ACCEL * delta
-			var new_angle := _tip_angle + _tip_vel * delta
-			if _tip_collides_at(new_angle):
+		if _wedged:
+			# Hang in the jammed pose with the tree running, then end the run so
+			# the wedge is on screen before the results panel appears.
+			_wedge_hold_t += delta
+			if _wedge_hold_t >= WEDGE_HOLD_TIME:
 				fell.emit()
 				_falling = false
 				_tipping = false
-				return
-			_tip_angle = new_angle
-			if _tip_angle >= TIP_END_ANGLE:
+				_wedged = false
+			return
+		if _tipping:
+			_tip_vel += TIP_ANGULAR_ACCEL * delta
+			var new_angle := _tip_angle + _tip_vel * delta
+			if new_angle >= TIP_END_ANGLE:
+				# Reached vertical: the cube has cleared the near edge, so commit to
+				# a straight drop. The wedge check is deliberately skipped at and past
+				# TIP_END_ANGLE. A step can overshoot 90° by several degrees (the tip
+				# is moving ~8°/frame by now), and past vertical the low corner swings
+				# back under the near floor, which reads as a collision but is not a
+				# wedge.
 				_tip_angle = TIP_END_ANGLE
 				var end_offset := (_tip_start_pos - _tip_pivot).rotated(_tip_axis, _tip_angle)
 				var tangent := _tip_axis.cross(end_offset)
@@ -962,7 +988,14 @@ func _process(delta: float) -> void:
 				position = _tip_pivot + end_offset
 				basis = Basis(_tip_axis, _tip_angle) * _tip_start_basis
 				_tipping = false
+			elif _tip_collides_at(new_angle):
+				# Jammed before reaching vertical: freeze at the last clear angle and
+				# hold before emitting fell.
+				_wedged = true
+				_wedge_hold_t = 0.0
+				return
 			else:
+				_tip_angle = new_angle
 				position = _tip_pivot + (_tip_start_pos - _tip_pivot).rotated(_tip_axis, _tip_angle)
 				basis = Basis(_tip_axis, _tip_angle) * _tip_start_basis
 		else:
