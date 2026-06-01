@@ -10,7 +10,10 @@ const COLOR_INVESTIGATE := Color(1.0, 0.55, 0.0)
 const COLOR_PURSUIT := Color(1.0, 0.2, 0.2)
 
 const ARRIVE_THRESHOLD := 0.05
-const INVESTIGATE_TIMEOUT := 3.0
+const INVESTIGATE_TIMEOUT := 12.0    # safety cap; a search normally ends when all tiles are checked
+const SEARCH_DWELL := 0.6            # seconds paused at each checked tile so the 360 sweep can look
+const SEARCH_MAX_CELLS := 5         # cap of tiles checked around a source
+const SEARCH_ARRIVE := 0.35         # distance that counts as "at" a search tile
 const PURSUIT_SPEED_MULT := 1.5
 const SUSPICIOUS_SPEED_MULT := 0.5
 const INVESTIGATE_SPEED_MULT := 1.0
@@ -89,11 +92,15 @@ var _ground_material: ShaderMaterial
 var _nav_blocked: Dictionary = {}
 var _path: Array[Vector2i] = []
 var _path_idx: int = 0
+var _search_cells: Array[Vector2i] = []
+var _search_dwell: float = 0.0
 var _pursuit_repath_timer: float = 0.0
 var _corridor_open_timer: float = 0.0
 var _visibility_alpha: float = 1.0
 var _visibility_initialized: bool = false
 var _debug_label: Label
+var _debug_reveal: bool = false
+var _ghost: MeshInstance3D
 var _alert_glyph: Label3D
 var _investigate_sweep_angle: float = 0.0
 var _glyph_pop: float = 0.0
@@ -118,6 +125,7 @@ func _ready() -> void:
 	_hum_player.play()
 	_setup_stings()
 	_setup_alert_glyph()
+	_setup_ghost()
 	_build_nav_grid()
 	if waypoints.size() > 0:
 		_set_path_to(waypoints[_target_idx])
@@ -161,30 +169,29 @@ func _process(delta: float) -> void:
 			if _detection >= DETECT_PURSUIT:
 				_enter_state(State.PURSUIT)
 			else:
-				# Eat the print under our feet as we follow the trail, so the cells
-				# we have already checked can't lure us back the way we came.
+				# Eat the print under our feet as we search, so cells we have already
+				# checked can't lure us back the way we came.
 				_player.consume_footprints_in_cell(Vector2i(roundi(position.x), roundi(position.z)))
-				var advanced := false
+				_state_timer += delta
+				# A fresh print in view re-seeds the search on the trail (chase the player).
 				if footprint_pos != Vector3.INF:
 					var nv := Vector2(footprint_pos.x, footprint_pos.z)
 					var cv := Vector2(_last_seen_pos.x, _last_seen_pos.z)
 					if nv.distance_to(cv) > FOOTPRINT_RETARGET_DIST:
 						_last_seen_pos = Vector3(footprint_pos.x, position.y, footprint_pos.z)
-						_set_path_to(_last_seen_pos)
+						_begin_search(_world_to_cell(_last_seen_pos))
 						_state_timer = 0.0
-						advanced = true
-				if not advanced:
-					_state_timer += delta
-				if _state_timer >= INVESTIGATE_TIMEOUT:
+				_investigate_search(delta)
+				# Give up once every tile around the source is checked (or the safety cap).
+				if _search_cells.is_empty() or _state_timer >= INVESTIGATE_TIMEOUT:
 					_enter_state(State.PATROL)
-				_investigate_move(delta)
 		State.PURSUIT:
 			_pursue(delta)
 			if _detection < DETECT_PURSUIT_KEEP:
 				_last_seen_pos = Vector3(_last_seen_pos.x, position.y, _last_seen_pos.z)
 				_enter_state(State.INVESTIGATE)
 
-	var target_alpha := 1.0 if _visible_to_player() else SILHOUETTE_ALPHA
+	var target_alpha := 1.0 if (_debug_reveal or _visible_to_player()) else SILHOUETTE_ALPHA
 	if not _visibility_initialized:
 		_visibility_alpha = target_alpha
 		_visibility_initialized = true
@@ -197,6 +204,8 @@ func _process(delta: float) -> void:
 	_update_alert_glyph(delta)
 	_update_hum(delta)
 	_update_debug_label()
+	_update_debug_reveal()
+	_update_ghost(seeing)
 
 
 func _update_detection(delta: float, seeing: bool) -> void:
@@ -233,12 +242,16 @@ func _creep(delta: float) -> void:
 
 
 func _pursue(delta: float) -> void:
-	# Hybrid locomotion: seek the player directly (off-grid, more threatening)
+	# Hybrid locomotion: seek the suspect directly (off-grid, more threatening)
 	# once a sphere-wide corridor has stayed clear for CORRIDOR_HYSTERESIS. That
 	# debounces the per-frame ray check so the sphere does not jitter between
 	# modes at a wall corner. Any block resets the timer and falls back to A*
 	# immediately, the safe choice near walls.
-	if _has_pursuit_corridor():
+	# Chase _last_seen_pos (the last visible cell), not the player's origin: for an
+	# extended bar that is the exposed end currently in view, so the sphere closes on
+	# what it can actually see instead of pathing toward the hidden base cell.
+	var target := _last_seen_pos
+	if _has_pursuit_corridor(target):
 		_corridor_open_timer += delta
 	else:
 		_corridor_open_timer = 0.0
@@ -246,19 +259,19 @@ func _pursue(delta: float) -> void:
 		_path = []
 		_path_idx = 0
 		_pursuit_repath_timer = 0.0
-		_move_toward(_player.position, delta, PURSUIT_SPEED_MULT)
+		_move_toward(target, delta, PURSUIT_SPEED_MULT)
 		return
 	_pursuit_repath_timer -= delta
 	if _pursuit_repath_timer <= 0.0:
-		_set_path_to(_player.position)
+		_set_path_to(target)
 		_pursuit_repath_timer = PURSUIT_REPATH_INTERVAL
-	_follow_path(delta, PURSUIT_SPEED_MULT, _player.position)
+	_follow_path(delta, PURSUIT_SPEED_MULT, target)
 
 
-func _has_pursuit_corridor() -> bool:
+func _has_pursuit_corridor(target: Vector3) -> bool:
 	# Three parallel rays (center + two offset by sphere radius perpendicular
 	# to travel direction). All must be clear so the sphere's body fits.
-	var to := _player.global_position
+	var to := target
 	var from := global_position
 	var dir := Vector3(to.x - from.x, 0.0, to.z - from.z)
 	if dir.length_squared() < 0.0001:
@@ -318,16 +331,19 @@ func _enter_state(new_state: State) -> void:
 	if new_state == State.SUSPICIOUS:
 		_set_path_to(_last_seen_pos)
 	if new_state == State.INVESTIGATE:
-		_set_path_to(_last_seen_pos)
+		_begin_search(_world_to_cell(_last_seen_pos))
 		# Start the search sweep aimed at the last-seen spot so the beam picks up
 		# where the suspicious cone left it, then rotates away.
 		var to_suspect := Vector2(_last_seen_pos.x - position.x, _last_seen_pos.z - position.z)
 		if to_suspect.length() > 0.001:
 			_investigate_sweep_angle = atan2(to_suspect.y, to_suspect.x)
 	if new_state == State.PURSUIT:
-		_set_path_to(_player.position)
+		# _last_seen_pos is fresh here (pursuit is only reached by seeing the player,
+		# which updates it the same frame), so seed the chase at the visible cell.
+		_set_path_to(_last_seen_pos)
 		_pursuit_repath_timer = PURSUIT_REPATH_INTERVAL
 		_corridor_open_timer = 0.0
+		_pending_sounds.clear()  # drop in-flight noise; pursuit ignores distractions
 		if not was_pursuit:
 			entered_pursuit.emit()
 
@@ -374,7 +390,8 @@ func _setup_debug_label() -> void:
 func _update_debug_label() -> void:
 	if _debug_label == null:
 		return
-	_debug_label.text = "%s  %.2f" % [_state_name(), _detection]
+	var suffix := "   [REVEAL]" if _debug_reveal else ""
+	_debug_label.text = "%s  %.2f%s" % [_state_name(), _detection, suffix]
 	_debug_label.add_theme_color_override("font_color", _state_color())
 
 
@@ -386,7 +403,60 @@ func _state_name() -> String:
 		_: return "PATROL"
 
 
+func _unhandled_input(event: InputEvent) -> void:
+	# Debug reveal toggle (V): x-ray the enemy body + glyph so its motion can be
+	# watched while occluded. The last-known ghost is a separate gameplay cue.
+	if event.is_action_pressed("debug_reveal"):
+		_debug_reveal = not _debug_reveal
+
+
+func _setup_ghost() -> void:
+	# Last-known-position readout: a translucent cube parked where the enemy last knew
+	# the player to be. A gameplay cue (not debug), shown only while alerted and unable
+	# to see the player right now — a live target needs no marker, so it reads as "the
+	# search is happening here." top_level keeps it in world space; no_depth_test keeps
+	# it readable when the spot is behind a wall, like the floor cone.
+	_ghost = MeshInstance3D.new()
+	_ghost.top_level = true
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3.ONE
+	_ghost.mesh = mesh
+	var mat := StandardMaterial3D.new()
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.no_depth_test = true
+	mat.albedo_color = Color(1, 1, 1, 0.25)
+	_ghost.material_override = mat
+	_ghost.visible = false
+	add_child(_ghost)
+
+
+func _update_debug_reveal() -> void:
+	# Debug x-ray only: draw the enemy body + glyph through walls while revealed.
+	_material.no_depth_test = _debug_reveal
+	if _alert_glyph != null:
+		_alert_glyph.no_depth_test = _debug_reveal
+
+
+func _update_ghost(seeing: bool) -> void:
+	# Show the last-known marker only once the enemy has lost sight: alerted (not
+	# patrol) and not currently seeing the player. Tint it by alert state so the cue
+	# carries the threat level (yellow / orange / red).
+	if _ghost == null:
+		return
+	var show_ghost := _state != State.PATROL and not seeing
+	_ghost.visible = show_ghost
+	if show_ghost:
+		_ghost.position = Vector3(_last_seen_pos.x, 0.5, _last_seen_pos.z)
+		var col := _state_color()
+		col.a = 0.3
+		(_ghost.material_override as StandardMaterial3D).albedo_color = col
+
+
 func _on_player_noise(origin: Vector2, max_radius: float, duration: float) -> void:
+	# Pursuit is locked on and ignores noise entirely, so don't even queue it: a knock
+	# fired mid-chase must not be able to land as an investigate after pursuit drops.
+	if _state == State.PURSUIT:
+		return
 	var enemy_xz := Vector2(position.x, position.z)
 	var dist := enemy_xz.distance_to(origin)
 	if dist > max_radius:
@@ -406,18 +476,23 @@ func _advance_pending_sounds(delta: float) -> void:
 
 func _on_sound_heard(origin: Vector2) -> void:
 	# A noise is a located clue, so go investigate the source (this is what makes
-	# knocking a usable lure). Pursuit ignores noise — already locked on. If we are
-	# already searching, retarget to the fresher sound and refresh the dwell rather
-	# than re-entering the state, which would re-pop the glyph and reseed the cone
-	# on every footstep.
+	# knocking a usable lure). Pursuit ignores noise — already locked on.
 	if _state == State.PURSUIT:
 		return
-	_last_seen_pos = Vector3(origin.x, position.y, origin.y)
 	_detection = maxf(_detection, DETECT_NOISE_SEED)
+	var heard_pos := Vector3(origin.x, position.y, origin.y)
 	if _state == State.INVESTIGATE:
-		_state_timer = 0.0
-		_set_path_to(_last_seen_pos)
+		# Only redirect (and refresh the dwell) for a meaningfully different source.
+		# Spamming knocks at the same spot must not keep resetting _state_timer — that
+		# stunlocked the sphere in INVESTIGATE forever and churned its path. Same-spot
+		# repeats are ignored so the current search runs out to its timeout.
+		var moved := Vector2(heard_pos.x, heard_pos.z).distance_to(Vector2(_last_seen_pos.x, _last_seen_pos.z))
+		if moved > FOOTPRINT_RETARGET_DIST:
+			_last_seen_pos = heard_pos
+			_begin_search(_world_to_cell(_last_seen_pos))
+			_state_timer = 0.0
 	else:
+		_last_seen_pos = heard_pos
 		_enter_state(State.INVESTIGATE)
 
 
@@ -496,8 +571,58 @@ func _visible_footprint_pos() -> Vector3:
 	return Vector3.INF
 
 
-func _investigate_move(delta: float) -> void:
-	_follow_path(delta, INVESTIGATE_SPEED_MULT, _last_seen_pos)
+func _begin_search(center: Vector2i) -> void:
+	# Build the ring of tiles to check around the noise / last-seen cell and head for
+	# the first. This is what turns "look at the source from one side" into a
+	# search-and-clear that comes around a knocked wall to the far side.
+	_search_cells = _build_search_cells(center)
+	_search_dwell = 0.0
+	if not _search_cells.is_empty():
+		_set_path_to(_cell_to_world(_search_cells[0]))
+
+
+func _build_search_cells(center: Vector2i) -> Array[Vector2i]:
+	# The source cell (if standable) plus its orthogonal neighbours: the tiles around
+	# the sound, on every side, so a knocked wall gets checked from the far side too.
+	# Keep only cells we can actually reach, ordered nearest-first, capped.
+	var start := _world_to_cell(position)
+	var candidates: Array[Vector2i] = []
+	if not _cell_blocked(center):
+		candidates.append(center)
+	for d: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var c: Vector2i = center + d
+		if not _cell_blocked(c):
+			candidates.append(c)
+	var reachable: Array[Vector2i] = []
+	for c: Vector2i in candidates:
+		if _find_path(start, c).size() > 0:
+			reachable.append(c)
+	reachable.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return (a - start).length_squared() < (b - start).length_squared())
+	if reachable.size() > SEARCH_MAX_CELLS:
+		reachable.resize(SEARCH_MAX_CELLS)
+	return reachable
+
+
+func _investigate_search(delta: float) -> void:
+	# Walk to the current search tile; on arrival pause so the 360 sweep can clear it,
+	# then advance. Emptying the list ends the search (handled by the caller).
+	if _search_cells.is_empty():
+		return
+	var target := _cell_to_world(_search_cells[0])
+	var to_target := Vector2(target.x - position.x, target.z - position.z)
+	if to_target.length() <= SEARCH_ARRIVE:
+		_search_dwell += delta
+		if _search_dwell >= SEARCH_DWELL:
+			_search_cells.remove_at(0)
+			_search_dwell = 0.0
+			if not _search_cells.is_empty():
+				_set_path_to(_cell_to_world(_search_cells[0]))
+	else:
+		_follow_path(delta, INVESTIGATE_SPEED_MULT, target)
+
+
+func _cell_to_world(cell: Vector2i) -> Vector3:
+	return Vector3(cell.x, position.y, cell.y)
 
 
 func _update_cone_uniforms(delta: float) -> void:
@@ -695,12 +820,22 @@ func _follow_path(delta: float, speed_mult: float, final_target: Vector3) -> voi
 		_move_toward(cell_world, delta, speed_mult)
 		return
 	# Path exhausted (or empty) — close the last sub-cell to the actual target, but
-	# only if that target cell is open. A knock is sourced from a wall cell, so
-	# without this the sphere would slide straight into the wall and reach the
-	# player through the shared edge/corner. Stop at the path end (an open
-	# neighbour) and search from there instead.
-	if not _cell_blocked(_world_to_cell(final_target)):
+	# only if that target cell is open AND nothing is between us and it. The straight
+	# _move_toward ignores collision, so without the clear-line check the sphere would
+	# clip through a wall to a target on the far side (e.g. a knock origin).
+	if not _cell_blocked(_world_to_cell(final_target)) and _clear_walk_to(final_target):
 		_move_toward(final_target, delta, speed_mult)
+
+
+func _clear_walk_to(target: Vector3) -> bool:
+	# True if a straight horizontal line from the sphere to target hits no wall, so a
+	# direct (collision-less) _move_toward there won't pass through geometry.
+	var space := get_world_3d().direct_space_state
+	var to := Vector3(target.x, global_position.y, target.z)
+	var query := PhysicsRayQueryParameters3D.create(global_position, to)
+	query.collision_mask = 1
+	query.collide_with_areas = false
+	return space.intersect_ray(query).is_empty()
 
 
 func _find_path(start: Vector2i, goal: Vector2i) -> Array[Vector2i]:

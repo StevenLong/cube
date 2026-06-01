@@ -102,6 +102,18 @@ size = Vector3(30, 1, 1)
 [sub_resource type="BoxShape3D" id="BoxShape3D_PerimeterEW"]
 size = Vector3(1, 1, 30)
 
+[sub_resource type="BoxMesh" id="BoxMesh_2u"]
+size = Vector3(1, 2, 1)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_2u"]
+size = Vector3(1, 2, 1)
+
+[sub_resource type="BoxMesh" id="BoxMesh_3u"]
+size = Vector3(1, 3, 1)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_3u"]
+size = Vector3(1, 3, 1)
+
 [node name="Node3D" type="Node3D" unique_id=1563203234]
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
@@ -389,3 +401,113 @@ surface_material_override/0 = SubResource("Mat_Gate")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Gate"]
 shape = SubResource("BoxShape3D_Gate")
+
+[node name="WallS1L" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -9, 0.5, -8)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="WallS1L"]
+mesh = SubResource("BoxMesh_1")
+surface_material_override/0 = SubResource("StandardMaterial3D_3")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="WallS1L"]
+shape = SubResource("BoxShape3D_1")
+
+[node name="WallS1R" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -7, 0.5, -8)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="WallS1R"]
+mesh = SubResource("BoxMesh_1")
+surface_material_override/0 = SubResource("StandardMaterial3D_3")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="WallS1R"]
+shape = SubResource("BoxShape3D_1")
+
+[node name="WallS2L" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -4, 1, -8)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="WallS2L"]
+mesh = SubResource("BoxMesh_2u")
+surface_material_override/0 = SubResource("StandardMaterial3D_3")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="WallS2L"]
+shape = SubResource("BoxShape3D_2u")
+
+[node name="WallS2R" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2, 1, -8)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="WallS2R"]
+mesh = SubResource("BoxMesh_2u")
+surface_material_override/0 = SubResource("StandardMaterial3D_3")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="WallS2R"]
+shape = SubResource("BoxShape3D_2u")
+
+[node name="WallS3L" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1.5, -8)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="WallS3L"]
+mesh = SubResource("BoxMesh_3u")
+surface_material_override/0 = SubResource("StandardMaterial3D_3")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="WallS3L"]
+shape = SubResource("BoxShape3D_3u")
+
+[node name="WallS3R" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 1.5, -8)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="WallS3R"]
+mesh = SubResource("BoxMesh_3u")
+surface_material_override/0 = SubResource("StandardMaterial3D_3")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="WallS3R"]
+shape = SubResource("BoxShape3D_3u")
+
+[node name="WallSingle" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 0.5, -8)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="WallSingle"]
+mesh = SubResource("BoxMesh_1")
+surface_material_override/0 = SubResource("StandardMaterial3D_3")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="WallSingle"]
+shape = SubResource("BoxShape3D_1")
+
+[node name="LabelS1" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -8, 3, -8)
+pixel_size = 0.01
+billboard = 1
+modulate = Color(0.6, 0.9, 1, 1)
+outline_modulate = Color(0, 0, 0, 1)
+text = "1u slot"
+font_size = 64
+outline_size = 12
+
+[node name="LabelS2" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -3, 3.5, -8)
+pixel_size = 0.01
+billboard = 1
+modulate = Color(0.6, 0.9, 1, 1)
+outline_modulate = Color(0, 0, 0, 1)
+text = "2u slot (taller)"
+font_size = 64
+outline_size = 12
+
+[node name="LabelS3" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 4.5, -8)
+pixel_size = 0.01
+billboard = 1
+modulate = Color(0.6, 0.9, 1, 1)
+outline_modulate = Color(0, 0, 0, 1)
+text = "3u slot (taller)"
+font_size = 64
+outline_size = 12
+
+[node name="LabelS4" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 7, 3, -8)
+pixel_size = 0.01
+billboard = 1
+modulate = Color(1, 0.6, 0.5, 1)
+outline_modulate = Color(0, 0, 0, 1)
+text = "1 wall = no blend"
+font_size = 64
+outline_size = 12

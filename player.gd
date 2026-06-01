@@ -245,15 +245,25 @@ func _is_in_cover() -> bool:
 
 
 func _column_walled(x: int, z0: int, z1: int) -> bool:
+	# Flush-blend test for one side. Each cell must be walled to exactly the player's
+	# height: a wall at the player's top cell AND no wall just above it. A shorter
+	# wall lets the player overtop; a taller wall leaves the player recessed in a
+	# notch. Both break the flat-wall look from the open directions, so neither hides.
+	var top_y := 0.5 + float(_ext[EXT_UP])
+	var above_y := top_y + 1.0
 	for z in range(z0, z1 + 1):
-		if _extend_cell_clear(Vector2i(x, z)):
+		var cell := Vector2i(x, z)
+		if _extend_cell_clear(cell, top_y) or not _extend_cell_clear(cell, above_y):
 			return false
 	return true
 
 
 func _row_walled(z: int, x0: int, x1: int) -> bool:
+	var top_y := 0.5 + float(_ext[EXT_UP])
+	var above_y := top_y + 1.0
 	for x in range(x0, x1 + 1):
-		if _extend_cell_clear(Vector2i(x, z)):
+		var cell := Vector2i(x, z)
+		if _extend_cell_clear(cell, top_y) or not _extend_cell_clear(cell, above_y):
 			return false
 	return true
 
@@ -367,16 +377,19 @@ func _extend_side_clear(side: int) -> bool:
 	return true
 
 
-func _extend_cell_clear(cell: Vector2i) -> bool:
+func _extend_cell_clear(cell: Vector2i, probe_y: float = 0.5) -> bool:
 	# True if the cell has no wall to grow into. Queries live physics (layer 1), so
 	# it respects the perimeter walls (now collision-only) and the gate's current
 	# open/closed collision state. "Clear" here means "not a wall" — cover
 	# detection uses this to decide whether a neighbor is open from that side.
 	# A void cell (no floor) is also "clear" by this definition; cover logic
 	# wants that, since you're exposed across a void, not hidden by it.
+	# probe_y defaults to base level (the extension-collision callers). The cover
+	# check (_column_walled / _row_walled) probes at the player's top cell and just
+	# above it to require the wall height to match the player's, not merely exceed it.
 	var space := get_world_3d().direct_space_state
 	var params := PhysicsPointQueryParameters3D.new()
-	params.position = Vector3(cell.x, 0.5, cell.y)
+	params.position = Vector3(cell.x, probe_y, cell.y)
 	params.collision_mask = 1
 	params.collide_with_areas = false
 	return space.intersect_point(params).is_empty()
