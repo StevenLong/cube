@@ -1,9 +1,8 @@
-[gd_scene format=3 uid="uid://b8level010001"]
+[gd_scene format=3 uid="uid://clveltemplate01"]
 
 [ext_resource type="Script" path="res://player.gd" id="2"]
 [ext_resource type="Script" path="res://camera_controller.gd" id="3"]
 [ext_resource type="Script" path="res://level.gd" id="5"]
-[ext_resource type="Script" path="res://floor_rect.gd" id="8"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_1"]
 
@@ -36,24 +35,13 @@ emission = Color(1, 0.75, 0.2, 1)
 [sub_resource type="BoxShape3D" id="BoxShape3D_EndArea"]
 size = Vector3(0.9, 0.5, 0.9)
 
-[sub_resource type="BoxShape3D" id="BoxShape3D_PerimeterNS"]
-size = Vector3(30, 1, 1)
-
-[sub_resource type="BoxShape3D" id="BoxShape3D_PerimeterEW"]
-size = Vector3(1, 1, 30)
-
-[node name="Node3D" type="Node3D"]
+[node name="World" type="Node3D"]
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource("Environment_1")
 
-[node name="FloorRect" type="Node3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -13, 0, -13)
-script = ExtResource("8")
-size = Vector2i(27, 27)
-
 [node name="Camera3D" type="Camera3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 0.707107, 0.707107, 0, -0.707107, 0.707107, 0, 8, 8)
+transform = Transform3D(1, 0, 0, 0, 0.707107, 0.707107, 0, -0.707107, 0.707107, 0, 8, 12)
 script = ExtResource("3")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
@@ -83,53 +71,13 @@ shape = SubResource("BoxShape3D_2")
 collision_mask = 1
 target_position = Vector3(0, 0, 0)
 
-[node name="WallRayN" type="RayCast3D" parent="Player"]
-target_position = Vector3(0, 0, -1)
-collision_mask = 1
-
-[node name="WallRayS" type="RayCast3D" parent="Player"]
-target_position = Vector3(0, 0, 1)
-collision_mask = 1
-
-[node name="WallRayE" type="RayCast3D" parent="Player"]
-target_position = Vector3(1, 0, 0)
-collision_mask = 1
-
-[node name="WallRayW" type="RayCast3D" parent="Player"]
-target_position = Vector3(-1, 0, 0)
-collision_mask = 1
-
-[node name="PerimeterN" type="StaticBody3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, -14.5)
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="PerimeterN"]
-shape = SubResource("BoxShape3D_PerimeterNS")
-
-[node name="PerimeterS" type="StaticBody3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 14.5)
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="PerimeterS"]
-shape = SubResource("BoxShape3D_PerimeterNS")
-
-[node name="PerimeterE" type="StaticBody3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 14.5, 0.5, 0)
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="PerimeterE"]
-shape = SubResource("BoxShape3D_PerimeterEW")
-
-[node name="PerimeterW" type="StaticBody3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -14.5, 0.5, 0)
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="PerimeterW"]
-shape = SubResource("BoxShape3D_PerimeterEW")
-
 [node name="StartTile" type="MeshInstance3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.01, 0)
 mesh = SubResource("PlaneMesh_Tile")
 surface_material_override/0 = SubResource("StandardMaterial3D_Start")
 
 [node name="EndTile" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 0.01, 3)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0.01, 0)
 mesh = SubResource("PlaneMesh_Tile")
 surface_material_override/0 = SubResource("StandardMaterial3D_End")
 

@@ -766,14 +766,33 @@ func _update_alert_glyph(delta: float) -> void:
 
 
 func _build_nav_grid() -> void:
-	# Static walls only — interior Wall* nodes at integer cells. Perimeter walls
-	# don't match the "Wall*" prefix and would land on non-floor cells anyway,
-	# so they fall through the is_floor gate in _cell_blocked.
+	# Static walls only — interior Wall* nodes. Mark every grid cell the wall's box
+	# footprint covers (not just its centre cell), so multi-cell walls block fully.
+	# Perimeter walls don't match the "Wall*" prefix and would land on non-floor
+	# cells anyway, so they fall through the is_floor gate in _cell_blocked.
 	_nav_blocked.clear()
 	for child in get_parent().get_children():
-		if child is StaticBody3D and child.name.begins_with("Wall"):
-			var cell := Vector2i(roundi(child.position.x), roundi(child.position.z))
-			_nav_blocked[cell] = true
+		if not (child is StaticBody3D and child.name.begins_with("Wall")):
+			continue
+		var body := child as StaticBody3D
+		var fp := _wall_footprint(body)
+		var x0 := roundi(body.position.x - fp.x * 0.5 + 0.5)
+		var x1 := roundi(body.position.x + fp.x * 0.5 - 0.5)
+		var z0 := roundi(body.position.z - fp.y * 0.5 + 0.5)
+		var z1 := roundi(body.position.z + fp.y * 0.5 - 0.5)
+		for x in range(x0, x1 + 1):
+			for z in range(z0, z1 + 1):
+				_nav_blocked[Vector2i(x, z)] = true
+
+
+func _wall_footprint(body: StaticBody3D) -> Vector2:
+	# XZ extent of the wall's BoxShape3D collider, or 1x1 if none found. Returns
+	# (x_size, z_size); single-cell walls give (1, 1) and behave as before.
+	for c in body.get_children():
+		if c is CollisionShape3D and (c as CollisionShape3D).shape is BoxShape3D:
+			var s := ((c as CollisionShape3D).shape as BoxShape3D).size
+			return Vector2(s.x, s.z)
+	return Vector2.ONE
 
 
 func _cell_blocked(cell: Vector2i) -> bool:

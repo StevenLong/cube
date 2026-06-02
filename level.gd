@@ -29,7 +29,7 @@ var _end_material: StandardMaterial3D
 var _floor_cells: Dictionary = {}
 
 @onready var _player: Node3D = get_node("../Player")
-@onready var _enemy: Node3D = get_node_or_null("../Enemy")
+var _enemies: Array[Node] = []
 @onready var _start_tile: MeshInstance3D = get_node("../StartTile")
 @onready var _end_tile: MeshInstance3D = get_node("../EndTile")
 @onready var _end_area: Area3D = get_node("../EndTile/Area3D")
@@ -56,9 +56,14 @@ func _ready() -> void:
 	_player.move_settled.connect(_on_player_move_settled)
 	_player.caught.connect(_on_player_caught)
 	_player.fell.connect(_on_player_fell)
-	if _enemy != null:
-		_enemy.entered_pursuit.connect(_on_enemy_pursuit)
-	else:
+	# Wire every enemy in the scene (any sibling exposing entered_pursuit) so the
+	# Spotted readout reflects all guards, not just one. Backward compatible with
+	# single-enemy scenes and the no-enemy tutorials.
+	for child in get_parent().get_children():
+		if child.has_signal("entered_pursuit"):
+			_enemies.append(child)
+			child.entered_pursuit.connect(_on_enemy_pursuit)
+	if _enemies.is_empty():
 		_result_spotted.hide()
 	_end_area.area_entered.connect(_on_end_entered)
 	_end_area.area_exited.connect(_on_end_exited)
@@ -120,7 +125,7 @@ func _enter_complete() -> void:
 	_result_moves.text = "Moves: %d" % moves
 	_result_time.text = "Time: %.1fs" % time_elapsed
 	_result_spotted.text = "Spotted: %s" % ("Yes" if spotted else "No")
-	if _enemy != null:
+	if not _enemies.is_empty():
 		_result_spotted.show()
 	_results_panel.show()
 

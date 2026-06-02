@@ -1,78 +1,81 @@
-# Handoff, 2026-06-01
+# Handoff, 2026-06-02
 
-## Where we are
-Ran the project assessment, then hardened the sphere (the flagged next area). All
-sphere-behavior fixes below were playtested-and-approved by the user this session
-and are committed. We stopped at a "what's next" fork (asked, not yet chosen).
+## Headline: level authoring is now DATA-DRIVEN (paint via a text grid)
+The big shift this session: levels are no longer hand-authored `.tscn`. A level is a text
+grid in `levels/data/*.txt` plus a loader that builds the playable scene. This was a
+deliberate pivot - the user found iterating on level design *through the agent* too slow and
+error-prone, and wants to author levels directly (and eventually let players make levels).
+Step 1 (format + loader) is done and verified; Step 2 (an in-game mouse painter) is next.
 
-## Sphere hardening done this session (player.gd / enemy_sphere.gd)
-- **Blend = flush height MATCH.** Hiding requires the flanking walls to equal the
-  player's exact height, not merely cover it. Short-in-tall and tall-over-short both
-  fail. (`_column_walled`/`_row_walled` probe the player's top cell AND just above.)
-  See memory `project_blend_flush_height_match`.
-- **Pursuit chases the visible end**, not the hidden base cell (`_last_seen_pos`, not
-  `_player.position`); `_has_pursuit_corridor` now takes the target.
-- **Knock ignored during pursuit** (not queued; in-flight `_pending_sounds` cleared on
-  pursuit entry).
-- **Repeated-knock stunlock fixed** (same-spot knocks no longer reset the dwell timer
-  or churn the path; only a meaningfully different source redirects).
-- **Search-and-clear investigate.** The sphere visits the open, reachable tiles AROUND
-  the source (orthogonal neighbours, nearest-first, ~5 cap, ~0.6s dwell each), so it
-  comes around a knocked wall instead of glancing at one face. Ends when all tiles are
-  checked or a 12s safety cap. (`_begin_search` / `_build_search_cells` /
-  `_investigate_search`; `INVESTIGATE_TIMEOUT` is now the safety cap.)
-- **Wall-clipping fixed.** `_follow_path`'s collision-less final `_move_toward` is gated
-  by `_clear_walk_to` (a layer-1 ray), so the sphere can't straight-line through
-  geometry. Root cause was a path/search desync in the knock handler (it called
-  `_set_path_to` instead of `_begin_search`); now synced.
+## What changed this session
+1. **`level.gd` multi-enemy wiring.** Connects every sibling exposing `entered_pursuit`
+   (was a single node named `Enemy`) so the Spotted readout reflects all guards. Backward
+   compatible with single-enemy scenes and the no-enemy tutorials.
+2. **`enemy_sphere.gd` nav-grid footprint fix.** `_build_nav_grid` now blocks EVERY cell a
+   wall's `BoxShape3D` footprint covers (was only the centre cell), still keyed off the
+   `Wall*` name prefix. This fixed an "enemies walk through walls" bug whose root cause was
+   walls NOT named `Wall*` being invisible to nav. **CONVENTION: any wall the sphere must
+   path around MUST be named `Wall*`.** (The loader names them `Wall0, Wall1, ...`.)
+3. **Data-driven level loader (the pivot):**
+   - `level_loader.gd` - parses a grid + enemy lines, builds the world from a template
+     DETACHED, positions everything, then attaches in ONE `add_child`. Race-free: every
+     `_ready` fires with the full tree present, so Player<->Level circular sibling refs
+     resolve, the sphere nav sees the walls, and floor tiles are in-group before `level.gd`
+     scans. Mirrors loading a hand-authored scene.
+   - `level_template.tscn` - reusable scaffold (WorldEnvironment, Camera, Light, Player,
+     Level, UI, StartTile, EndTile). No floor/walls/enemies.
+   - `painted_level.tscn` - trivial host: just the loader; `level_file` export points at the
+     `.txt` (default `levels/data/level_01.txt`). Set it in the inspector to load another file.
+   - `enemy_sphere.tscn` - extracted Enemy subtree the loader instantiates per enemy.
+   - `levels/data/level_01.txt` - a THROWAWAY demo proving the loader (a weave-maze + two
+     vertical patrollers). NOT a designed level - repaint it (see NEXT).
+4. **Menu.** Main menu gained a Levels submenu (`levels_menu.gd/.tscn`); "1: Crossing" now
+   loads `painted_level.tscn` (the loader).
+5. **Deleted.** Orphan `levels/level_01_movement.tscn`; and `levels/level_01.tscn` - a
+   hand-authored hallway+loop level I built mid-session, then superseded by the data loader.
 
-## New debug + readout aids
-- **V = debug reveal toggle** (project.godot action `debug_reveal`): x-rays the sphere
-  body + alert glyph through walls to watch it while occluded. Pause-gated (works in
-  active play, not on menus/results). Debug only; remove when done tuning.
-- **DEBUG_DETECTION readout** still ON (`enemy_sphere.gd` ~line 49): shows state +
-  detection + `[REVEAL]`. Kept on intentionally while tuning.
-- **Last-known ghost** (`_setup_ghost`/`_update_ghost`): translucent cube tinted by
-  alert state, shown ONLY when alerted and NOT currently seeing the player (i.e. once
-  it has lost sight). This is a GAMEPLAY readout now, not debug.
-- **Blend gallery in main.tscn** (the Sandbox): labeled 1u/2u/3u slots + a single-wall
-  no-blend control, in the z=-8 lane north of start. Walls `WallS1L`..`WallSingle`
-  (2u/3u use new `BoxMesh_2u`/`_3u` + `BoxShape3D_2u`/`_3u`). Built to verify the flush
-  blend rule.
+## Level data format (`levels/data/*.txt`)
+Grid chars: `.` floor | `#` tall wall (cover, blocks sight, blend-able) | `=` low rail
+(safe edge you see over; blocks the cube + nav, NO blend since the cube overtops it) |
+` ` (space) void/fall | `S` start | `E` end. Top row = far side; cols = x, rows = z, 0-based
+top-left origin. Enemies: `@ col,row col,row ... [speed=N]` - first cell = spawn, rest =
+patrol path; waypoint cells must be floor. Keep rows non-empty (blank lines are skipped);
+one `S`, one `E`. Verified headless: demo parses to floor=66 tall=24 rails=50 enemies=2.
 
-## NEXT SESSION: pick the fork (I asked, user wrapped before answering)
-1. **First real level** (my recommendation): use the hardened sphere to build the void
-   world's first non-tutorial showcase (Phase 8C never got one). The design's named
-   gate before new enemy types; surfaces real-play needs.
-2. **New enemy type** (pyramid/cylinder): the user's originally-flagged gap. NOTE: the
-   v0.2 doc defers new types until the sphere has carried a full level set (none exists
-   yet), so choosing this is a deliberate divergence from the locked design.
-3. **Tidy & verify the sphere**: the leftover stale-pile items below.
+## EDGE / PERIMETER lesson (carry into level design)
+Tall `#` walls block visibility and the floating-in-void look - do NOT ring a level in them.
+Platform edges should be open void (fall, see across) or low `=` rails (safe, see over).
+Tall walls are for INTERIOR cover only. (This was a user correction; baked into the format.)
 
-## Sphere leftovers (the "tidy & verify" option)
-- Dead `WallRay{N,S,E,W}` nodes under Player in EVERY scene (main, all tutorials,
-  level_01, sandbox); referenced in zero .gd. Strip them (hand-edit .tscn).
-- Two sandbox scenes diverged: main.tscn (wired as "Sandbox", has the enemy) vs
-  mechanics_sandbox.tscn (orphaned, no enemy). Reconcile or delete the orphan.
-- LoS center-to-center per cell (`_is_seeing_player`, `_visible_to_player`): likely fine
-  for the grid; verify, fix only if a real fairness hole.
-- Perimeter cover (`_extend_cell_clear` counts collision-only perimeter walls): moot in
-  the void world (no perimeter walls); main.tscn still has legacy perimeter colliders.
-- Remove DEBUG_DETECTION readout + the V reveal x-ray once tuning is done. KEEP the
-  last-known ghost (it graduated to gameplay).
+## NEXT (order the user picked)
+- **Step 2: in-game mouse painter** - palette + click-to-paint floor/wall/rail/start/end +
+  save to the `.txt` format. Multi-level selection lands here too: planned seam is an autoload
+  (e.g. `level_select` holding the chosen path) the menu sets and the loader reads; right now
+  the loader just defaults to `level_01.txt`.
+- Step 3: enemies + patrol paths in the painter (ordered waypoints - the fiddly part).
+- Near-term: repaint `level_01.txt` into the user's requested patterns - a long hallway with
+  alcoves, then a loop around a central block with a circuit patrol - to feel the real gameloop.
 
-## Assessment recap (still to reconcile)
-- Task-list stale boxes in `Cube Game Tasks.md`: Phase 8C (void world) is built in code
-  but unchecked. Phase 9 tutorials we built (move/gaps/bridge) diverge from the task
-  list's situation-first list. Reconcile both.
-- `levels/level_01_movement.tscn` is orphaned (delete whenever).
+## Carry-over from the prior session (still true)
+- Sphere is freshly hardened (blend = flush height MATCH, pursuit chases the visible end,
+  knock + search-and-clear investigate, wall-clip gate). See memory `project_blend_flush_height_match`.
+- **Debug aids STILL ON:** `DEBUG_DETECTION` readout (`enemy_sphere.gd` ~line 52) + the V
+  reveal x-ray. With 2+ enemies the readouts overlap on screen. Remove when done tuning (the
+  separate "tidy & verify" task). The last-known ghost graduated to gameplay - keep it.
 
-## Verify recipe (~/.local/bin/godot, v4.6; exit code is 0 even on errors, so grep)
+## Outstanding / not done
+- `game-dev/Cube Game Tasks.md` (separate repo) still has stale Phase 8C/9 boxes and no entry
+  for the level loader / data-driven authoring. Reconcile next session.
+- Tutorials + sandbox (`main.tscn`) are still hand-authored `.tscn` (not ported to data). Fine
+  for now; could port later once the format settles.
+
+## Verify recipe (`~/.local/bin/godot` v4.6; exit code is 0 even on errors, so grep)
 - Parse: `godot --headless --editor --quit 2>&1 | grep -E "SCRIPT ERROR|Parse Error|SHADER ERROR"`
-- Smoke: `godot --headless --quit-after 150 res://main.tscn 2>&1 | grep -iE "ERROR|nil|invalid|cannot|failed"` (filter vulkan/audio/driver/display noise)
+- Smoke: `godot --headless --quit-after 120 res://painted_level.tscn 2>&1 | grep -iE "ERROR|nil|invalid|cannot|failed"` (filter vulkan/audio/driver/display noise)
 
 ## Memory notes
 - Read HANDOFF.md first at session start.
-- Blend needs flush height match (memory `project_blend_flush_height_match`, new this session).
-- Active verbs are cube-only; ink/water binary cleanse; Transform3D row-major.
-- No Co-Authored-By trailer; no em/en dashes; commit at session end or on request.
+- Levels are data-driven now (memory `project_data_driven_levels`).
+- Walls must be named `Wall*` for sphere nav (memory `project_wall_naming_nav`).
+- Active verbs cube-only; ink/water binary; Transform3D row-major; no Co-Authored-By; no
+  em/en dashes; commit at session end or on request.
