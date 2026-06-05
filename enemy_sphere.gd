@@ -59,6 +59,7 @@ const CONE_LOCKED_ALPHA := 0.6       # cone opacity at detection 1
 const CONE_SEARCH_ALPHA := 0.5       # rotating search cone opacity in INVESTIGATE (lock 0)
 const CONE_SEARCH_HALF_COS := 0.7071 # cos(45°): a 90° rotating search cone in INVESTIGATE
 const CONE_SEARCH_SWEEP_RATE := 3.0  # rad/s the INVESTIGATE cone rotates (emergency-beacon sweep)
+const CONE_MAX := 8                   # cone slots in grid_ground.gdshader: one per enemy (cone_index)
 const GLYPH_POP_SCALE := 1.6         # alert-glyph scale spike on a state change
 const GLYPH_POP_TIME := 0.25         # seconds the glyph pop decays over
 
@@ -78,6 +79,7 @@ enum State { PATROL, SUSPICIOUS, INVESTIGATE, PURSUIT }
 	Vector3(8, 0.4, 1),
 ]
 @export var speed: float = 2.0
+@export var cone_index: int = 0  # this enemy's slot in the shared ground-cone arrays; the loader assigns one per enemy
 
 var _target_idx := 0
 var _state: State = State.PATROL
@@ -632,11 +634,10 @@ func _update_cone_uniforms(delta: float) -> void:
 	var dir_2d := Vector2(1.0, 0.0)
 	if fl > 0.0001:
 		dir_2d = Vector2(forward.x / fl, forward.z / fl)
-	_ground_material.set_shader_parameter("cone_origin", Vector2(position.x, position.z))
-	_ground_material.set_shader_parameter("cone_radius", VIEW_RADIUS)
+	var origin := Vector2(position.x, position.z)
 
 	if _state == State.INVESTIGATE:
-		_update_search_cone(delta)
+		_update_search_cone(delta, origin)
 		return
 
 	# Visual ladder: the cone is the detection fill. As _detection rises it
@@ -651,15 +652,12 @@ func _update_cone_uniforms(delta: float) -> void:
 	var half_cos := lerpf(VIEW_CONE_COS, CONE_FOCUS_COS, _detection)
 	var col := _detection_color(_detection)
 	var alpha := lerpf(CONE_PATROL_ALPHA, CONE_LOCKED_ALPHA, _detection)
-	_ground_material.set_shader_parameter("cone_dir", aim)
-	_ground_material.set_shader_parameter("cone_half_angle_cos", half_cos)
-	_ground_material.set_shader_parameter("cone_color", _color_to_vec3(col))
 	# Independent of _visibility_alpha: the floor cone stays readable when the enemy
 	# body is occluded. The shader's per-pixel LoS still hides cone on unseen ground.
-	_ground_material.set_shader_parameter("cone_alpha", alpha)
+	_write_cone(origin, aim, VIEW_RADIUS, half_cos, _color_to_vec3(col), alpha)
 
 
-func _update_search_cone(delta: float) -> void:
+func _update_search_cone(delta: float, origin: Vector2) -> void:
 	# Active search: a 90° cone sweeps the floor like a rotating beacon. As
 	# certainty (lock) climbs back toward pursuit the sweep slows and stops, the
 	# cone narrows toward the focus beam, slides orange -> red, and homes on the
@@ -677,12 +675,47 @@ func _update_search_cone(delta: float) -> void:
 	var half_cos := lerpf(CONE_SEARCH_HALF_COS, CONE_FOCUS_COS, lock)
 	var col := COLOR_INVESTIGATE.lerp(COLOR_PURSUIT, lock)
 	var alpha := lerpf(CONE_SEARCH_ALPHA, CONE_LOCKED_ALPHA, lock)
-	_ground_material.set_shader_parameter("cone_dir", aim)
-	_ground_material.set_shader_parameter("cone_half_angle_cos", half_cos)
-	_ground_material.set_shader_parameter("cone_color", _color_to_vec3(col))
 	# Independent of _visibility_alpha (see _update_cone_uniforms): the search cone
 	# stays visible on seen ground even when the enemy itself is behind a wall.
-	_ground_material.set_shader_parameter("cone_alpha", alpha)
+	_write_cone(origin, aim, VIEW_RADIUS, half_cos, _color_to_vec3(col), alpha)
+
+
+func _write_cone(origin: Vector2, dir: Vector2, radius: float, half_cos: float, col: Vector3, alpha: float) -> void:
+	# Each enemy owns one slot (cone_index) in the shared ground material, so many
+	# cones coexist instead of stomping a single set of uniforms. We touch only our
+	# own slot; _process runs sequentially, so this read-modify-write is race-free.
+	if cone_index < 0 or cone_index >= CONE_MAX:
+		return
+	var origins: PackedVector2Array = _ground_material.get_shader_parameter("cone_origins")
+	var dirs: PackedVector2Array = _ground_material.get_shader_parameter("cone_dirs")
+	var radii: PackedFloat32Array = _ground_material.get_shader_parameter("cone_radii")
+	var halves: PackedFloat32Array = _ground_material.get_shader_parameter("cone_half_angle_cos")
+	var colors: PackedVector3Array = _ground_material.get_shader_parameter("cone_colors")
+	var alphas: PackedFloat32Array = _ground_material.get_shader_parameter("cone_alphas")
+	origins[cone_index] = origin
+	dirs[cone_index] = dir
+	radii[cone_index] = radius
+	halves[cone_index] = half_cos
+	colors[cone_index] = col
+	alphas[cone_index] = alpha
+	_ground_material.set_shader_parameter("cone_origins", origins)
+	_ground_material.set_shader_parameter("cone_dirs", dirs)
+	_ground_material.set_shader_parameter("cone_radii", radii)
+	_ground_material.set_shader_parameter("cone_half_angle_cos", halves)
+	_ground_material.set_shader_parameter("cone_colors", colors)
+	_ground_material.set_shader_parameter("cone_alphas", alphas)
+
+
+func _exit_tree() -> void:
+	# Leaving the scene: zero our cone slot so a later scene with fewer enemies does
+	# not inherit a stale cone in the shared ground material (radii[i] <= 0 disables
+	# the slot in the shader).
+	if _ground_material == null or cone_index < 0 or cone_index >= CONE_MAX:
+		return
+	var radii: PackedFloat32Array = _ground_material.get_shader_parameter("cone_radii")
+	if cone_index < radii.size():
+		radii[cone_index] = 0.0
+		_ground_material.set_shader_parameter("cone_radii", radii)
 
 
 func _detection_color(d: float) -> Color:

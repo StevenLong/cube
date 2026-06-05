@@ -14,12 +14,12 @@ uniform float wave_alphas[8];
 uniform vec2 footprint_positions[64];
 uniform float footprint_alphas[64];
 
-uniform vec2 cone_origin;
-uniform vec2 cone_dir;
-uniform float cone_half_angle_cos;
-uniform float cone_radius;
-uniform vec3 cone_color;
-uniform float cone_alpha;
+uniform vec2 cone_origins[8];
+uniform vec2 cone_dirs[8];
+uniform float cone_half_angle_cos[8];
+uniform float cone_radii[8];
+uniform vec3 cone_colors[8];
+uniform float cone_alphas[8];
 
 uniform vec2 player_xz;
 uniform vec2 wall_mins[16];
@@ -157,23 +157,33 @@ void fragment() {
 		// every wall AABB, else 0.
 		float visibility = segment_blocked(player_xz, world_xz) ? 0.0 : 1.0;
 
-		// Vision cone overlay: tinted sector from the enemy with soft edges and
-		// distance falloff. cone_radius == 0 disables. Gated on visibility so the
-		// cone only renders on ground the player can see.
+		// Vision cone overlays: one tinted sector per enemy, each in its own array
+		// slot, so multiple cones coexist instead of stomping a single set of
+		// uniforms. A slot with cone_radii[i] <= 0 is inactive. Where cones overlap
+		// the strongest (highest intensity) wins the color so neither washes out.
+		// Gated on visibility so cones only render on ground the player can see.
 		float cone_intensity = 0.0;
-		if (cone_radius > 0.01) {
-			vec2 to_cone = world_xz - cone_origin;
+		vec3 cone_color = vec3(0.0);
+		for (int i = 0; i < 8; i++) {
+			if (cone_radii[i] <= 0.01) {
+				continue;
+			}
+			vec2 to_cone = world_xz - cone_origins[i];
 			float cone_dist = length(to_cone);
-			if (cone_dist > 0.05 && cone_dist < cone_radius) {
-				float cone_dot = dot(to_cone / cone_dist, cone_dir);
-				if (cone_dot >= cone_half_angle_cos) {
-					float dist_fade = 1.0 - cone_dist / cone_radius;
+			if (cone_dist > 0.05 && cone_dist < cone_radii[i]) {
+				float cone_dot = dot(to_cone / cone_dist, cone_dirs[i]);
+				if (cone_dot >= cone_half_angle_cos[i]) {
+					float dist_fade = 1.0 - cone_dist / cone_radii[i];
 					float edge_fade = smoothstep(
-						cone_half_angle_cos,
-						cone_half_angle_cos + 0.05,
+						cone_half_angle_cos[i],
+						cone_half_angle_cos[i] + 0.05,
 						cone_dot
 					);
-					cone_intensity = cone_alpha * dist_fade * edge_fade;
+					float ci = cone_alphas[i] * dist_fade * edge_fade;
+					if (ci > cone_intensity) {
+						cone_intensity = ci;
+						cone_color = cone_colors[i];
+					}
 				}
 			}
 		}

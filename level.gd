@@ -227,6 +227,11 @@ func _build_world() -> void:
 	# Single deferred entry point: floor tiles must exist before safety edges
 	# are computed (edges read _floor_cells and place red lines on edges where
 	# a floor cell meets a wall cell).
+	# Deferred from _ready: if the scene was torn down (or swapped) before this
+	# runs, the node is out of the tree and get_tree()/get_world_3d() are null.
+	# Bail rather than crash; a vanishing scene has nothing to build.
+	if not is_inside_tree():
+		return
 	_build_floor()
 	_build_safety_edges()
 

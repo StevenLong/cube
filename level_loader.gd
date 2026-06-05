@@ -43,7 +43,7 @@ func _load() -> void:
 
 
 func _parse(text: String) -> Dictionary:
-	var floor: Dictionary = {}          # Vector2i -> true
+	var floor_cells: Dictionary = {}    # Vector2i -> true
 	var tall: Array[Vector2i] = []
 	var rails: Array[Vector2i] = []
 	var start := Vector2i.ZERO
@@ -63,12 +63,12 @@ func _parse(text: String) -> Dictionary:
 			var cell := Vector2i(col, row)
 			match line[col]:
 				".":
-					floor[cell] = true
+					floor_cells[cell] = true
 				"S":
-					floor[cell] = true
+					floor_cells[cell] = true
 					start = cell
 				"E":
-					floor[cell] = true
+					floor_cells[cell] = true
 					end = cell
 				"#":
 					tall.append(cell)
@@ -77,7 +77,7 @@ func _parse(text: String) -> Dictionary:
 				_:
 					pass             # space / unknown = void
 		row += 1
-	return {"floor": floor, "tall": tall, "rails": rails, "start": start, "end": end, "enemies": enemies}
+	return {"floor": floor_cells, "tall": tall, "rails": rails, "start": start, "end": end, "enemies": enemies}
 
 
 func _parse_enemy(line: String) -> Dictionary:
@@ -126,6 +126,7 @@ func _populate(world: Node3D, data: Dictionary) -> void:
 	for spec in data["enemies"]:
 		var enemy: Node3D = ENEMY.instantiate()
 		enemy.name = "Enemy%d" % e
+		enemy.cone_index = e
 		var spawn: Vector2i = spec["spawn"]
 		enemy.position = Vector3(spawn.x, 0.4, spawn.y)
 		var wps: Array[Vector3] = []
