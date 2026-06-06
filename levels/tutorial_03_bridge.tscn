@@ -1,5 +1,17 @@
 [gd_scene format=3 uid="uid://b4w1y4ohvwki1"]
 
+; Tutorial 03 - extend-lock bridge (option 1: one travel-bar, vertical reorient).
+; FIRST PASS for feel. Layout is 3 deep (z=0,1,2), travel +x. Beats, left to right:
+;   x=0      start (cube)
+;   x=2..4   LockZone, form a (3,1,1) travel-bar and lock
+;   x=6..8   1-wide bridge (z=1 only) - stay on the line, void both sides
+;   x=11     1-cell gap - lie the bar across it (length)
+;   x=14     Gate (open while locked) - pass through committed
+;   x=15..17 UnlockZone, re-seat the (3,1,1) bar to release
+;   x=18..20 1-wide corner - collapse to 1x1x1 to make the turn to the exit
+;   x=20,z=2 End
+; No perimeter walls: falling off the sides/gap is a restart, on purpose.
+
 [ext_resource type="Script" path="res://player.gd" id="2"]
 [ext_resource type="Script" path="res://camera_controller.gd" id="3"]
 [ext_resource type="Script" path="res://level.gd" id="5"]
@@ -39,12 +51,6 @@ emission = Color(1, 0.75, 0.2, 1)
 [sub_resource type="BoxShape3D" id="BoxShape3D_EndArea"]
 size = Vector3(0.9, 0.5, 0.9)
 
-[sub_resource type="BoxShape3D" id="BoxShape3D_PerimeterNS"]
-size = Vector3(22, 1, 1)
-
-[sub_resource type="BoxShape3D" id="BoxShape3D_PerimeterEW"]
-size = Vector3(1, 1, 3)
-
 [sub_resource type="BoxShape3D" id="BoxShape3D_Zone"]
 size = Vector3(0.9, 1, 0.9)
 
@@ -58,6 +64,15 @@ albedo_color = Color(0.9, 0.2, 0.2, 0.5)
 [sub_resource type="BoxShape3D" id="BoxShape3D_Gate"]
 size = Vector3(0.4, 3, 1)
 
+[sub_resource type="BoxMesh" id="BoxMesh_Wall"]
+size = Vector3(1, 2, 1)
+
+[sub_resource type="StandardMaterial3D" id="Mat_Wall"]
+albedo_color = Color(0.4, 0.4, 0.5, 1)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_Wall"]
+size = Vector3(1, 2, 1)
+
 [node name="Node3D" type="Node3D"]
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
@@ -66,12 +81,22 @@ environment = SubResource("Environment_1")
 [node name="FloorRect" type="Node3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
 script = ExtResource("8")
-size = Vector2i(20, 1)
+size = Vector2i(21, 3)
 
-[node name="FloorMissing" type="Node3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 10, 0, 0)
+[node name="FloorMissingBridgeS" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 0, 0)
 script = ExtResource("9")
-size = Vector2i(1, 1)
+size = Vector2i(3, 1)
+
+[node name="FloorMissingBridgeN" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 0, 2)
+script = ExtResource("9")
+size = Vector2i(3, 1)
+
+[node name="FloorMissingGap" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 11, 0, 0)
+script = ExtResource("9")
+size = Vector2i(1, 3)
 
 [node name="Camera3D" type="Camera3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 0.707107, 0.707107, 0, -0.707107, 0.707107, 0, 8, 8)
@@ -81,7 +106,7 @@ script = ExtResource("3")
 transform = Transform3D(1, 0, 0, 0, 0.5, 0.866025, 0, -0.866025, 0.5, 0, 0, 0)
 
 [node name="Player" type="Node3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 1)
 script = ExtResource("2")
 
 [node name="StepSound" type="AudioStreamPlayer" parent="Player"]
@@ -120,42 +145,18 @@ collision_mask = 1
 target_position = Vector3(-1, 0, 0)
 collision_mask = 1
 
-[node name="PerimeterN" type="StaticBody3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 9.5, 0.5, -1)
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="PerimeterN"]
-shape = SubResource("BoxShape3D_PerimeterNS")
-
-[node name="PerimeterS" type="StaticBody3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 9.5, 0.5, 1)
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="PerimeterS"]
-shape = SubResource("BoxShape3D_PerimeterNS")
-
-[node name="PerimeterE" type="StaticBody3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 20, 0.5, 0)
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="PerimeterE"]
-shape = SubResource("BoxShape3D_PerimeterEW")
-
-[node name="PerimeterW" type="StaticBody3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, 0.5, 0)
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="PerimeterW"]
-shape = SubResource("BoxShape3D_PerimeterEW")
-
 [node name="LockZone" type="Area3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4, 0.5, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 0.5, 1)
 collision_layer = 0
 collision_mask = 2
 script = ExtResource("10")
-required_dims = Vector3i(1, 3, 1)
+required_dims = Vector3i(3, 1, 1)
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="LockZone"]
 shape = SubResource("BoxShape3D_Zone")
 
 [node name="Gate" type="StaticBody3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 1.5, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 14, 1.5, 1)
 collision_mask = 0
 script = ExtResource("11")
 
@@ -167,22 +168,73 @@ surface_material_override/0 = SubResource("Mat_Gate")
 shape = SubResource("BoxShape3D_Gate")
 
 [node name="UnlockZone" type="Area3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 12, 0.5, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 15, 0.5, 1)
 collision_layer = 0
 collision_mask = 2
 script = ExtResource("10")
 mode = 1
+required_dims = Vector3i(3, 1, 1)
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="UnlockZone"]
 shape = SubResource("BoxShape3D_Zone")
 
+[node name="Wall1" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 18, 1, 0)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Wall1"]
+mesh = SubResource("BoxMesh_Wall")
+surface_material_override/0 = SubResource("Mat_Wall")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Wall1"]
+shape = SubResource("BoxShape3D_Wall")
+
+[node name="Wall2" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 18, 1, 2)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Wall2"]
+mesh = SubResource("BoxMesh_Wall")
+surface_material_override/0 = SubResource("Mat_Wall")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Wall2"]
+shape = SubResource("BoxShape3D_Wall")
+
+[node name="Wall3" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 19, 1, 0)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Wall3"]
+mesh = SubResource("BoxMesh_Wall")
+surface_material_override/0 = SubResource("Mat_Wall")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Wall3"]
+shape = SubResource("BoxShape3D_Wall")
+
+[node name="Wall4" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 19, 1, 2)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Wall4"]
+mesh = SubResource("BoxMesh_Wall")
+surface_material_override/0 = SubResource("Mat_Wall")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Wall4"]
+shape = SubResource("BoxShape3D_Wall")
+
+[node name="Wall5" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 20, 1, 0)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Wall5"]
+mesh = SubResource("BoxMesh_Wall")
+surface_material_override/0 = SubResource("Mat_Wall")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Wall5"]
+shape = SubResource("BoxShape3D_Wall")
+
 [node name="StartTile" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.01, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.01, 1)
 mesh = SubResource("PlaneMesh_Tile")
 surface_material_override/0 = SubResource("StandardMaterial3D_Start")
 
 [node name="EndTile" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 18, 0.01, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 20, 0.01, 2)
 mesh = SubResource("PlaneMesh_Tile")
 surface_material_override/0 = SubResource("StandardMaterial3D_End")
 
