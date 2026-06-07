@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "meta": { "name": "Crossing", "size": [12, 7] },
+  "base": [
+    "============",
+    "=S.........=",
+    "=..####....=",
+    "=..........=",
+    "=..####....=",
+    "=........E.=",
+    "============"
+  ],
+  "overlay": [
+    "            ",
+    "            ",
+    "            ",
+    "            ",
+    "            ",
+    "  iii w     ",
+    "            "
+  ],
+  "objects": [
+    { "type": "enemy_sphere", "cell": [8, 1], "waypoints": [[8, 1], [8, 5]], "speed": 1.8 },
+    { "type": "extend_lock_zone", "cell": [3, 3], "mode": "lock", "required_dims": [1, 3, 1] },
+    { "type": "extend_lock_gate", "cell": [5, 3] },
+    { "type": "extend_lock_zone", "cell": [7, 3], "mode": "unlock", "required_dims": [1, 3, 1] }
+  ],
+  "links": [],
+  "config": {}
+}

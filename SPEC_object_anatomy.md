@@ -162,7 +162,7 @@ overlay grid plus the object list.
    had drifted into two artifacts: a visible half-height box (`=` in level_loader)
    and an auto-generated red strip (level.gd). The formalized object collapses
    both: invisible body plus red-line render, no visible wall, no separate derived
-   strip. Open detail: cell vs boundary, and which edges draw the line.
+   strip. IMPLEMENTED in level_loader (a cell-occupying invisible 0.4u `Wall*` blocker with a red line on each floor-facing side; the level.gd auto-strip is removed). Still open: "see over" for enemy sight, since the safety_edge is a `Wall*` body it currently blocks line-of-sight like the rail did.
 2. **ink / water are surface-overlay tiles**, not region instances (see Tile
    layers). This retires the "puddles need region" finding; `region` remains for
    true multi-cell instances (trigger volumes, platforms).

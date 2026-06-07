@@ -10,11 +10,6 @@ const RESTART_DELAY := 0.5
 
 const FLOOR_TILE_SCENE := preload("res://FloorTile.tscn")
 
-const SAFETY_EDGE_Y := 0.02  # lifts strip just above floor top to avoid z-fighting
-const SAFETY_EDGE_PERP := 0.04  # perpendicular-to-edge thickness (the "width" lying flat)
-const SAFETY_EDGE_VERT := 0.02  # vertical thickness; keep low so the line reads as paint not bar
-const SAFETY_EDGE_ENERGY := 0.6  # emission multiplier; subtler than mid-wall warning bars
-
 var state: State = State.READY
 var moves: int = 0
 var time_elapsed: float = 0.0
@@ -224,16 +219,13 @@ func get_floor_bounds() -> Rect2i:
 
 
 func _build_world() -> void:
-	# Single deferred entry point: floor tiles must exist before safety edges
-	# are computed (edges read _floor_cells and place red lines on edges where
-	# a floor cell meets a wall cell).
 	# Deferred from _ready: if the scene was torn down (or swapped) before this
-	# runs, the node is out of the tree and get_tree()/get_world_3d() are null.
-	# Bail rather than crash; a vanishing scene has nothing to build.
+	# runs, the node is out of the tree and get_tree() is null. Bail rather than
+	# crash; a vanishing scene has nothing to build. Safety-edge red lines are now
+	# owned by the safety_edge object (level_loader), not auto-derived here.
 	if not is_inside_tree():
 		return
 	_build_floor()
-	_build_safety_edges()
 
 
 func _build_floor() -> void:
@@ -272,66 +264,3 @@ func _build_floor() -> void:
 		var tile: Node3D = FLOOR_TILE_SCENE.instantiate()
 		tile.position = Vector3(cell.x, -1.0, cell.y)
 		root.add_child(tile)
-
-
-func _build_safety_edges() -> void:
-	# Mark every boundary where a floor cell meets a wall-without-floor with a
-	# thin red emissive bar 0.5u above the floor. Open-void edges (no wall at the
-	# neighbor) get no marker: their absence IS the "you can fall here" signal.
-	# Wall query uses a layer-1 point at y=0.5, which sits above floor tiles
-	# (y in [-1, 0]) and inside walls (y in [0, 1]), so floor tiles can't false-
-	# positive.
-	var root: Node3D = get_parent() as Node3D
-	var edges_parent := Node3D.new()
-	edges_parent.name = "SafetyEdges"
-	root.add_child(edges_parent)
-	var space := root.get_world_3d().direct_space_state
-	var material := _make_safety_edge_material()
-	var dirs := [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
-	for cell in _floor_cells.keys():
-		var c: Vector2i = cell
-		for d in dirs:
-			var n: Vector2i = c + d
-			if _floor_cells.has(n):
-				continue
-			if not _wall_at_cell(space, n):
-				continue
-			edges_parent.add_child(_make_safety_edge_mesh(c, d, material))
-
-
-func _wall_at_cell(space: PhysicsDirectSpaceState3D, cell: Vector2i) -> bool:
-	var params := PhysicsPointQueryParameters3D.new()
-	params.position = Vector3(cell.x, 0.5, cell.y)
-	params.collision_mask = 1
-	params.collide_with_areas = false
-	return not space.intersect_point(params).is_empty()
-
-
-func _make_safety_edge_mesh(floor_cell: Vector2i, dir: Vector2i, mat: Material) -> MeshInstance3D:
-	# Thin emissive strip painted along the cell boundary between floor_cell
-	# and floor_cell + dir, lying just above floor top. Long axis follows the
-	# edge; the perpendicular dim sits flat on the floor.
-	var mi := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	if dir.x != 0:
-		box.size = Vector3(SAFETY_EDGE_PERP, SAFETY_EDGE_VERT, 1.0)
-	else:
-		box.size = Vector3(1.0, SAFETY_EDGE_VERT, SAFETY_EDGE_PERP)
-	mi.mesh = box
-	mi.position = Vector3(
-		floor_cell.x + dir.x * 0.5,
-		SAFETY_EDGE_Y,
-		floor_cell.y + dir.y * 0.5
-	)
-	mi.material_override = mat
-	return mi
-
-
-func _make_safety_edge_material() -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(0.9, 0.15, 0.15)
-	m.emission_enabled = true
-	m.emission = Color(0.9, 0.15, 0.15)
-	m.emission_energy_multiplier = SAFETY_EDGE_ENERGY
-	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	return m
