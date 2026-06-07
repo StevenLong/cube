@@ -83,3 +83,9 @@ static func ids_of_kind(kind: Kind) -> Array:
 static func scene_for(id: String) -> PackedScene:
 	var t: Dictionary = TYPES.get(id, {})
 	return t.get("scene", null)
+
+
+static func default_param(id: String, key: String) -> Variant:
+	# A type's default value for one param, so the loader and editor never
+	# re-hardcode it. The registry is the only place a default lives.
+	return TYPES.get(id, {}).get("params", {}).get(key, null)

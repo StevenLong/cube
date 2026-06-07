@@ -211,7 +211,7 @@ func _build_enemy(spec: Dictionary, idx: int) -> Node3D:
 	if wps.is_empty():
 		wps.append(Vector3(cell.x, 0.4, cell.y))
 	enemy.waypoints = wps
-	enemy.speed = float(spec.get("speed", 1.8))
+	enemy.speed = float(spec.get("speed", ObjectRegistry.default_param("enemy_sphere", "speed")))
 	return enemy
 
 
@@ -219,8 +219,8 @@ func _build_lock_zone(spec: Dictionary, cell: Vector2i, idx: int) -> Node3D:
 	var zone: Node3D = ObjectRegistry.scene_for("extend_lock_zone").instantiate()
 	zone.name = "LockZone%d" % idx
 	zone.position = Vector3(cell.x, 0.5, cell.y)
-	zone.mode = 1 if String(spec.get("mode", "lock")) == "unlock" else 0
-	zone.required_dims = _vec3i(spec.get("required_dims", [1, 1, 3]))
+	zone.mode = 1 if String(spec.get("mode", ObjectRegistry.default_param("extend_lock_zone", "mode"))) == "unlock" else 0
+	zone.required_dims = _vec3i(spec.get("required_dims", ObjectRegistry.default_param("extend_lock_zone", "required_dims")))
 	return zone
 
 
