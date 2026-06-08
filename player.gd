@@ -93,7 +93,6 @@ var _tip_start_basis := Basis.IDENTITY
 var _wedged := false  # tip hit a wedge; holding the jammed pose before fell.emit
 var _wedge_hold_t := 0.0
 var _smoothed_focus := Vector3.ZERO
-var _dodge_held_consumed := false  # a dodge press that collapsed an extension; suppresses dodge until released
 var _extend_locked := false
 var is_blending := false  # gameplay state (enemy invisibility); true only at full phase
 var is_hiding := false  # at-rest + in cover + not animating; enemy nav treats hiding cells as walls so investigations don't barge through
@@ -1112,36 +1111,36 @@ func _process(delta: float) -> void:
 		_update_mesh()
 		return
 
-	if Input.is_action_pressed("extend") and not _extend_locked:
-		if Input.is_action_just_pressed("move_left"):
-			_try_extend(EXT_LEFT)
-		elif Input.is_action_just_pressed("move_right"):
-			_try_extend(EXT_RIGHT)
-		elif Input.is_action_just_pressed("move_forward"):
-			_try_extend(EXT_UP)
-		if Input.is_action_just_pressed("extend_depth_fwd"):
-			_try_extend(EXT_FWD)
-		elif Input.is_action_just_pressed("extend_depth_back"):
-			_try_extend(EXT_BACK)
-		_update_mesh()
-		return
+	# Extend on dedicated keys, no held modifier: arrows grow width/depth, E grows up.
+	# Movement (WASD) is on separate keys, so an extend can't be misread as a move.
+	if not _extend_locked:
+		var ext := -1
+		if Input.is_action_just_pressed("extend_left"):
+			ext = EXT_LEFT
+		elif Input.is_action_just_pressed("extend_right"):
+			ext = EXT_RIGHT
+		elif Input.is_action_just_pressed("extend_fwd"):
+			ext = EXT_FWD
+		elif Input.is_action_just_pressed("extend_back"):
+			ext = EXT_BACK
+		elif Input.is_action_just_pressed("extend_up"):
+			ext = EXT_UP
+		if ext != -1:
+			_try_extend(ext)
+			_update_mesh()
+			return
 
-	# Collapse lives on the dodge button (idle while extended), not the extend
-	# button, so collapsing mid-move can't accidentally re-extend. The dodge press
-	# that collapses is consumed until released, so it can't also fire a dodge the
-	# instant you become a cube again.
-	if not Input.is_action_pressed("dodge"):
-		_dodge_held_consumed = false
-	if _is_extended() and not _extend_locked and Input.is_action_just_pressed("dodge"):
+	# Collapse to a cube on its own button (Q / collapse), separate from movement
+	# and dodge, so it can never be confused with either.
+	if _is_extended() and not _extend_locked and Input.is_action_just_pressed("collapse"):
 		_reset_extensions()
-		_dodge_held_consumed = true
 		_update_mesh()
 		# Collapse shifts grid_pos to the cuboid centre; if that lands on void
 		# (the bridge case collapsing over its gap) the cube starts to fall.
 		_check_fall_at_settle()
 		return
 
-	var dodge_primed := Input.is_action_pressed("dodge") and _dodge_cooldown_t <= 0.0 and not _is_extended() and not _dodge_held_consumed
+	var dodge_primed := Input.is_action_pressed("dodge") and _dodge_cooldown_t <= 0.0 and not _is_extended()
 
 	if dodge_primed and move.length() > 0.5:
 		_begin_dodge(_pick_dir(move))

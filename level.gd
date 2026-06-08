@@ -92,7 +92,7 @@ func _process(delta: float) -> void:
 
 func _restart_pressed() -> bool:
 	return (Input.is_action_just_pressed("dodge")
-		or Input.is_action_just_pressed("extend")
+		or Input.is_action_just_pressed("extend_up")
 		or Input.is_action_just_pressed("move_left")
 		or Input.is_action_just_pressed("move_right")
 		or Input.is_action_just_pressed("move_forward")

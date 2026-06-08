@@ -98,3 +98,8 @@ theme_override_font_sizes/font_size = 20
 text = "Enter saves, Esc cancels"
 horizontal_alignment = 1
 theme_override_font_sizes/font_size = 14
+
+[node name="OverwriteConfirm" type="ConfirmationDialog" parent="."]
+title = "Overwrite level"
+ok_button_text = "Overwrite"
+dialog_text = "Overwrite?"

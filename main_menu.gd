@@ -12,7 +12,7 @@ func _ready() -> void:
 	_tutorials_button.pressed.connect(_load.bind("res://tutorials_menu.tscn"))
 	_levels_button.pressed.connect(_load.bind("res://levels_menu.tscn"))
 	_sandbox_button.pressed.connect(_load.bind("res://main.tscn"))
-	_editor_button.pressed.connect(_load.bind("res://editor.tscn"))
+	_editor_button.pressed.connect(_open_editor)
 	_quit_button.pressed.connect(_quit)
 	_tutorials_button.grab_focus()
 
@@ -24,6 +24,11 @@ func _input(event: InputEvent) -> void:
 
 func _load(path: String) -> void:
 	get_tree().change_scene_to_file(path)
+
+
+func _open_editor() -> void:
+	LevelEditor.open_path = ""   # blank canvas
+	_load("res://editor.tscn")
 
 
 func _quit() -> void:

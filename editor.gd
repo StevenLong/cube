@@ -1,10 +1,11 @@
 extends Node3D
+class_name LevelEditor
 
 # In-world level editor v2: the cursor IS the real player cube in god-mode (no fall,
 # no-clip), so you drive and EXTEND it like in game. To place an extend-lock you just
 # BE the shape: place captures the cube's dimensions at its cell. A palette of
 # ObjectRegistry types is stamped at the cube's cell, building a JSON-format level.
-#   Move / extend: your usual controls    Q / E: cycle type
+#   Move / extend: your usual controls    [ / ]: cycle type
 #   Enter or Space: place    X or Backspace: erase    F5: finish / name
 # FIRST PASS of v2. NEXT: menu-first selection, area-select bulk, tabbed assemblies,
 # the paused-ghost play-mode toggle, real objects rendered inert. The previews here
@@ -12,17 +13,27 @@ extends Node3D
 
 const REAL_SCENES := ["floor", "ink", "water"]
 
+# Set by a launcher before changing to editor.tscn: the level file to open ("" =
+# start blank), and whether it is a built-in (saving then makes a custom copy).
+static var open_path: String = ""
+static var open_readonly: bool = false
+
 @onready var _player: Node3D = $Player
 @onready var _info: Label = $UI/Info
 @onready var _finish_panel: Control = $UI/FinishPanel
 @onready var _name_edit: LineEdit = $UI/FinishPanel/VBox/NameEdit
 @onready var _save_button: Button = $UI/FinishPanel/VBox/Buttons/SaveButton
 @onready var _cancel_button: Button = $UI/FinishPanel/VBox/Buttons/CancelButton
+@onready var _overwrite_confirm: ConfirmationDialog = $OverwriteConfirm
 
 var _palette: Array = []
 var _sel := 0
 var _finishing := false
 var _level_name := "My Level"
+var _current_readonly := false
+var _current_path := ""           # the file currently being edited ("" = unsaved / new)
+var _pending_save_name := ""
+var _pending_save_path := ""
 var _base: Dictionary = {}       # Vector2i -> id
 var _overlay: Dictionary = {}    # Vector2i -> id
 var _objects: Dictionary = {}    # Vector2i -> { "id": String, "params": Dictionary }
@@ -35,7 +46,11 @@ func _ready() -> void:
 	_save_button.pressed.connect(_do_save)
 	_cancel_button.pressed.connect(_close_finish)
 	_name_edit.text_submitted.connect(_on_name_submitted)
+	_overwrite_confirm.confirmed.connect(_confirm_overwrite)
 	_finish_panel.hide()
+	if open_path != "":
+		_load_level(open_path, open_readonly)
+		open_path = ""
 	_refresh()
 
 
@@ -44,6 +59,8 @@ func _process(_delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if _overwrite_confirm.visible:
+		return   # the overwrite dialog owns input
 	if _finishing:
 		# the name panel owns input while open; Esc cancels it, not the editor
 		if event.is_action_pressed("ui_cancel"):
@@ -55,9 +72,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
-			KEY_E:
+			KEY_BRACKETRIGHT:
 				_cycle(1)
-			KEY_Q:
+			KEY_BRACKETLEFT:
 				_cycle(-1)
 			KEY_ENTER, KEY_SPACE:
 				_place()
@@ -89,7 +106,14 @@ func _place() -> void:
 
 
 func _stamp_tile(model: Dictionary, layer: String, id: String) -> void:
-	var cell := _cell()
+	# Paint-mode tiles use the cube as a footprint-shaped stamp: the whole extended
+	# base paints at once. Single-mode tiles (start/end) drop one cell at the cursor.
+	var cells: Array = _footprint_cells() if ObjectRegistry.TYPES[id].get("paint_mode", "single") == "paint" else [_cell()]
+	for cell: Vector2i in cells:
+		_stamp_tile_cell(model, layer, id, cell)
+
+
+func _stamp_tile_cell(model: Dictionary, layer: String, id: String, cell: Vector2i) -> void:
 	var key := "%s:%d,%d" % [layer, cell.x, cell.y]
 	_clear_vis(key)
 	model[cell] = id
@@ -99,14 +123,29 @@ func _stamp_tile(model: Dictionary, layer: String, id: String) -> void:
 		_vis[key] = node
 
 
+func _footprint_cells() -> Array:
+	# The cells the cube's base currently covers: one when compact, the whole
+	# extended footprint otherwise. Reuses the player's own footprint math.
+	var min_c: Vector2i = _player.get_footprint_min()
+	var dims: Vector3i = _player.get_dimensions()
+	var cells: Array = []
+	for x in range(min_c.x, min_c.x + dims.x):
+		for z in range(min_c.y, min_c.y + dims.z):
+			cells.append(Vector2i(x, z))
+	return cells
+
+
 func _stamp_object(id: String) -> void:
 	# BE-the-shape: the lock captures the cube's current dimensions; others drop at
 	# the cube's cell with default params.
-	var cell := _cell()
 	var params: Dictionary = {}
 	if id == "extend_lock_zone":
 		var dims: Vector3i = _player.get_dimensions()
 		params = {"mode": "lock", "required_dims": [dims.x, dims.y, dims.z]}
+	_stamp_object_at(id, _cell(), params)
+
+
+func _stamp_object_at(id: String, cell: Vector2i, params: Dictionary) -> void:
 	var key := "object:%d,%d" % [cell.x, cell.y]
 	_clear_vis(key)
 	_objects[cell] = {"id": id, "params": params}
@@ -117,7 +156,14 @@ func _stamp_object(id: String) -> void:
 
 
 func _erase() -> void:
-	var cell := _cell()
+	# Erase mirrors the stamp: clears the cube's whole footprint (one cell when compact).
+	for cell: Vector2i in _footprint_cells():
+		_erase_cell(cell)
+	_refresh()
+
+
+func _erase_cell(cell: Vector2i) -> void:
+	# Clear the topmost occupied layer at one cell (object over overlay over base).
 	for layer in ["object", "overlay", "base"]:
 		var key := "%s:%d,%d" % [layer, cell.x, cell.y]
 		if _vis.has(key):
@@ -129,8 +175,7 @@ func _erase() -> void:
 					_overlay.erase(cell)
 				"base":
 					_base.erase(cell)
-			break
-	_refresh()
+			return
 
 
 func _clear_vis(key: String) -> void:
@@ -248,8 +293,9 @@ func _refresh() -> void:
 	var tname: String = ObjectRegistry.TYPES[id]["name"]
 	var c := _cell()
 	var shape: Vector3i = _player.get_dimensions()
-	_info.text = "Cell (%d, %d)   Cube %dx%dx%d   Selected: %s [%s]\nMove/extend the cube; Q/E cycle; Enter place; X erase; F5 finish/name\n%d tiles   %d overlay   %d objects" % [
-		c.x, c.y, shape.x, shape.y, shape.z, tname, id, _base.size(), _overlay.size(), _objects.size()
+	var tag := "  (built-in copy: saving makes a new custom level)" if _current_readonly else ""
+	_info.text = "Editing: %s%s\nCell (%d, %d)   Cube %dx%dx%d   Selected: %s [%s]\nWASD move, arrows/E/Q shape; [ and ] cycle; Enter place; X erase; F5 finish/name\n%d tiles   %d overlay   %d objects" % [
+		_level_name, tag, c.x, c.y, shape.x, shape.y, shape.z, tname, id, _base.size(), _overlay.size(), _objects.size()
 	]
 
 
@@ -278,9 +324,27 @@ func _do_save() -> void:
 	var nm := _name_edit.text.strip_edges()
 	if nm.is_empty():
 		nm = "My Level"
-	_level_name = nm
 	var path := "user://levels/%s.json" % _slugify(nm)
+	# Guard against clobbering a DIFFERENT level. Re-saving the file you opened
+	# (same path) is expected and skips the prompt.
+	if path != _current_path and FileAccess.file_exists(path):
+		_pending_save_name = nm
+		_pending_save_path = path
+		_overwrite_confirm.dialog_text = "A level named \"%s\" already exists. Overwrite it?" % nm
+		_overwrite_confirm.popup_centered()
+		return
+	_write_and_finish(path, nm)
+
+
+func _confirm_overwrite() -> void:
+	_write_and_finish(_pending_save_path, _pending_save_name)
+
+
+func _write_and_finish(path: String, nm: String) -> void:
+	_level_name = nm
 	_write_level(path, nm)
+	_current_path = path
+	_current_readonly = false   # now editing the saved custom file
 	_close_finish()
 	_info.text = "Saved \"%s\"  ->  %s" % [nm, path]
 
@@ -359,3 +423,45 @@ func _grid_rows(model: Dictionary, minx: int, minz: int, maxx: int, maxz: int) -
 				line += " "
 		rows.append(line)
 	return rows
+
+
+# --- Load an existing level back into the editor (inverse of _serialize) ---
+
+func _load_level(path: String, readonly: bool) -> void:
+	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+	if not (data is Dictionary):
+		push_error("editor: cannot parse level %s" % path)
+		return
+	_clear_all()
+	_load_grid(data.get("base", []), ObjectRegistry.glyph_to_id(ObjectRegistry.Kind.BASE_TILE), _base, "base")
+	_load_grid(data.get("overlay", []), ObjectRegistry.glyph_to_id(ObjectRegistry.Kind.OVERLAY_TILE), _overlay, "overlay")
+	for o in data.get("objects", []):
+		if o is Dictionary and o.has("type") and o.has("cell"):
+			var c: Array = o["cell"]
+			var params: Dictionary = {}
+			for k in o:
+				if k != "type" and k != "cell":
+					params[k] = o[k]
+			_stamp_object_at(String(o["type"]), Vector2i(int(c[0]), int(c[1])), params)
+	var base_name := str((data.get("meta", {}) as Dictionary).get("name", "My Level"))
+	_level_name = (base_name + " (copy)") if readonly else base_name
+	_current_readonly = readonly
+	_current_path = path
+
+
+func _load_grid(rows: Array, glyphs: Dictionary, model: Dictionary, layer: String) -> void:
+	for z in range(rows.size()):
+		var row := String(rows[z])
+		for x in range(row.length()):
+			var g := row[x]
+			if g != " " and glyphs.has(g):
+				_stamp_tile_cell(model, layer, glyphs[g], Vector2i(x, z))
+
+
+func _clear_all() -> void:
+	for key in _vis:
+		_vis[key].queue_free()
+	_vis.clear()
+	_base.clear()
+	_overlay.clear()
+	_objects.clear()
