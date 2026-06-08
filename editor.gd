@@ -6,12 +6,13 @@ class_name LevelEditor
 # BE the shape: place captures the cube's dimensions at its cell. A palette of
 # ObjectRegistry types is stamped at the cube's cell, building a JSON-format level.
 #   Move / extend: your usual controls    [ / ]: cycle type
-#   Enter or Space: place    X or Backspace: erase    F5: finish / name
+#   Enter or Space: place    X or Backspace: erase    F5: finish    P: playtest
 # FIRST PASS of v2. NEXT: menu-first selection, area-select bulk, tabbed assemblies,
-# the paused-ghost play-mode toggle, real objects rendered inert. The previews here
-# partly mirror level_loader; both want a shared LevelBuilder (no drift).
+# real objects rendered inert (the WYSIWYG upgrade to today's scene-swap playtest).
+# The previews here partly mirror level_loader; both want a shared LevelBuilder.
 
 const REAL_SCENES := ["floor", "ink", "water"]
+const PLAYTEST_PATH := "user://_playtest.json"   # scratch level the Play action writes and the loader runs
 
 # Set by a launcher before changing to editor.tscn: the level file to open ("" =
 # start blank), and whether it is a built-in (saving then makes a custom copy).
@@ -38,6 +39,8 @@ var _base: Dictionary = {}       # Vector2i -> id
 var _overlay: Dictionary = {}    # Vector2i -> id
 var _objects: Dictionary = {}    # Vector2i -> { "id": String, "params": Dictionary }
 var _vis: Dictionary = {}        # "layer:x,z" -> Node3D
+var _status := ""                # transient one-line message (saved, playtest hints)
+var _status_t := 0.0
 
 
 func _ready() -> void:
@@ -54,7 +57,11 @@ func _ready() -> void:
 	_refresh()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	if _status_t > 0.0:
+		_status_t -= delta
+		if _status_t <= 0.0:
+			_status = ""
 	_refresh()  # keep the readout live as the cube moves
 
 
@@ -82,6 +89,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				_erase()
 			KEY_F5:
 				_open_finish()
+			KEY_P:
+				_enter_play()
 
 
 func _cell() -> Vector2i:
@@ -294,8 +303,9 @@ func _refresh() -> void:
 	var c := _cell()
 	var shape: Vector3i = _player.get_dimensions()
 	var tag := "  (built-in copy: saving makes a new custom level)" if _current_readonly else ""
-	_info.text = "Editing: %s%s\nCell (%d, %d)   Cube %dx%dx%d   Selected: %s [%s]\nWASD move, arrows/E/Q shape; [ and ] cycle; Enter place; X erase; F5 finish/name\n%d tiles   %d overlay   %d objects" % [
-		_level_name, tag, c.x, c.y, shape.x, shape.y, shape.z, tname, id, _base.size(), _overlay.size(), _objects.size()
+	var status_line := ("\n" + _status) if _status != "" else ""
+	_info.text = "Editing: %s%s\nCell (%d, %d)   Cube %dx%dx%d   Selected: %s [%s]\nWASD move, arrows/E/Q shape; [ and ] cycle; Enter place; X erase; F5 finish; P playtest\n%d tiles   %d overlay   %d objects%s" % [
+		_level_name, tag, c.x, c.y, shape.x, shape.y, shape.z, tname, id, _base.size(), _overlay.size(), _objects.size(), status_line
 	]
 
 
@@ -346,7 +356,36 @@ func _write_and_finish(path: String, nm: String) -> void:
 	_current_path = path
 	_current_readonly = false   # now editing the saved custom file
 	_close_finish()
-	_info.text = "Saved \"%s\"  ->  %s" % [nm, path]
+	_flash("Saved \"%s\"" % nm)
+
+
+func _flash(msg: String) -> void:
+	_status = msg
+	_status_t = 3.0
+
+
+func _enter_play() -> void:
+	# Scene-swap playtest: serialize the current level to a scratch file and launch
+	# the real game pipeline (painted_level + level_loader). Esc there returns here.
+	if not ("start" in _base.values()):
+		_flash("Place a Start tile before playtesting")
+		return
+	if not ("end" in _base.values()):
+		_flash("Place an End tile before playtesting")
+		return
+	var data := _serialize()
+	if not data.has("meta"):
+		data["meta"] = {}
+	data["meta"]["name"] = _level_name
+	var f := FileAccess.open(PLAYTEST_PATH, FileAccess.WRITE)
+	if f == null:
+		_flash("Could not start playtest")
+		return
+	f.store_string(JSON.stringify(data, "  "))
+	f.close()
+	LevelLoader.requested_file = PLAYTEST_PATH
+	LevelLoader.return_to_editor = true
+	get_tree().change_scene_to_file("res://painted_level.tscn")
 
 
 func _write_level(path: String, level_name: String) -> void:

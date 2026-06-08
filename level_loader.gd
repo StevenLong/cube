@@ -22,7 +22,9 @@ class_name LevelLoader
 # no longer auto-draws strips). Objects dispatch on "type" to a builder; unknown
 # types warn and skip so a level with a not-yet-supported object still loads.
 
-const TEMPLATE := preload("res://level_template.tscn")
+# load()ed lazily rather than preload()ed to avoid a cyclic dependency: the template
+# embeds level.gd, which now references LevelLoader (for the playtest return flag).
+const TEMPLATE_PATH := "res://level_template.tscn"
 
 const WALL_TALL := 1.0
 const SAFE_EDGE_HEIGHT := 0.4   # low invisible blocker; the red line is its only visual
@@ -34,6 +36,7 @@ const DIRS_4: Array[Vector2i] = [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0
 
 @export var level_file: String = "res://levels/data/level_01.json"
 static var requested_file: String = ""   # the active level's file. A launcher sets it; the loader keeps it (does NOT clear) so reload_current_scene (restart) replays the same file. Every painted_level launcher must set it, or a stale value leaks in.
+static var return_to_editor: bool = false   # set by the editor's playtest; level.gd then returns to the editor on exit instead of the main menu
 
 var _wall_mat: StandardMaterial3D
 var _edge_mat: StandardMaterial3D
@@ -62,7 +65,7 @@ func _load() -> void:
 	var data: Dictionary = _parse(FileAccess.get_file_as_string(level_file))
 	if data.is_empty():
 		return
-	var world: Node3D = TEMPLATE.instantiate()
+	var world: Node3D = (load(TEMPLATE_PATH) as PackedScene).instantiate()
 	_populate(world, data)
 	add_child(world)
 

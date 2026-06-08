@@ -68,7 +68,14 @@ func _ready() -> void:
 func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
 		get_tree().paused = false
-		get_tree().change_scene_to_file("res://main_menu.tscn")
+		if LevelLoader.return_to_editor:
+			# Came from the editor's playtest: go back to editing this level.
+			LevelLoader.return_to_editor = false
+			LevelEditor.open_path = LevelLoader.requested_file
+			LevelEditor.open_readonly = false
+			get_tree().change_scene_to_file("res://editor.tscn")
+		else:
+			get_tree().change_scene_to_file("res://main_menu.tscn")
 
 
 func _process(delta: float) -> void:
