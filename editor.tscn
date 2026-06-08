@@ -1,22 +1,22 @@
-[gd_scene load_steps=7 format=3]
+[gd_scene load_steps=8 format=3]
 
 [ext_resource type="Script" path="res://editor.gd" id="1"]
-[ext_resource type="Material" path="res://grid_ground_material.tres" id="2"]
+[ext_resource type="Shader" path="res://shaders/grid_ground.gdshader" id="2"]
+[ext_resource type="PackedScene" path="res://player.tscn" id="3"]
+[ext_resource type="Script" path="res://camera_controller.gd" id="4"]
 
 [sub_resource type="Environment" id="Env"]
 background_mode = 1
-background_color = Color(0.05, 0.05, 0.08, 1)
+background_color = Color(0.03, 0.03, 0.05, 1)
 
-[sub_resource type="BoxMesh" id="CursorMesh"]
-
-[sub_resource type="StandardMaterial3D" id="CursorMat"]
-transparency = 1
-albedo_color = Color(0.4, 1, 1, 0.3)
-emission_enabled = true
-emission = Color(0.3, 0.9, 1, 1)
+[sub_resource type="ShaderMaterial" id="VoidGrid"]
+shader = ExtResource("2")
+shader_parameter/top_base_color = Color(0.04, 0.04, 0.07, 1)
+shader_parameter/grid_line_color = Color(0.0, 0.3, 0.35, 1)
+shader_parameter/line_glow_strength = 0.3
 
 [sub_resource type="PlaneMesh" id="GridMesh"]
-size = Vector2(60, 60)
+size = Vector2(80, 80)
 
 [node name="Editor" type="Node3D"]
 script = ExtResource("1")
@@ -30,15 +30,14 @@ transform = Transform3D(1, 0, 0, 0, 0.5, 0.866025, 0, -0.866025, 0.5, 0, 0, 0)
 [node name="GridRef" type="MeshInstance3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.05, 0)
 mesh = SubResource("GridMesh")
-surface_material_override/0 = ExtResource("2")
+surface_material_override/0 = SubResource("VoidGrid")
 
-[node name="Cursor" type="MeshInstance3D" parent="."]
+[node name="Player" parent="." instance=ExtResource("3")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
-mesh = SubResource("CursorMesh")
-surface_material_override/0 = SubResource("CursorMat")
 
 [node name="Camera3D" type="Camera3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 0.707107, 0.707107, 0, -0.707107, 0.707107, 0, 9.5, 9)
+script = ExtResource("4")
 
 [node name="UI" type="CanvasLayer" parent="."]
 
@@ -49,3 +48,53 @@ offset_right = 760.0
 offset_bottom = 120.0
 text = "editor"
 theme_override_font_sizes/font_size = 18
+
+[node name="FinishPanel" type="ColorRect" parent="UI"]
+visible = false
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -220.0
+offset_top = -120.0
+offset_right = 220.0
+offset_bottom = 120.0
+color = Color(0.04, 0.04, 0.07, 0.95)
+
+[node name="VBox" type="VBoxContainer" parent="UI/FinishPanel"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 20.0
+offset_top = 20.0
+offset_right = -20.0
+offset_bottom = -20.0
+theme_override_constants/separation = 14
+
+[node name="Title" type="Label" parent="UI/FinishPanel/VBox"]
+text = "Finish Level"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 28
+
+[node name="NameEdit" type="LineEdit" parent="UI/FinishPanel/VBox"]
+custom_minimum_size = Vector2(0, 40)
+placeholder_text = "level name"
+theme_override_font_sizes/font_size = 20
+
+[node name="Buttons" type="HBoxContainer" parent="UI/FinishPanel/VBox"]
+alignment = 1
+theme_override_constants/separation = 16
+
+[node name="SaveButton" type="Button" parent="UI/FinishPanel/VBox/Buttons"]
+custom_minimum_size = Vector2(120, 44)
+text = "Save"
+theme_override_font_sizes/font_size = 20
+
+[node name="CancelButton" type="Button" parent="UI/FinishPanel/VBox/Buttons"]
+custom_minimum_size = Vector2(120, 44)
+text = "Cancel"
+theme_override_font_sizes/font_size = 20
+
+[node name="Hint" type="Label" parent="UI/FinishPanel/VBox"]
+text = "Enter saves, Esc cancels"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 14

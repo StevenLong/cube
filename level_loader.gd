@@ -1,4 +1,5 @@
 extends Node3D
+class_name LevelLoader
 
 # Builds a playable level from a JSON file (see levels/data/*.json and
 # SPEC_object_anatomy.md). The world is assembled DETACHED from a reusable
@@ -32,6 +33,7 @@ const SAFE_EDGE_ENERGY := 0.6
 const DIRS_4: Array[Vector2i] = [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
 
 @export var level_file: String = "res://levels/data/level_01.json"
+static var requested_file: String = ""   # the active level's file. A launcher sets it; the loader keeps it (does NOT clear) so reload_current_scene (restart) replays the same file. Every painted_level launcher must set it, or a stale value leaks in.
 
 var _wall_mat: StandardMaterial3D
 var _edge_mat: StandardMaterial3D
@@ -52,6 +54,8 @@ func _ready() -> void:
 
 
 func _load() -> void:
+	if requested_file != "":
+		level_file = requested_file
 	if not FileAccess.file_exists(level_file):
 		push_error("level_loader: level file not found: %s" % level_file)
 		return

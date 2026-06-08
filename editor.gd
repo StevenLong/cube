@@ -1,56 +1,59 @@
 extends Node3D
 
-# In-world level editor: the cube is a god-mode CURSOR (no falling, floats over the
-# void). A palette of ObjectRegistry types is stamped at the cursor's cell, building
-# a JSON-format level (SPEC_object_anatomy.md).
-#   Move: your move keys / dpad (one cell per press)   Q / E: cycle type
-#   Enter or Space: place   X or Backspace: erase   F5: save
-# FIRST PASS: single-cell placement only. NEXT: area-select bulk (switch the cursor
-# to a resizable selection on bulk start), play-mode toggle, load, the menu hook.
-# NOTE: object previews and the tile y-offsets here partly mirror level_loader; both
-# want a shared LevelBuilder so the edit view matches the game exactly (no drift).
-# Scripted game objects (enemy/lock/gate) need a Player sibling, so in edit mode they
-# render as lightweight previews; the inert tile scenes are instantiated for real.
+# In-world level editor v2: the cursor IS the real player cube in god-mode (no fall,
+# no-clip), so you drive and EXTEND it like in game. To place an extend-lock you just
+# BE the shape: place captures the cube's dimensions at its cell. A palette of
+# ObjectRegistry types is stamped at the cube's cell, building a JSON-format level.
+#   Move / extend: your usual controls    Q / E: cycle type
+#   Enter or Space: place    X or Backspace: erase    F5: finish / name
+# FIRST PASS of v2. NEXT: menu-first selection, area-select bulk, tabbed assemblies,
+# the paused-ghost play-mode toggle, real objects rendered inert. The previews here
+# partly mirror level_loader; both want a shared LevelBuilder (no drift).
 
-const SAVE_PATH := "res://levels/data/editor_test.json"
-const REAL_SCENES := ["floor", "ink", "water"]   # scriptless, safe to instantiate here
+const REAL_SCENES := ["floor", "ink", "water"]
 
-@onready var _cursor: Node3D = $Cursor
-@onready var _camera: Camera3D = $Camera3D
+@onready var _player: Node3D = $Player
 @onready var _info: Label = $UI/Info
+@onready var _finish_panel: Control = $UI/FinishPanel
+@onready var _name_edit: LineEdit = $UI/FinishPanel/VBox/NameEdit
+@onready var _save_button: Button = $UI/FinishPanel/VBox/Buttons/SaveButton
+@onready var _cancel_button: Button = $UI/FinishPanel/VBox/Buttons/CancelButton
 
-var _cell := Vector2i.ZERO
-var _target := Vector3(0, 0.5, 0)
 var _palette: Array = []
 var _sel := 0
+var _finishing := false
+var _level_name := "My Level"
 var _base: Dictionary = {}       # Vector2i -> id
 var _overlay: Dictionary = {}    # Vector2i -> id
-var _objects: Dictionary = {}    # Vector2i -> id  (one object per cell, first pass)
+var _objects: Dictionary = {}    # Vector2i -> { "id": String, "params": Dictionary }
 var _vis: Dictionary = {}        # "layer:x,z" -> Node3D
 
 
 func _ready() -> void:
+	_player.god_mode = true
 	_palette = ObjectRegistry.TYPES.keys()
+	_save_button.pressed.connect(_do_save)
+	_cancel_button.pressed.connect(_close_finish)
+	_name_edit.text_submitted.connect(_on_name_submitted)
+	_finish_panel.hide()
 	_refresh()
 
 
-func _process(delta: float) -> void:
-	_cursor.position = _cursor.position.lerp(_target, minf(delta * 14.0, 1.0))
-	var focus: Vector3 = _cursor.position
-	_camera.position = focus + Vector3(0, 9, 9)
-	_camera.look_at(focus, Vector3.UP)
+func _process(_delta: float) -> void:
+	_refresh()  # keep the readout live as the cube moves
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event.is_action_pressed("move_left"):
-		_move(Vector2i(-1, 0))
-	elif event.is_action_pressed("move_right"):
-		_move(Vector2i(1, 0))
-	elif event.is_action_pressed("move_forward"):
-		_move(Vector2i(0, -1))
-	elif event.is_action_pressed("move_back"):
-		_move(Vector2i(0, 1))
-	elif event is InputEventKey and event.pressed and not event.echo:
+	if _finishing:
+		# the name panel owns input while open; Esc cancels it, not the editor
+		if event.is_action_pressed("ui_cancel"):
+			_close_finish()
+			get_viewport().set_input_as_handled()
+		return
+	if event.is_action_pressed("ui_cancel"):
+		get_tree().change_scene_to_file("res://main_menu.tscn")
+		return
+	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
 			KEY_E:
 				_cycle(1)
@@ -61,13 +64,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_X, KEY_BACKSPACE:
 				_erase()
 			KEY_F5:
-				_save()
+				_open_finish()
 
 
-func _move(dir: Vector2i) -> void:
-	_cell += dir
-	_target = Vector3(_cell.x, 0.5, _cell.y)
-	_refresh()
+func _cell() -> Vector2i:
+	return _player.grid_pos
 
 
 func _cycle(d: int) -> void:
@@ -79,89 +80,133 @@ func _place() -> void:
 	var id: String = _palette[_sel]
 	match ObjectRegistry.TYPES[id]["kind"]:
 		ObjectRegistry.Kind.BASE_TILE:
-			_stamp(_base, "base", id)
+			_stamp_tile(_base, "base", id)
 		ObjectRegistry.Kind.OVERLAY_TILE:
-			_stamp(_overlay, "overlay", id)
+			_stamp_tile(_overlay, "overlay", id)
 		ObjectRegistry.Kind.OBJECT:
-			_stamp(_objects, "object", id)
+			_stamp_object(id)
 	_refresh()
 
 
-func _stamp(model: Dictionary, layer: String, id: String) -> void:
-	var key := "%s:%d,%d" % [layer, _cell.x, _cell.y]
-	if _vis.has(key):
-		_vis[key].queue_free()
-		_vis.erase(key)
-	model[_cell] = id
-	var node := _make_visual(id)
+func _stamp_tile(model: Dictionary, layer: String, id: String) -> void:
+	var cell := _cell()
+	var key := "%s:%d,%d" % [layer, cell.x, cell.y]
+	_clear_vis(key)
+	model[cell] = id
+	var node := _make_visual(id, cell)
 	if node != null:
 		add_child(node)
 		_vis[key] = node
 
 
+func _stamp_object(id: String) -> void:
+	# BE-the-shape: the lock captures the cube's current dimensions; others drop at
+	# the cube's cell with default params.
+	var cell := _cell()
+	var params: Dictionary = {}
+	if id == "extend_lock_zone":
+		var dims: Vector3i = _player.get_dimensions()
+		params = {"mode": "lock", "required_dims": [dims.x, dims.y, dims.z]}
+	var key := "object:%d,%d" % [cell.x, cell.y]
+	_clear_vis(key)
+	_objects[cell] = {"id": id, "params": params}
+	var node := _make_object_visual(id, params)
+	node.position = Vector3(cell.x, _obj_y(id), cell.y)
+	add_child(node)
+	_vis[key] = node
+
+
 func _erase() -> void:
+	var cell := _cell()
 	for layer in ["object", "overlay", "base"]:
-		var key := "%s:%d,%d" % [layer, _cell.x, _cell.y]
+		var key := "%s:%d,%d" % [layer, cell.x, cell.y]
 		if _vis.has(key):
-			_vis[key].queue_free()
-			_vis.erase(key)
+			_clear_vis(key)
 			match layer:
 				"object":
-					_objects.erase(_cell)
+					_objects.erase(cell)
 				"overlay":
-					_overlay.erase(_cell)
+					_overlay.erase(cell)
 				"base":
-					_base.erase(_cell)
+					_base.erase(cell)
 			break
 	_refresh()
 
 
-func _make_visual(id: String) -> Node3D:
+func _clear_vis(key: String) -> void:
+	if _vis.has(key):
+		_vis[key].queue_free()
+		_vis.erase(key)
+
+
+func _make_visual(id: String, cell: Vector2i) -> Node3D:
 	if id in REAL_SCENES:
 		var n: Node3D = ObjectRegistry.scene_for(id).instantiate()
-		n.position = Vector3(_cell.x, (-1.0 if id == "floor" else 0.01), _cell.y)
+		n.position = Vector3(cell.x, (-1.0 if id == "floor" else 0.01), cell.y)
 		return n
 	if id == "void":
 		return null
+	var mi := _preview_mesh(id)
+	mi.position = Vector3(cell.x, _obj_y(id), cell.y)
+	return mi
+
+
+func _make_object_visual(id: String, params: Dictionary) -> Node3D:
+	if id == "extend_lock_zone":
+		var d: Array = params.get("required_dims", [1, 1, 3])
+		var mi := MeshInstance3D.new()
+		var box := BoxMesh.new()
+		box.size = Vector3(d[0], d[1], d[2])
+		mi.mesh = box
+		mi.set_surface_override_material(0, _ghost_mat(Color(0.85, 0.5, 0.15, 0.45)))
+		# Centre the cuboid over the footprint (min corner at the cube's cell).
+		mi.position = Vector3((d[0] - 1) * 0.5, d[1] * 0.5 - _obj_y(id), (d[2] - 1) * 0.5)
+		var holder := Node3D.new()
+		holder.add_child(mi)
+		return holder
 	return _preview_mesh(id)
 
 
-func _preview_mesh(id: String) -> Node3D:
+func _obj_y(id: String) -> float:
+	match id:
+		"floor":
+			return -1.0
+		"ink", "water":
+			return 0.01
+		"enemy_sphere":
+			return 0.4
+		"extend_lock_gate":
+			return 1.5
+		_:
+			return 0.5
+
+
+func _preview_mesh(id: String) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var mat := StandardMaterial3D.new()
-	var y := 0.5
 	match id:
 		"tall_wall":
 			mi.mesh = _box(Vector3(1, 1, 1))
 			mat.albedo_color = Color(0.4, 0.4, 0.5)
 		"safety_edge":
 			mi.mesh = _box(Vector3(1, 0.1, 1))
-			y = 0.05
 			mat.albedo_color = Color(0.9, 0.15, 0.15)
 			mat.emission_enabled = true
 			mat.emission = Color(0.9, 0.15, 0.15)
 		"enemy_sphere":
 			mi.mesh = _sphere(0.4)
-			y = 0.4
 			mat.albedo_color = Color(0.7, 0.7, 0.75)
 		"extend_lock_gate":
 			mi.mesh = _box(Vector3(0.4, 3, 1))
-			y = 1.5
 			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 			mat.albedo_color = Color(0.9, 0.2, 0.2, 0.5)
-		"extend_lock_zone":
-			mi.mesh = _box(Vector3(0.9, 0.9, 0.9))
-			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			mat.albedo_color = Color(0.85, 0.5, 0.15, 0.5)
 		"start":
 			mi.mesh = _plane()
-			y = 0.02
 			mat.albedo_color = Color(0.2, 0.7, 1)
 			mat.emission_enabled = true
 			mat.emission = Color(0.2, 0.7, 1)
 		"end":
 			mi.mesh = _plane()
-			y = 0.02
 			mat.albedo_color = Color(1, 0.75, 0.2)
 			mat.emission_enabled = true
 			mat.emission = Color(1, 0.75, 0.2)
@@ -169,8 +214,14 @@ func _preview_mesh(id: String) -> Node3D:
 			mi.mesh = _box(Vector3(0.6, 0.6, 0.6))
 			mat.albedo_color = Color(0.6, 0.6, 0.6)
 	mi.set_surface_override_material(0, mat)
-	mi.position = Vector3(_cell.x, y, _cell.y)
 	return mi
+
+
+func _ghost_mat(col: Color) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.albedo_color = col
+	return m
 
 
 func _box(size: Vector3) -> BoxMesh:
@@ -195,20 +246,72 @@ func _plane() -> PlaneMesh:
 func _refresh() -> void:
 	var id: String = _palette[_sel]
 	var tname: String = ObjectRegistry.TYPES[id]["name"]
-	_info.text = "Cell (%d, %d)    Selected: %s  [%s]\nMove: your move keys    Q/E: cycle    Enter: place    X: erase    F5: save\n%d tiles   %d overlay   %d objects" % [
-		_cell.x, _cell.y, tname, id, _base.size(), _overlay.size(), _objects.size()
+	var c := _cell()
+	var shape: Vector3i = _player.get_dimensions()
+	_info.text = "Cell (%d, %d)   Cube %dx%dx%d   Selected: %s [%s]\nMove/extend the cube; Q/E cycle; Enter place; X erase; F5 finish/name\n%d tiles   %d overlay   %d objects" % [
+		c.x, c.y, shape.x, shape.y, shape.z, tname, id, _base.size(), _overlay.size(), _objects.size()
 	]
 
 
-func _save() -> void:
+# --- Finish / name panel: freeze the cube, name the level, write user://levels/<slug>.json ---
+
+func _open_finish() -> void:
+	_finishing = true
+	_player.process_mode = Node.PROCESS_MODE_DISABLED   # freeze the cube while typing
+	_name_edit.text = _level_name
+	_finish_panel.show()
+	_name_edit.grab_focus()
+	_name_edit.select_all()
+
+
+func _close_finish() -> void:
+	_finishing = false
+	_player.process_mode = Node.PROCESS_MODE_INHERIT
+	_finish_panel.hide()
+
+
+func _on_name_submitted(_text: String) -> void:
+	_do_save()
+
+
+func _do_save() -> void:
+	var nm := _name_edit.text.strip_edges()
+	if nm.is_empty():
+		nm = "My Level"
+	_level_name = nm
+	var path := "user://levels/%s.json" % _slugify(nm)
+	_write_level(path, nm)
+	_close_finish()
+	_info.text = "Saved \"%s\"  ->  %s" % [nm, path]
+
+
+func _write_level(path: String, level_name: String) -> void:
 	var data := _serialize()
-	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	if not data.has("meta"):
+		data["meta"] = {}
+	data["meta"]["name"] = level_name
+	DirAccess.make_dir_recursive_absolute("user://levels")
+	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
-		push_error("editor: cannot write %s" % SAVE_PATH)
+		push_error("editor: cannot write %s" % path)
 		return
 	f.store_string(JSON.stringify(data, "  "))
 	f.close()
-	_info.text = "Saved to %s" % SAVE_PATH
+
+
+func _slugify(s: String) -> String:
+	var out := ""
+	for c in s.to_lower():
+		if (c >= "a" and c <= "z") or (c >= "0" and c <= "9"):
+			out += c
+		elif c == " " or c == "-" or c == "_":
+			out += "_"
+	while out.contains("__"):
+		out = out.replace("__", "_")
+	out = out.lstrip("_").rstrip("_")
+	if out.is_empty():
+		out = "level"
+	return out
 
 
 func _serialize() -> Dictionary:
@@ -228,7 +331,11 @@ func _serialize() -> Dictionary:
 	var objs: Array = []
 	for c in _objects:
 		var cell: Vector2i = c
-		objs.append({"type": _objects[cell], "cell": [cell.x - minx, cell.y - minz]})
+		var entry: Dictionary = _objects[cell]
+		var o: Dictionary = {"type": entry["id"], "cell": [cell.x - minx, cell.y - minz]}
+		for k in entry["params"]:
+			o[k] = entry["params"][k]
+		objs.append(o)
 	return {
 		"version": 1,
 		"meta": {"size": [maxx - minx + 1, maxz - minz + 1]},

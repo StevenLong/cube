@@ -117,7 +117,8 @@ var _orient: Basis = Basis.IDENTITY
 @onready var _mesh_instance: MeshInstance3D = $MeshInstance3D
 @onready var _move_cast: ShapeCast3D = $MoveCast
 @onready var _detection_area: Area3D = $DetectionArea
-@onready var _level: Level = get_node("../Level")
+@onready var _level: Level = get_node_or_null("../Level")  # absent when standalone (editor)
+var god_mode := false  # editor cursor: no fall, no-clip. The game leaves this false.
 
 
 func _ready() -> void:
@@ -194,12 +195,16 @@ func _on_puddle_entered(area: Area3D) -> void:
 
 
 func _can_move(delta_world: Vector3) -> bool:
+	if god_mode:
+		return true
 	_move_cast.target_position = delta_world
 	_move_cast.force_shapecast_update()
 	return not _move_cast.is_colliding()
 
 
 func _can_move_cuboid(dir: Vector2i, dist: int) -> bool:
+	if god_mode:
+		return true
 	# Tumble collision for an extended cuboid: sweep the base box along dir by dist
 	# at every cell offset perpendicular to the roll, covering the cuboid's full
 	# perpendicular width (a tumble preserves that width; the along-roll extent is
@@ -592,6 +597,8 @@ func _begin_dodge(dir: Vector2i) -> void:
 
 
 func _check_fall_at_settle() -> void:
+	if god_mode:
+		return
 	# Called after every settle event (tumble end, dodge end, collapse). The
 	# shape is stable iff its geometric center is strictly inside the bounding
 	# box of supported (floor) footprint cells. Anything else falls. Idempotent
@@ -600,6 +607,11 @@ func _check_fall_at_settle() -> void:
 		return
 	if not _is_stable_at(grid_pos, _ext):
 		_begin_fall()
+
+
+func _is_floor(cell: Vector2i) -> bool:
+	# Null-safe is_floor: _level is absent when the cube runs standalone (editor).
+	return _level != null and _level.is_floor(cell)
 
 
 func _is_stable_at(test_grid_pos: Vector2i, test_ext: Array) -> bool:
@@ -625,7 +637,7 @@ func _is_stable_at(test_grid_pos: Vector2i, test_ext: Array) -> bool:
 	var found := false
 	for x in range(minx, maxx + 1):
 		for z in range(minz, maxz + 1):
-			if not _level.is_floor(Vector2i(x, z)):
+			if not _is_floor(Vector2i(x, z)):
 				continue
 			if not found:
 				sup_minx = x
@@ -698,7 +710,7 @@ func _tip_collides_at(angle: float) -> bool:
 				if rotated.y >= 0.0:
 					continue
 				var cell := Vector2i(roundi(rotated.x), roundi(rotated.z))
-				if _level.is_floor(cell):
+				if _is_floor(cell):
 					return true
 	return false
 
@@ -724,7 +736,7 @@ func _setup_tip() -> void:
 	var found := false
 	for x in range(minx, maxx + 1):
 		for z in range(minz, maxz + 1):
-			if not _level.is_floor(Vector2i(x, z)):
+			if not _is_floor(Vector2i(x, z)):
 				continue
 			if not found:
 				sup_minx = x
