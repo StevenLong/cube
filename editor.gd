@@ -3,13 +3,13 @@ class_name LevelEditor
 
 # In-world level editor v2: the cursor IS the real player cube in god-mode (no fall,
 # no-clip), so you drive and EXTEND it like in game. To place an extend-lock you just
-# BE the shape: place captures the cube's dimensions at its cell. A palette of
-# ObjectRegistry types is stamped at the cube's cell, building a JSON-format level.
-#   Move / extend: your usual controls    [ / ]: cycle type
-#   Enter or Space: place    X or Backspace: erase    F5: finish    P: playtest
-# FIRST PASS of v2. NEXT: menu-first selection, area-select bulk, tabbed assemblies,
-# real objects rendered inert (the WYSIWYG upgrade to today's scene-swap playtest).
-# The previews here partly mirror level_loader; both want a shared LevelBuilder.
+# BE the shape: place captures the cube's dimensions at its cell. MODAL: Tab opens a
+# tool menu; pick a type to enter its placement mode, or "None" for free control.
+#   Move / extend: your usual controls    Tab: tool menu
+#   Enter: place    X or Backspace: erase    F5: finish    P: playtest
+# SLICE 1 of menu-first (modal). NEXT: rectangle drag (hold place + move), A = place
+# with dodge suppressed, a Back-to-None shortcut, object path/param modes. Previews
+# here partly mirror level_loader; both want a shared LevelBuilder.
 
 const REAL_SCENES := ["floor", "ink", "water"]
 const PLAYTEST_PATH := "user://_playtest.json"   # scratch level the Play action writes and the loader runs
@@ -26,9 +26,11 @@ static var open_readonly: bool = false
 @onready var _save_button: Button = $UI/FinishPanel/VBox/Buttons/SaveButton
 @onready var _cancel_button: Button = $UI/FinishPanel/VBox/Buttons/CancelButton
 @onready var _overwrite_confirm: ConfirmationDialog = $OverwriteConfirm
+@onready var _tool_menu: Control = $UI/ToolMenu
+@onready var _tool_list: VBoxContainer = $UI/ToolMenu/VBox/Scroll/ToolList
 
-var _palette: Array = []
-var _sel := 0
+var _tool := "none"              # active tool: "none" (free control) or an ObjectRegistry type id
+var _menu_open := false
 var _finishing := false
 var _level_name := "My Level"
 var _current_readonly := false
@@ -45,12 +47,13 @@ var _status_t := 0.0
 
 func _ready() -> void:
 	_player.god_mode = true
-	_palette = ObjectRegistry.TYPES.keys()
+	_build_tool_menu()
 	_save_button.pressed.connect(_do_save)
 	_cancel_button.pressed.connect(_close_finish)
 	_name_edit.text_submitted.connect(_on_name_submitted)
 	_overwrite_confirm.confirmed.connect(_confirm_overwrite)
 	_finish_panel.hide()
+	_tool_menu.hide()
 	if open_path != "":
 		_load_level(open_path, open_readonly)
 		open_path = ""
@@ -68,6 +71,12 @@ func _process(delta: float) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if _overwrite_confirm.visible:
 		return   # the overwrite dialog owns input
+	if _menu_open:
+		# the tool menu owns input while open; Esc/B closes it
+		if event.is_action_pressed("ui_cancel"):
+			_close_menu()
+			get_viewport().set_input_as_handled()
+		return
 	if _finishing:
 		# the name panel owns input while open; Esc cancels it, not the editor
 		if event.is_action_pressed("ui_cancel"):
@@ -77,13 +86,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("pause"):
 		get_tree().change_scene_to_file("res://main_menu.tscn")
 		return
+	if event.is_action_pressed("editor_menu"):
+		_open_menu()
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
-			KEY_BRACKETRIGHT:
-				_cycle(1)
-			KEY_BRACKETLEFT:
-				_cycle(-1)
-			KEY_ENTER, KEY_SPACE:
+			KEY_ENTER:
 				_place()
 			KEY_X, KEY_BACKSPACE:
 				_erase()
@@ -97,20 +105,16 @@ func _cell() -> Vector2i:
 	return _player.grid_pos
 
 
-func _cycle(d: int) -> void:
-	_sel = wrapi(_sel + d, 0, _palette.size())
-	_refresh()
-
-
 func _place() -> void:
-	var id: String = _palette[_sel]
-	match ObjectRegistry.TYPES[id]["kind"]:
+	if _tool == "none":
+		return
+	match ObjectRegistry.TYPES[_tool]["kind"]:
 		ObjectRegistry.Kind.BASE_TILE:
-			_stamp_tile(_base, "base", id)
+			_stamp_tile(_base, "base", _tool)
 		ObjectRegistry.Kind.OVERLAY_TILE:
-			_stamp_tile(_overlay, "overlay", id)
+			_stamp_tile(_overlay, "overlay", _tool)
 		ObjectRegistry.Kind.OBJECT:
-			_stamp_object(id)
+			_stamp_object(_tool)
 	_refresh()
 
 
@@ -298,15 +302,54 @@ func _plane() -> PlaneMesh:
 
 
 func _refresh() -> void:
-	var id: String = _palette[_sel]
-	var tname: String = ObjectRegistry.TYPES[id]["name"]
 	var c := _cell()
 	var shape: Vector3i = _player.get_dimensions()
 	var tag := "  (built-in copy: saving makes a new custom level)" if _current_readonly else ""
 	var status_line := ("\n" + _status) if _status != "" else ""
-	_info.text = "Editing: %s%s\nCell (%d, %d)   Cube %dx%dx%d   Selected: %s [%s]\nWASD move, arrows/E/Q shape; [ and ] cycle; Enter place; X erase; F5 finish; P playtest\n%d tiles   %d overlay   %d objects%s" % [
-		_level_name, tag, c.x, c.y, shape.x, shape.y, shape.z, tname, id, _base.size(), _overlay.size(), _objects.size(), status_line
+	_info.text = "Editing: %s%s\nCell (%d, %d)   Cube %dx%dx%d   Tool: %s\nWASD move, arrows/E/Q shape; Tab menu; Enter place; X erase; F5 finish; P playtest\n%d tiles   %d overlay   %d objects%s" % [
+		_level_name, tag, c.x, c.y, shape.x, shape.y, shape.z, _tool_label(_tool), _base.size(), _overlay.size(), _objects.size(), status_line
 	]
+
+
+# --- Tool menu (Tab): pick the active placement tool, or "None" for free control ---
+
+func _build_tool_menu() -> void:
+	_add_tool_button("none", "None (free control)")
+	for id in ObjectRegistry.TYPES:
+		_add_tool_button(id, String(ObjectRegistry.TYPES[id]["name"]))
+
+
+func _add_tool_button(id: String, label: String) -> void:
+	var b := Button.new()
+	b.custom_minimum_size = Vector2(0, 34)
+	b.add_theme_font_size_override("font_size", 18)
+	b.text = label
+	b.pressed.connect(_select_tool.bind(id))
+	_tool_list.add_child(b)
+
+
+func _open_menu() -> void:
+	_menu_open = true
+	_player.process_mode = Node.PROCESS_MODE_DISABLED   # freeze the cube while choosing
+	_tool_menu.show()
+	if _tool_list.get_child_count() > 0:
+		(_tool_list.get_child(0) as Control).grab_focus()
+
+
+func _close_menu() -> void:
+	_menu_open = false
+	_player.process_mode = Node.PROCESS_MODE_INHERIT
+	_tool_menu.hide()
+
+
+func _select_tool(id: String) -> void:
+	_tool = id
+	_close_menu()
+	_flash("Tool: %s" % _tool_label(id))
+
+
+func _tool_label(id: String) -> String:
+	return "None" if id == "none" else String(ObjectRegistry.TYPES[id]["name"])
 
 
 # --- Finish / name panel: freeze the cube, name the level, write user://levels/<slug>.json ---
