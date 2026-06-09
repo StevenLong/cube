@@ -31,6 +31,10 @@ static var open_readonly: bool = false
 
 var _tool := "none"              # active tool: "none" (free control) or an ObjectRegistry type id
 var _menu_open := false
+var _dragging := false           # place held: painting a rectangle (paint tools)
+var _drag_min := Vector2i.ZERO   # footprint min/max snapshot at the press corner
+var _drag_max := Vector2i.ZERO
+var _preview: MeshInstance3D = null
 var _finishing := false
 var _level_name := "My Level"
 var _current_readonly := false
@@ -65,6 +69,7 @@ func _process(delta: float) -> void:
 		_status_t -= delta
 		if _status_t <= 0.0:
 			_status = ""
+	_handle_place_drag()
 	_refresh()  # keep the readout live as the cube moves
 
 
@@ -91,8 +96,6 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
-			KEY_ENTER:
-				_place()
 			KEY_X, KEY_BACKSPACE:
 				_erase()
 			KEY_F5:
@@ -116,6 +119,98 @@ func _place() -> void:
 		ObjectRegistry.Kind.OBJECT:
 			_stamp_object(_tool)
 	_refresh()
+
+
+# --- Place drag: tap = one stamp, hold + tumble = fill the rectangle (paint tiles) ---
+
+func _handle_place_drag() -> void:
+	if _menu_open or _finishing or _overwrite_confirm.visible or _tool == "none":
+		if _dragging:
+			_cancel_drag()
+		return
+	if Input.is_action_just_pressed("place"):
+		_begin_place()
+	if Input.is_action_just_released("place"):
+		_end_place()
+	elif _dragging:
+		_update_place_preview()
+
+
+func _is_paint_tool() -> bool:
+	return _tool != "none" and ObjectRegistry.TYPES[_tool].get("paint_mode", "single") == "paint"
+
+
+func _begin_place() -> void:
+	_dragging = true
+	var d: Vector3i = _player.get_dimensions()
+	_drag_min = _player.get_footprint_min()
+	_drag_max = _drag_min + Vector2i(d.x - 1, d.z - 1)
+	if _is_paint_tool():
+		_create_preview()
+	else:
+		_place()   # single tile / object: one placement on press
+
+
+func _end_place() -> void:
+	if not _dragging:
+		return
+	_dragging = false
+	if _is_paint_tool():
+		_commit_rect()
+	_free_preview()
+
+
+func _cancel_drag() -> void:
+	_dragging = false
+	_free_preview()
+
+
+func _drag_rect() -> Array:
+	# [minx, minz, maxx, maxz] spanning the press footprint and the current one, so an
+	# extended (or mid-drag resized) cube widens the rectangle by its own size.
+	var d: Vector3i = _player.get_dimensions()
+	var cmin: Vector2i = _player.get_footprint_min()
+	var cmax: Vector2i = cmin + Vector2i(d.x - 1, d.z - 1)
+	return [mini(_drag_min.x, cmin.x), mini(_drag_min.y, cmin.y), maxi(_drag_max.x, cmax.x), maxi(_drag_max.y, cmax.y)]
+
+
+func _commit_rect() -> void:
+	var r: Array = _drag_rect()
+	var kind: int = ObjectRegistry.TYPES[_tool]["kind"]
+	var model: Dictionary = _base if kind == ObjectRegistry.Kind.BASE_TILE else _overlay
+	var layer: String = "base" if kind == ObjectRegistry.Kind.BASE_TILE else "overlay"
+	for x in range(r[0], r[2] + 1):
+		for z in range(r[1], r[3] + 1):
+			_stamp_tile_cell(model, layer, _tool, Vector2i(x, z))
+	_refresh()
+
+
+func _create_preview() -> void:
+	_preview = MeshInstance3D.new()
+	_preview.mesh = BoxMesh.new()
+	var m := StandardMaterial3D.new()
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.albedo_color = Color(0.3, 0.8, 1.0, 0.25)
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_preview.set_surface_override_material(0, m)
+	add_child(_preview)
+	_update_place_preview()
+
+
+func _update_place_preview() -> void:
+	if _preview == null:
+		return
+	var r: Array = _drag_rect()
+	var w: int = r[2] - r[0] + 1
+	var d: int = r[3] - r[1] + 1
+	(_preview.mesh as BoxMesh).size = Vector3(w, 0.2, d)
+	_preview.position = Vector3((r[0] + r[2]) * 0.5, 0.1, (r[1] + r[3]) * 0.5)
+
+
+func _free_preview() -> void:
+	if _preview != null:
+		_preview.queue_free()
+		_preview = null
 
 
 func _stamp_tile(model: Dictionary, layer: String, id: String) -> void:
@@ -306,7 +401,7 @@ func _refresh() -> void:
 	var shape: Vector3i = _player.get_dimensions()
 	var tag := "  (built-in copy: saving makes a new custom level)" if _current_readonly else ""
 	var status_line := ("\n" + _status) if _status != "" else ""
-	_info.text = "Editing: %s%s\nCell (%d, %d)   Cube %dx%dx%d   Tool: %s\nWASD move, arrows/E/Q shape; Tab menu; Enter place; X erase; F5 finish; P playtest\n%d tiles   %d overlay   %d objects%s" % [
+	_info.text = "Editing: %s%s\nCell (%d, %d)   Cube %dx%dx%d   Tool: %s\nWASD move, arrows/E/Q shape; Tab menu; Enter place (hold+move = fill); X erase; F5 finish; P playtest\n%d tiles   %d overlay   %d objects%s" % [
 		_level_name, tag, c.x, c.y, shape.x, shape.y, shape.z, _tool_label(_tool), _base.size(), _overlay.size(), _objects.size(), status_line
 	]
 
