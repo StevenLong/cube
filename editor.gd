@@ -74,7 +74,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_close_finish()
 			get_viewport().set_input_as_handled()
 		return
-	if event.is_action_pressed("ui_cancel"):
+	if event.is_action_pressed("pause"):
 		get_tree().change_scene_to_file("res://main_menu.tscn")
 		return
 	if event is InputEventKey and event.pressed and not event.echo:

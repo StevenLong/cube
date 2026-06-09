@@ -66,7 +66,7 @@ func _ready() -> void:
 
 
 func _input(event: InputEvent) -> void:
-	if event.is_action_pressed("ui_cancel"):
+	if event.is_action_pressed("pause"):
 		get_tree().paused = false
 		if LevelLoader.return_to_editor:
 			# Came from the editor's playtest: go back to editing this level.

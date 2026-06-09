@@ -42,6 +42,9 @@ pad currently cannot extend), or the editor's remaining UX. Everything below is 
 - `user://_playtest.json`: the scratch playtest file; harmless, overwritten each `P`.
 - After returning from a playtest, the editor's current file is the scratch file, so the next save may
   re-confirm the overwrite (safe; the v1 tradeoff for not threading the original path through play).
+- Editor places only the LOCK variant of `extend_lock_zone` (`mode` is hardcoded to "lock" in
+  `_stamp_object`); no way to place an UNLOCK zone yet. Needs per-object param editing (lands with the
+  menu-first / param UI). Flagged 2026-06-09.
 - Tabbed assemblies (note 5) for multi-part objects still pending. ScrollContainer is in but untested
   past a screenful. safety_edge "see over" for sight; gate still on the global lock flag.
 
