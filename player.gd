@@ -118,6 +118,7 @@ var _orient: Basis = Basis.IDENTITY
 @onready var _detection_area: Area3D = $DetectionArea
 @onready var _level: Level = get_node_or_null("../Level")  # absent when standalone (editor)
 var god_mode := false  # editor cursor: no fall, no-clip. The game leaves this false.
+var suppress_dodge := false  # editor placement mode: A is "place", not dodge. The game leaves this false.
 
 
 func _ready() -> void:
@@ -1140,7 +1141,7 @@ func _process(delta: float) -> void:
 		_check_fall_at_settle()
 		return
 
-	var dodge_primed := Input.is_action_pressed("dodge") and _dodge_cooldown_t <= 0.0 and not _is_extended()
+	var dodge_primed := Input.is_action_pressed("dodge") and _dodge_cooldown_t <= 0.0 and not _is_extended() and not suppress_dodge
 
 	if dodge_primed and move.length() > 0.5:
 		_begin_dodge(_pick_dir(move))

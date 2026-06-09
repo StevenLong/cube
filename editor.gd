@@ -94,10 +94,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("editor_menu"):
 		_open_menu()
 		return
+	if event.is_action_pressed("editor_none"):
+		_select_tool("none")
+		return
+	if event.is_action_pressed("erase"):
+		_erase()
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
-			KEY_X, KEY_BACKSPACE:
-				_erase()
 			KEY_F5:
 				_open_finish()
 			KEY_P:
@@ -401,7 +405,7 @@ func _refresh() -> void:
 	var shape: Vector3i = _player.get_dimensions()
 	var tag := "  (built-in copy: saving makes a new custom level)" if _current_readonly else ""
 	var status_line := ("\n" + _status) if _status != "" else ""
-	_info.text = "Editing: %s%s\nCell (%d, %d)   Cube %dx%dx%d   Tool: %s\nWASD move, arrows/E/Q shape; Tab menu; Enter place (hold+move = fill); X erase; F5 finish; P playtest\n%d tiles   %d overlay   %d objects%s" % [
+	_info.text = "Editing: %s%s\nCell (%d, %d)   Cube %dx%dx%d   Tool: %s\nWASD move, arrows/E/Q shape; Tab menu; Enter place (hold+move = fill); X erase; ` none; F5 finish; P playtest\n%d tiles   %d overlay   %d objects%s" % [
 		_level_name, tag, c.x, c.y, shape.x, shape.y, shape.z, _tool_label(_tool), _base.size(), _overlay.size(), _objects.size(), status_line
 	]
 
@@ -439,6 +443,7 @@ func _close_menu() -> void:
 
 func _select_tool(id: String) -> void:
 	_tool = id
+	_player.suppress_dodge = id != "none"   # placement mode: A places instead of dodging
 	_close_menu()
 	_flash("Tool: %s" % _tool_label(id))
 
