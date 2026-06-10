@@ -132,6 +132,7 @@ theme_override_font_sizes/font_size = 24
 
 [node name="Scroll" type="ScrollContainer" parent="UI/ToolMenu/VBox"]
 size_flags_vertical = 3
+follow_focus = true
 horizontal_scroll_mode = 0
 
 [node name="ToolList" type="VBoxContainer" parent="UI/ToolMenu/VBox/Scroll"]

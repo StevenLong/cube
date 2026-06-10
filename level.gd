@@ -10,6 +10,15 @@ const RESTART_DELAY := 0.5
 
 const FLOOR_TILE_SCENE := preload("res://FloorTile.tscn")
 
+# Any first gameplay input releases READY, not just movement: extending into a
+# shape or priming a dodge are as valid an opening move as a tumble. Event-driven
+# (see _input) so the starting press itself still applies the same frame.
+const START_ACTIONS: Array[String] = [
+	"move_left", "move_right", "move_forward", "move_back",
+	"extend_left", "extend_right", "extend_fwd", "extend_back", "extend_up",
+	"collapse", "dodge", "sprint",
+]
+
 var state: State = State.READY
 var moves: int = 0
 var time_elapsed: float = 0.0
@@ -66,13 +75,19 @@ func _ready() -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if state == State.READY:
+		for action in START_ACTIONS:
+			if event.is_action_pressed(action):
+				_enter_playing()
+				break
 	if event.is_action_pressed("pause"):
 		get_tree().paused = false
 		if LevelLoader.return_to_editor:
-			# Came from the editor's playtest: go back to editing this level.
+			# Came from the editor's playtest: restore the editor session (the
+			# editor snapshotted it on launch), not the scratch file, so the
+			# editor comes back as the level it was editing.
 			LevelLoader.return_to_editor = false
-			LevelEditor.open_path = LevelLoader.requested_file
-			LevelEditor.open_readonly = false
+			LevelEditor.open_session = true
 			get_tree().change_scene_to_file("res://editor.tscn")
 		else:
 			get_tree().change_scene_to_file("res://main_menu.tscn")
@@ -86,9 +101,7 @@ func _process(delta: float) -> void:
 
 	match state:
 		State.READY:
-			var move := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
-			if move.length() > 0.5:
-				_enter_playing()
+			pass   # released by any START_ACTIONS press in _input
 		State.PLAYING:
 			time_elapsed += delta
 		State.COMPLETE, State.CAUGHT, State.FELL:
