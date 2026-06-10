@@ -286,7 +286,10 @@ func _has_pursuit_corridor(target: Vector3) -> bool:
 		query.collide_with_areas = false
 		if not space.intersect_ray(query).is_empty():
 			return false
-	return true
+	# Walls clear is not enough: the straight line must also run over floor the
+	# whole way, or off-grid pursuit cuts across a void gap the A* grid would
+	# have routed around.
+	return _line_on_floor(from, to)
 
 
 func _move_toward(target_pos: Vector3, delta: float, speed_mult: float) -> void:
@@ -309,7 +312,13 @@ func _move_toward(target_pos: Vector3, delta: float, speed_mult: float) -> void:
 	var align := clampf(cos(angle_off), 0.0, 1.0)
 	var speed_factor := lerpf(TURN_CRAWL_FRACTION, 1.0, align)
 	var step := minf(speed * speed_mult * speed_factor * delta, distance)
-	position += horizontal_dir * step
+	# Backstop for every locomotion path: never step onto a non-floor cell. The
+	# corridor/clear-walk checks gate the big moves; this catches the rest (and
+	# stalls the sphere at a gap edge instead of letting it float across).
+	var next_pos := position + horizontal_dir * step
+	if not _level.is_floor(Vector2i(roundi(next_pos.x), roundi(next_pos.z))):
+		return
+	position = next_pos
 
 
 func _enter_state(new_state: State) -> void:
@@ -880,14 +889,31 @@ func _follow_path(delta: float, speed_mult: float, final_target: Vector3) -> voi
 
 
 func _clear_walk_to(target: Vector3) -> bool:
-	# True if a straight horizontal line from the sphere to target hits no wall, so a
-	# direct (collision-less) _move_toward there won't pass through geometry.
+	# True if a straight horizontal line from the sphere to target hits no wall AND
+	# stays over floor, so a direct (collision-less) _move_toward there won't pass
+	# through geometry or float across a void gap.
 	var space := get_world_3d().direct_space_state
 	var to := Vector3(target.x, global_position.y, target.z)
 	var query := PhysicsRayQueryParameters3D.create(global_position, to)
 	query.collision_mask = 1
 	query.collide_with_areas = false
-	return space.intersect_ray(query).is_empty()
+	if not space.intersect_ray(query).is_empty():
+		return false
+	return _line_on_floor(global_position, to)
+
+
+func _line_on_floor(from: Vector3, to: Vector3) -> bool:
+	# Every cell under the segment must be floor, sampled at half-cell steps.
+	# Rays only catch walls; a missing floor tile blocks nothing physically, so
+	# the off-grid movement paths have to check it explicitly.
+	var delta := Vector3(to.x - from.x, 0.0, to.z - from.z)
+	var dist := delta.length()
+	var steps := maxi(1, ceili(dist * 2.0))
+	for i in range(steps + 1):
+		var p := from + delta * (float(i) / float(steps))
+		if not _level.is_floor(Vector2i(roundi(p.x), roundi(p.z))):
+			return false
+	return true
 
 
 func _find_path(start: Vector2i, goal: Vector2i) -> Array[Vector2i]:
