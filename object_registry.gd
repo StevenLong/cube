@@ -54,8 +54,9 @@ const TYPES := {
 		"params": {"mode": "lock", "required_dims": [1, 1, 3]},
 	},
 	"extend_lock_gate": {
-		"name": "Gate", "kind": Kind.OBJECT, "glyph": "", "paint_mode": "single",
+		"name": "Gate", "kind": Kind.OBJECT, "glyph": "", "paint_mode": "path",
 		"scene": preload("res://extend_lock_gate.tscn"),
+		"params": {"height": 3},
 	},
 }
 

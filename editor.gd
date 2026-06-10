@@ -7,17 +7,24 @@ class_name LevelEditor
 # tool menu; pick a type to enter its placement mode, or "None" for free control.
 #   Move / extend: your usual controls    Tab: tool menu
 #   Enter: place    X or Backspace: erase    F5: finish    P: playtest
-# SLICE 1 of menu-first (modal). NEXT: rectangle drag (hold place + move), A = place
-# with dodge suppressed, a Back-to-None shortcut, object path/param modes. Previews
-# here partly mirror level_loader; both want a shared LevelBuilder.
+# Slices 1-4 done: modal tool menu, rectangle drag fill, controller place/erase,
+# objects (patrol-path authoring, lock/unlock zone variants). Previews here partly
+# mirror level_loader; both want a shared LevelBuilder.
 
 const REAL_SCENES := ["floor", "ink", "water"]
 const PLAYTEST_PATH := "user://_playtest.json"   # scratch level the Play action writes and the loader runs
+const SESSION_PATH := "user://_editor_session.json"   # full editor snapshot: written on every exit (menu or playtest), restored by Continue and the playtest return
 
 # Set by a launcher before changing to editor.tscn: the level file to open ("" =
 # start blank), and whether it is a built-in (saving then makes a custom copy).
+# open_session wins over open_path: restore the last exited editor state instead.
 static var open_path: String = ""
 static var open_readonly: bool = false
+static var open_session: bool = false
+
+
+static func has_session() -> bool:
+	return FileAccess.file_exists(SESSION_PATH)
 
 @onready var _player: Node3D = $Player
 @onready var _info: Label = $UI/Info
@@ -30,6 +37,9 @@ static var open_readonly: bool = false
 @onready var _tool_list: VBoxContainer = $UI/ToolMenu/VBox/Scroll/ToolList
 
 var _tool := "none"              # active tool: "none" (free control) or an ObjectRegistry type id
+var _tool_mode := "lock"         # extend_lock_zone variant chosen in the menu (lock | unlock)
+var _path_active := false        # a patrol path is being authored (A extends it)
+var _path_cell := Vector2i.ZERO  # spawn cell of the path being authored (its _objects key)
 var _menu_open := false
 var _dragging := false           # place held: painting a rectangle (paint tools)
 var _drag_min := Vector2i.ZERO   # footprint min/max snapshot at the press corner
@@ -58,7 +68,10 @@ func _ready() -> void:
 	_overwrite_confirm.confirmed.connect(_confirm_overwrite)
 	_finish_panel.hide()
 	_tool_menu.hide()
-	if open_path != "":
+	if open_session:
+		open_session = false
+		_load_session()
+	elif open_path != "":
 		_load_level(open_path, open_readonly)
 		open_path = ""
 	_refresh()
@@ -89,6 +102,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("pause"):
+		_save_session()   # leaving never loses work; Continue restores this
 		get_tree().change_scene_to_file("res://main_menu.tscn")
 		return
 	if event.is_action_pressed("editor_menu"):
@@ -248,13 +262,111 @@ func _footprint_cells() -> Array:
 
 
 func _stamp_object(id: String) -> void:
-	# BE-the-shape: the lock captures the cube's current dimensions; others drop at
-	# the cube's cell with default params.
+	# Path-mode objects (patrol routes, gate fences) build node by node; the zone
+	# is BE-the-shape (mode from the menu variant); others drop at the cube's cell
+	# with default params.
+	if String(ObjectRegistry.TYPES[id].get("paint_mode", "single")) == "path":
+		_extend_path(id)
+		return
 	var params: Dictionary = {}
+	var at := _cell()
 	if id == "extend_lock_zone":
+		# Capture dims AND stamp at the footprint MIN corner, which is what the
+		# zone's runtime check compares against (grid_pos is the base cell and
+		# diverges when extended left/fwd, which offset the ghost from the cube).
 		var dims: Vector3i = _player.get_dimensions()
-		params = {"mode": "lock", "required_dims": [dims.x, dims.y, dims.z]}
-	_stamp_object_at(id, _cell(), params)
+		at = _player.get_footprint_min()
+		params = {"mode": _tool_mode, "required_dims": [dims.x, dims.y, dims.z]}
+		if _tool_mode == "unlock":
+			var lock_dims: Vector3i = _find_lock_dims()
+			if lock_dims != Vector3i.ZERO and not _dims_permutation(dims, lock_dims):
+				_flash("Warning: shape unreachable from lock %s (loader will sync)" % lock_dims)
+	_stamp_object_at(id, at, params)
+
+
+func _find_lock_dims() -> Vector3i:
+	for c in _objects:
+		var e: Dictionary = _objects[c]
+		if e["id"] == "extend_lock_zone" and String(e["params"].get("mode", "lock")) == "lock":
+			var rd: Array = e["params"].get("required_dims", [])
+			if rd.size() >= 3:
+				return Vector3i(int(rd[0]), int(rd[1]), int(rd[2]))
+	return Vector3i.ZERO
+
+
+func _dims_permutation(a: Vector3i, b: Vector3i) -> bool:
+	# A locked shape can tumble into any axis permutation of its dims, nothing else.
+	var aa: Array = [a.x, a.y, a.z]
+	var bb: Array = [b.x, b.y, b.z]
+	aa.sort()
+	bb.sort()
+	return aa == bb
+
+
+# --- Node-path authoring (paint_mode "path": patrol routes and gate fences) ---
+# A starts a path at the cube's cell; each further A adds a node at the current
+# cell; A on the LAST node cell finishes (tap-tap in place = single-node object:
+# stationary guard, lone gate post). Erase pops the newest node while authoring
+# (popping the first deletes the object). Switching tool also finishes. Patrol
+# routes loop in game (enemy_sphere wraps its waypoint index).
+
+func _extend_path(id: String) -> void:
+	var cell := _cell()
+	if not _path_active:
+		_path_active = true
+		_path_cell = cell
+		_stamp_object_at(id, cell, _path_start_params(id, cell))
+		_flash("%s path started: A = add node, A here again = finish" % _tool_label(id))
+		return
+	var entry: Dictionary = _objects[_path_cell]
+	var nds: Array = entry["params"][_path_key(String(entry["id"]))]
+	var last: Array = nds[nds.size() - 1]
+	if cell == Vector2i(int(last[0]), int(last[1])):
+		_end_path()
+		return
+	nds.append([cell.x, cell.y])
+	_refresh_object_visual(_path_cell)
+	_flash("Node %d" % nds.size())
+
+
+func _path_key(id: String) -> String:
+	return "waypoints" if id == "enemy_sphere" else "nodes"
+
+
+func _path_start_params(id: String, cell: Vector2i) -> Dictionary:
+	if id == "enemy_sphere":
+		return {"waypoints": [[cell.x, cell.y]], "speed": float(ObjectRegistry.default_param("enemy_sphere", "speed"))}
+	# Gate: height is the one shape axis that matters (extend up first for a
+	# taller fence); width/depth are the fence's own node geometry.
+	return {"nodes": [[cell.x, cell.y]], "height": _player.get_dimensions().y}
+
+
+func _end_path() -> void:
+	if not _path_active:
+		return
+	_path_active = false
+	var entry: Dictionary = _objects[_path_cell]
+	var nds: Array = entry["params"][_path_key(String(entry["id"]))]
+	_flash("Path finished (%d node%s)" % [nds.size(), "" if nds.size() == 1 else "s"])
+
+
+func _pop_path_node() -> void:
+	var entry: Dictionary = _objects[_path_cell]
+	var nds: Array = entry["params"][_path_key(String(entry["id"]))]
+	nds.pop_back()
+	if nds.is_empty():
+		_path_active = false
+		_clear_vis("object:%d,%d" % [_path_cell.x, _path_cell.y])
+		_objects.erase(_path_cell)
+		_flash("Path removed")
+		return
+	_refresh_object_visual(_path_cell)
+	_flash("Node removed (%d left)" % nds.size())
+
+
+func _refresh_object_visual(cell: Vector2i) -> void:
+	var entry: Dictionary = _objects[cell]
+	_stamp_object_at(String(entry["id"]), cell, entry["params"])
 
 
 func _stamp_object_at(id: String, cell: Vector2i, params: Dictionary) -> void:
@@ -268,6 +380,11 @@ func _stamp_object_at(id: String, cell: Vector2i, params: Dictionary) -> void:
 
 
 func _erase() -> void:
+	# While authoring a node path, erase = undo the newest node instead.
+	if _path_active:
+		_pop_path_node()
+		_refresh()
+		return
 	# Erase mirrors the stamp: clears the cube's whole footprint (one cell when compact).
 	for cell: Vector2i in _footprint_cells():
 		_erase_cell(cell)
@@ -309,19 +426,90 @@ func _make_visual(id: String, cell: Vector2i) -> Node3D:
 
 
 func _make_object_visual(id: String, params: Dictionary) -> Node3D:
+	if id == "enemy_sphere":
+		return _make_patrol_visual(params)
 	if id == "extend_lock_zone":
 		var d: Array = params.get("required_dims", [1, 1, 3])
+		var locked := String(params.get("mode", "lock")) == "lock"
+		var col := Color(0.85, 0.5, 0.15, 0.45) if locked else Color(0.3, 0.85, 0.4, 0.45)
 		var mi := MeshInstance3D.new()
 		var box := BoxMesh.new()
 		box.size = Vector3(d[0], d[1], d[2])
 		mi.mesh = box
-		mi.set_surface_override_material(0, _ghost_mat(Color(0.85, 0.5, 0.15, 0.45)))
+		mi.set_surface_override_material(0, _ghost_mat(col))
 		# Centre the cuboid over the footprint (min corner at the cube's cell).
 		mi.position = Vector3((d[0] - 1) * 0.5, d[1] * 0.5 - _obj_y(id), (d[2] - 1) * 0.5)
 		var holder := Node3D.new()
 		holder.add_child(mi)
 		return holder
+	if id == "extend_lock_gate":
+		return _make_gate_visual(params)
 	return _preview_mesh(id)
+
+
+func _make_gate_visual(params: Dictionary) -> Node3D:
+	# Ghost fence mirroring the game build: a thin post per node, a thin panel
+	# between consecutive nodes, `height` tall, relative to the first node.
+	var holder := Node3D.new()
+	var nds: Array = params.get("nodes", [])
+	var h: float = float(params.get("height", 3))
+	if nds.is_empty():
+		return holder
+	var origin := Vector2(float(nds[0][0]), float(nds[0][1]))
+	for i in nds.size():
+		var n := Vector2(float(nds[i][0]), float(nds[i][1])) - origin
+		var post := MeshInstance3D.new()
+		post.mesh = _box(Vector3(0.4, h, 0.4))
+		post.set_surface_override_material(0, _ghost_mat(Color(0.9, 0.2, 0.2, 0.5)))
+		post.position = Vector3(n.x, h * 0.5, n.y)
+		holder.add_child(post)
+		if i < nds.size() - 1:
+			var nxt := Vector2(float(nds[i + 1][0]), float(nds[i + 1][1])) - origin
+			var seg := MeshInstance3D.new()
+			seg.mesh = _box(Vector3(0.2, h, n.distance_to(nxt)))
+			seg.set_surface_override_material(0, _ghost_mat(Color(0.9, 0.2, 0.2, 0.35)))
+			var mid := (n + nxt) * 0.5
+			seg.position = Vector3(mid.x, h * 0.5, mid.y)
+			seg.rotation.y = atan2(nxt.x - n.x, nxt.y - n.y)
+			holder.add_child(seg)
+	return holder
+
+
+func _make_patrol_visual(params: Dictionary) -> Node3D:
+	# Spawn sphere at the holder origin, a flat marker on every later waypoint, and
+	# a thin floor strip between consecutive ones. All offsets are relative to the
+	# spawn (waypoint 0), which is where _stamp_object_at positions the holder.
+	var holder := Node3D.new()
+	holder.add_child(_preview_mesh("enemy_sphere"))
+	var wps: Array = params.get("waypoints", [])
+	if wps.is_empty():
+		return holder
+	var origin := Vector2(float(wps[0][0]), float(wps[0][1]))
+	for i in wps.size():
+		var w := Vector2(float(wps[i][0]), float(wps[i][1])) - origin
+		if i > 0:
+			var marker := MeshInstance3D.new()
+			marker.mesh = _box(Vector3(0.3, 0.06, 0.3))
+			marker.set_surface_override_material(0, _ghost_mat(Color(0.7, 0.7, 0.75, 0.6)))
+			marker.position = Vector3(w.x, -0.35, w.y)   # world ~0.05 under the 0.4 holder
+			holder.add_child(marker)
+		if i < wps.size() - 1:
+			var nxt := Vector2(float(wps[i + 1][0]), float(wps[i + 1][1])) - origin
+			holder.add_child(_make_path_segment(w, nxt))
+	return holder
+
+
+func _make_path_segment(a: Vector2, b: Vector2) -> MeshInstance3D:
+	# Thin strip at floor level from waypoint a to b (spawn-relative XZ), rotated so
+	# the box's long (z) axis runs along the segment.
+	var mi := MeshInstance3D.new()
+	var seg_len := a.distance_to(b)
+	mi.mesh = _box(Vector3(0.08, 0.02, seg_len))
+	mi.set_surface_override_material(0, _ghost_mat(Color(0.7, 0.7, 0.75, 0.35)))
+	var mid := (a + b) * 0.5
+	mi.position = Vector3(mid.x, -0.37, mid.y)
+	mi.rotation.y = atan2(b.x - a.x, b.y - a.y)
+	return mi
 
 
 func _obj_y(id: String) -> float:
@@ -333,7 +521,7 @@ func _obj_y(id: String) -> float:
 		"enemy_sphere":
 			return 0.4
 		"extend_lock_gate":
-			return 1.5
+			return 0.0   # floor-level holder; the sized ghost centres itself
 		_:
 			return 0.5
 
@@ -405,8 +593,9 @@ func _refresh() -> void:
 	var shape: Vector3i = _player.get_dimensions()
 	var tag := "  (built-in copy: saving makes a new custom level)" if _current_readonly else ""
 	var status_line := ("\n" + _status) if _status != "" else ""
-	_info.text = "Editing: %s%s\nCell (%d, %d)   Cube %dx%dx%d   Tool: %s\nWASD move, arrows/E/Q shape; Tab menu; Enter place (hold+move = fill); X erase; ` none; F5 finish; P playtest\n%d tiles   %d overlay   %d objects%s" % [
-		_level_name, tag, c.x, c.y, shape.x, shape.y, shape.z, _tool_label(_tool), _base.size(), _overlay.size(), _objects.size(), status_line
+	var path_line := "\nPATH: A = add node, A on last node = finish, X/LT = undo" if _path_active else ""
+	_info.text = "Editing: %s%s\nCell (%d, %d)   Cube %dx%dx%d   Tool: %s\nWASD move, arrows/E/Q shape; Tab menu; Enter place (hold+move = fill); X erase; ` none; F5 finish; P playtest\n%d tiles   %d overlay   %d objects%s%s" % [
+		_level_name, tag, c.x, c.y, shape.x, shape.y, shape.z, _tool_label(_tool), _base.size(), _overlay.size(), _objects.size(), path_line, status_line
 	]
 
 
@@ -415,15 +604,21 @@ func _refresh() -> void:
 func _build_tool_menu() -> void:
 	_add_tool_button("none", "None (free control)")
 	for id in ObjectRegistry.TYPES:
-		_add_tool_button(id, String(ObjectRegistry.TYPES[id]["name"]))
+		if id == "extend_lock_zone":
+			# One type, two placement variants: mode is a param, not a separate type
+			# (the file format stays type extend_lock_zone + mode, per the SPEC).
+			_add_tool_button(id, "Lock Zone", "lock")
+			_add_tool_button(id, "Unlock Zone", "unlock")
+		else:
+			_add_tool_button(id, String(ObjectRegistry.TYPES[id]["name"]))
 
 
-func _add_tool_button(id: String, label: String) -> void:
+func _add_tool_button(id: String, label: String, variant: String = "lock") -> void:
 	var b := Button.new()
 	b.custom_minimum_size = Vector2(0, 34)
 	b.add_theme_font_size_override("font_size", 18)
 	b.text = label
-	b.pressed.connect(_select_tool.bind(id))
+	b.pressed.connect(_select_tool.bind(id, variant))
 	_tool_list.add_child(b)
 
 
@@ -441,15 +636,21 @@ func _close_menu() -> void:
 	_tool_menu.hide()
 
 
-func _select_tool(id: String) -> void:
+func _select_tool(id: String, variant: String = "lock") -> void:
+	_end_path()   # switching tool commits any patrol path in progress
 	_tool = id
+	_tool_mode = variant
 	_player.suppress_dodge = id != "none"   # placement mode: A places instead of dodging
 	_close_menu()
 	_flash("Tool: %s" % _tool_label(id))
 
 
 func _tool_label(id: String) -> String:
-	return "None" if id == "none" else String(ObjectRegistry.TYPES[id]["name"])
+	if id == "none":
+		return "None"
+	if id == "extend_lock_zone" and _tool_mode == "unlock":
+		return "Unlock Zone"
+	return String(ObjectRegistry.TYPES[id]["name"])
 
 
 # --- Finish / name panel: freeze the cube, name the level, write user://levels/<slug>.json ---
@@ -526,9 +727,38 @@ func _enter_play() -> void:
 		return
 	f.store_string(JSON.stringify(data, "  "))
 	f.close()
+	# Session too: the return path restores from it, so the editor comes back as
+	# the level it was editing (name, file, readonly), not as the scratch file.
+	_save_session()
 	LevelLoader.requested_file = PLAYTEST_PATH
 	LevelLoader.return_to_editor = true
 	get_tree().change_scene_to_file("res://painted_level.tscn")
+
+
+func _save_session() -> void:
+	# Snapshot the whole editor state (level data plus which file it belongs to)
+	# so leaving the editor, for the menu or a playtest, never loses work.
+	var data := _serialize()
+	if not data.has("meta"):
+		data["meta"] = {}
+	data["meta"]["name"] = _level_name
+	data["session"] = {"current_path": _current_path, "readonly": _current_readonly}
+	var f := FileAccess.open(SESSION_PATH, FileAccess.WRITE)
+	if f == null:
+		return
+	f.store_string(JSON.stringify(data, "  "))
+	f.close()
+
+
+func _load_session() -> void:
+	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(SESSION_PATH))
+	if not (data is Dictionary):
+		return
+	_load_data(data)
+	_level_name = str((data.get("meta", {}) as Dictionary).get("name", "My Level"))
+	var sess: Dictionary = data.get("session", {})
+	_current_path = str(sess.get("current_path", ""))
+	_current_readonly = bool(sess.get("readonly", false))
 
 
 func _write_level(path: String, level_name: String) -> void:
@@ -581,6 +811,15 @@ func _serialize() -> Dictionary:
 		var o: Dictionary = {"type": entry["id"], "cell": [cell.x - minx, cell.y - minz]}
 		for k in entry["params"]:
 			o[k] = entry["params"][k]
+		for pkey in ["waypoints", "nodes"]:
+			if o.has(pkey):
+				# Node lists are stored in editor space; shift them by the same
+				# min-corner offset as cells (into a NEW array, the live params
+				# stay editor-space).
+				var shifted: Array = []
+				for wp in o[pkey]:
+					shifted.append([int(wp[0]) - minx, int(wp[1]) - minz])
+				o[pkey] = shifted
 		objs.append(o)
 	return {
 		"version": 1,
@@ -614,6 +853,14 @@ func _load_level(path: String, readonly: bool) -> void:
 	if not (data is Dictionary):
 		push_error("editor: cannot parse level %s" % path)
 		return
+	_load_data(data)
+	var base_name := str((data.get("meta", {}) as Dictionary).get("name", "My Level"))
+	_level_name = (base_name + " (copy)") if readonly else base_name
+	_current_readonly = readonly
+	_current_path = path
+
+
+func _load_data(data: Dictionary) -> void:
 	_clear_all()
 	_load_grid(data.get("base", []), ObjectRegistry.glyph_to_id(ObjectRegistry.Kind.BASE_TILE), _base, "base")
 	_load_grid(data.get("overlay", []), ObjectRegistry.glyph_to_id(ObjectRegistry.Kind.OVERLAY_TILE), _overlay, "overlay")
@@ -625,10 +872,6 @@ func _load_level(path: String, readonly: bool) -> void:
 				if k != "type" and k != "cell":
 					params[k] = o[k]
 			_stamp_object_at(String(o["type"]), Vector2i(int(c[0]), int(c[1])), params)
-	var base_name := str((data.get("meta", {}) as Dictionary).get("name", "My Level"))
-	_level_name = (base_name + " (copy)") if readonly else base_name
-	_current_readonly = readonly
-	_current_path = path
 
 
 func _load_grid(rows: Array, glyphs: Dictionary, model: Dictionary, layer: String) -> void:
@@ -641,6 +884,7 @@ func _load_grid(rows: Array, glyphs: Dictionary, model: Dictionary, layer: Strin
 
 
 func _clear_all() -> void:
+	_path_active = false
 	for key in _vis:
 		_vis[key].queue_free()
 	_vis.clear()

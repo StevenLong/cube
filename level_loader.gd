@@ -186,6 +186,8 @@ func _build_objects(world: Node3D, objects: Array) -> void:
 	var enemy_idx := 0
 	var zone_idx := 0
 	var gate_idx := 0
+	var lock_zones: Array = []
+	var unlock_zones: Array = []
 	for obj in objects:
 		if typeof(obj) != TYPE_DICTIONARY:
 			continue
@@ -196,13 +198,33 @@ func _build_objects(world: Node3D, objects: Array) -> void:
 				world.add_child(_build_enemy(spec, enemy_idx))
 				enemy_idx += 1
 			"extend_lock_zone":
-				world.add_child(_build_lock_zone(spec, cell, zone_idx))
+				var zone: Node3D = _build_lock_zone(spec, cell, zone_idx)
+				world.add_child(zone)
+				(lock_zones if zone.mode == 0 else unlock_zones).append(zone)
 				zone_idx += 1
 			"extend_lock_gate":
-				world.add_child(_build_gate(cell, gate_idx))
+				world.add_child(_build_gate(spec, cell, gate_idx))
 				gate_idx += 1
 			_:
 				push_warning("level_loader: unknown object type '%s', skipped" % spec.get("type", ""))
+	# Softlock guard: a locked shape can tumble into any PERMUTATION of the lock's
+	# dims, but never into other dims. An unlock requiring a non-permutation is
+	# unsatisfiable stale data, so rewrite it to the lock's dims; a deliberate
+	# different-orientation unlock (a valid permutation) is left alone. One global
+	# lock per level until the link layer exists, so the first lock decides.
+	if not lock_zones.is_empty():
+		for u in unlock_zones:
+			if not _same_dims_set(u.required_dims, lock_zones[0].required_dims):
+				push_warning("level_loader: unlock dims %s unreachable from lock %s, synced" % [u.required_dims, lock_zones[0].required_dims])
+				u.required_dims = lock_zones[0].required_dims
+
+
+func _same_dims_set(a: Vector3i, b: Vector3i) -> bool:
+	var aa: Array = [a.x, a.y, a.z]
+	var bb: Array = [b.x, b.y, b.z]
+	aa.sort()
+	bb.sort()
+	return aa == bb
 
 
 func _build_enemy(spec: Dictionary, idx: int) -> Node3D:
@@ -231,10 +253,18 @@ func _build_lock_zone(spec: Dictionary, cell: Vector2i, idx: int) -> Node3D:
 	return zone
 
 
-func _build_gate(cell: Vector2i, idx: int) -> Node3D:
+func _build_gate(spec: Dictionary, cell: Vector2i, idx: int) -> Node3D:
+	# Node-fence gate: posts at each node cell, thin panels between consecutive
+	# nodes, `height` tall. The script builds the pieces; node sits at floor level
+	# at the first node's cell. Legacy gates (no nodes) become a single post.
 	var gate: Node3D = ObjectRegistry.scene_for("extend_lock_gate").instantiate()
 	gate.name = "Gate%d" % idx
-	gate.position = Vector3(cell.x, 1.5, cell.y)
+	gate.position = Vector3(cell.x, 0.0, cell.y)
+	var nds: Array[Vector2i] = []
+	for n in spec.get("nodes", [[cell.x, cell.y]]):
+		nds.append(_cell(n))
+	gate.nodes = nds
+	gate.height = int(spec.get("height", ObjectRegistry.default_param("extend_lock_gate", "height")))
 	return gate
 
 

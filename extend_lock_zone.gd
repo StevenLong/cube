@@ -14,9 +14,12 @@ extends Area3D
 #   == required_dims, at rest. Shows a blinking translucent ghost of the required
 #   cuboid plus its footprint tiles, hidden once the lock is armed.
 # UNLOCK: releases the lock by the SAME match (footprint min == this cell AND
-#   dimensions == required_dims, at rest), shown while locked. Mirroring LOCK keeps
-#   the release deliberate and placed: it can't fire while the cube is still over
-#   the gate, which is what let a player trip it and then reverse back through.
+#   dimensions == required_dims, at rest), shown while locked. Dims matter even
+#   though extensions are frozen: TUMBLING a locked shape reorients it (a standing
+#   1x3x1 becomes a lying 1x1x3), so the dims check demands a deliberate arrival
+#   orientation. Softlock guard lives in the loader: any permutation of the
+#   lock's dims is reachable by tumbling, so it only rewrites unlock dims that
+#   are NOT a permutation of the lock's (truly unsatisfiable stale data).
 
 enum Mode { LOCK, UNLOCK }
 
@@ -87,10 +90,9 @@ func _process(delta: float) -> void:
 	_update_blueprint(delta)
 	if _player.is_moving():
 		return
-	# Same exact match for both modes (shape and orientation seated at this exact
-	# cell, at rest); they differ only in the lock state required and the one they
-	# set. A precise UNLOCK, not a loose overlap, stays deliberate: it cannot fire
-	# while the cube is still straddling the gate, so you can't trip it and reverse.
+	# Same exact match for both modes (shape, orientation, and location seated at
+	# this cell, at rest); they differ only in the lock state required and the one
+	# they set. See header for why UNLOCK keeps the dims check (tumble reorients).
 	var seated: bool = (_player.get_dimensions() == required_dims
 		and _player.get_footprint_min() == _cell())
 	if mode == Mode.LOCK:
