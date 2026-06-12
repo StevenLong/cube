@@ -49,6 +49,7 @@ const DETECT_MIN_PROXIMITY := 0.15   # fill floor at cone edge
 const DETECT_SIZE_WEIGHT := 0.15     # per extension unit
 const DETECT_ALERT_FILL_MULT := 1.5  # faster fill when already alert
 const DETECT_NOISE_SEED := 0.5       # heard noise seeds detection here, then drains
+const NOISE_WALL_MUFFLE := 0.45      # heard-radius fraction left when a wall blocks the sound path
 const DEBUG_DETECTION := true        # temporary on-screen _detection readout; remove with the focusing-cone task
 
 # Focusing cone (reads _detection). The cone narrows, colour-ramps, and aims at
@@ -87,6 +88,8 @@ var _state_timer := 0.0
 var _detection := 0.0
 var _last_seen_pos := Vector3.ZERO
 var _last_visible_sample := Vector3.ZERO  # cell that passed _is_seeing_player this tick; sometimes the player's center, sometimes an exposed end of an extended bar
+var _trail_alpha := 0.0  # freshness of the newest print already investigated; only FRESHER prints retarget. Decays at the print fade rate so it tracks that print's own alpha: same-trail older prints never re-trigger (kills the walk-the-trail-backwards ping-pong), new prints laid later do
+var _seen_footprint_alpha := 0.0  # alpha of the print _visible_footprint_pos just returned
 var _material: StandardMaterial3D
 var _player: Player
 var _pending_sounds: Array = []
@@ -137,6 +140,7 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_advance_pending_sounds(delta)
+	_trail_alpha = maxf(_trail_alpha - delta / Player.FOOTPRINT_FADE_TIME, 0.0)
 	var seeing := _is_seeing_player()
 	if seeing:
 		# Use the actually-visible cell, not the player's centre, so investigating
@@ -156,6 +160,7 @@ func _process(delta: float) -> void:
 				_enter_state(State.SUSPICIOUS)
 			elif footprint_pos != Vector3.INF:
 				_last_seen_pos = Vector3(footprint_pos.x, position.y, footprint_pos.z)
+				_trail_alpha = _seen_footprint_alpha
 				_enter_state(State.INVESTIGATE)
 		State.SUSPICIOUS:
 			if _detection >= DETECT_PURSUIT:
@@ -164,6 +169,7 @@ func _process(delta: float) -> void:
 				_enter_state(State.PATROL)
 			elif footprint_pos != Vector3.INF:
 				_last_seen_pos = Vector3(footprint_pos.x, position.y, footprint_pos.z)
+				_trail_alpha = _seen_footprint_alpha
 				_enter_state(State.INVESTIGATE)
 			else:
 				_creep(delta)
@@ -181,6 +187,7 @@ func _process(delta: float) -> void:
 					var cv := Vector2(_last_seen_pos.x, _last_seen_pos.z)
 					if nv.distance_to(cv) > FOOTPRINT_RETARGET_DIST:
 						_last_seen_pos = Vector3(footprint_pos.x, position.y, footprint_pos.z)
+						_trail_alpha = _seen_footprint_alpha
 						_begin_search(_world_to_cell(_last_seen_pos))
 						_state_timer = 0.0
 				_investigate_search(delta)
@@ -472,8 +479,26 @@ func _on_player_noise(origin: Vector2, max_radius: float, duration: float) -> vo
 	var dist := enemy_xz.distance_to(origin)
 	if dist > max_radius:
 		return
+	# Walls muffle: a blocked sound path cuts the heard radius hard, so a loud
+	# step on the far side of a wall no longer reads as a precise beacon. A
+	# knock's origin sits INSIDE the knocked wall and rays ignore the shape they
+	# start in, so a knock still carries through its own wall (the lure works)
+	# but is muffled by any further wall.
+	if not _noise_path_clear(origin) and dist > max_radius * NOISE_WALL_MUFFLE:
+		return
 	var delay := dist * duration / max_radius
 	_pending_sounds.append({ "origin": origin, "delay": delay })
+
+
+func _noise_path_clear(origin: Vector2) -> bool:
+	var space := get_world_3d().direct_space_state
+	var query := PhysicsRayQueryParameters3D.create(
+		Vector3(origin.x, 0.5, origin.y),
+		Vector3(global_position.x, 0.5, global_position.z)
+	)
+	query.collision_mask = 1
+	query.collide_with_areas = false
+	return space.intersect_ray(query).is_empty()
 
 
 func _advance_pending_sounds(delta: float) -> void:
@@ -508,10 +533,14 @@ func _on_sound_heard(origin: Vector2) -> void:
 
 
 func _is_seeing_player() -> bool:
-	# Cone + LoS check across the player's whole footprint, not just its centre,
-	# so an extended bar's end poking out of cover is detectable even when the
-	# base cell's ray is occluded by a wall. INVESTIGATE drops the cone filter
-	# (active 360° scan). First sample cell that passes all gates wins.
+	# Cone + LoS check across the player's whole footprint AND height, not just
+	# its centre: an extended bar's end poking out of cover is detectable when
+	# the base cell's ray is occluded, and a TALL cube poking above a 1u wall is
+	# seen over it (tall = exposed, the symmetric half of periscope; this is also
+	# what lets the enemy see over a safety_edge). One sample per unit cell of
+	# the cuboid: column gates (range, cone) run once per column, then a ray per
+	# height. INVESTIGATE drops the cone filter (active 360° scan). First sample
+	# that passes all gates wins.
 	if _player.is_blending:
 		return false
 	var cone_active := _state != State.INVESTIGATE
@@ -526,22 +555,22 @@ func _is_seeing_player() -> bool:
 	var space := get_world_3d().direct_space_state
 	var fmin: Vector2i = _player.get_footprint_min()
 	var dims: Vector3i = _player.get_dimensions()
-	var sample_y := _player.global_position.y
 	for dx in range(dims.x):
 		for dz in range(dims.z):
-			var sample := Vector3(fmin.x + dx, sample_y, fmin.y + dz)
-			var to_sample := sample - global_position
+			var to_sample := Vector3(fmin.x + dx, 0.0, fmin.y + dz) - global_position
 			to_sample.y = 0.0
 			var dist := to_sample.length()
 			if dist < 0.01 or dist > VIEW_RADIUS:
 				continue
 			if cone_active and (to_sample / dist).dot(forward) < VIEW_CONE_COS:
 				continue
-			var query := PhysicsRayQueryParameters3D.create(global_position, sample)
-			query.collide_with_areas = false
-			if space.intersect_ray(query).is_empty():
-				_last_visible_sample = sample
-				return true
+			for dy in range(dims.y):
+				var sample := Vector3(fmin.x + dx, 0.5 + dy, fmin.y + dz)
+				var query := PhysicsRayQueryParameters3D.create(global_position, sample)
+				query.collide_with_areas = false
+				if space.intersect_ray(query).is_empty():
+					_last_visible_sample = sample
+					return true
 	return false
 
 
@@ -553,6 +582,7 @@ func _visible_footprint_pos() -> Vector3:
 	var positions: PackedVector2Array = _player.get_footprint_positions()
 	if positions.is_empty():
 		return Vector3.INF
+	var alphas: PackedFloat32Array = _player.get_footprint_alphas()
 	var skip_cone := _state == State.INVESTIGATE
 	var forward := Vector3.ZERO
 	if not skip_cone:
@@ -565,6 +595,11 @@ func _visible_footprint_pos() -> Vector3:
 	var origin := global_position
 	var space := get_world_3d().direct_space_state
 	for i in range(positions.size() - 1, -1, -1):
+		# Trail memory: skip prints no fresher than the newest one already
+		# investigated. _trail_alpha decays in lockstep with print fade, so the
+		# cleared trail stays cleared while later prints still qualify.
+		if alphas[i] <= _trail_alpha:
+			continue
 		var p := positions[i]
 		var fp_world := Vector3(p.x, 0.05, p.y)
 		var delta_xz := Vector3(fp_world.x - origin.x, 0.0, fp_world.z - origin.z)
@@ -578,6 +613,7 @@ func _visible_footprint_pos() -> Vector3:
 		var query := PhysicsRayQueryParameters3D.create(origin, fp_world)
 		query.collide_with_areas = false
 		if space.intersect_ray(query).is_empty():
+			_seen_footprint_alpha = alphas[i]
 			return fp_world
 	return Vector3.INF
 

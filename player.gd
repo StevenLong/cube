@@ -8,6 +8,7 @@ signal caught
 signal fell
 
 const TUMBLE_DURATION := 0.3
+const STEP_GAIN := 0.4  # master loudness of the player's own step audio (~ -8 dB); the gameplay noise radius is unaffected
 const SPRINT_DURATION := 0.15
 const DODGE_DISTANCE := 5
 const DODGE_DURATION := 0.4
@@ -850,7 +851,7 @@ func _gap_ahead(dir: Vector2i) -> int:
 func _play_step(noise_level: float) -> void:
 	var ext_sum: int = _ext[EXT_LEFT] + _ext[EXT_RIGHT] + _ext[EXT_UP] + _ext[EXT_FWD] + _ext[EXT_BACK]
 	var size_factor := 1.0 + ext_sum * 0.15
-	_step_player.volume_db = linear_to_db(noise_level * size_factor)
+	_step_player.volume_db = linear_to_db(STEP_GAIN * noise_level * size_factor)
 	_step_player.pitch_scale = 1.0 - ext_sum * 0.08
 	_step_player.play()
 	var max_radius: float = (8.0 if noise_level > 1.0 else 4.0) + ext_sum
@@ -1321,6 +1322,16 @@ func get_footprint_positions() -> PackedVector2Array:
 	var out := PackedVector2Array()
 	for fp in _footprints:
 		out.append(fp.position)
+	return out
+
+
+func get_footprint_alphas() -> PackedFloat32Array:
+	# Index-aligned with get_footprint_positions. Alpha doubles as freshness
+	# (deposited at 1.0, uniform fade), which the enemy's trail-memory uses to
+	# ignore prints older than ones it has already investigated.
+	var out := PackedFloat32Array()
+	for fp in _footprints:
+		out.append(fp.alpha)
 	return out
 
 
