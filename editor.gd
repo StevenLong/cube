@@ -6,7 +6,7 @@ class_name LevelEditor
 # BE the shape: place captures the cube's dimensions at its cell. MODAL: Tab opens a
 # tool menu; pick a type to enter its placement mode, or "None" for free control.
 #   Move / extend: your usual controls    Tab: tool menu
-#   Enter: place    X or Backspace: erase    F5: finish    P: playtest
+#   Enter/A: place (hold = rect)    B/X/Backspace: erase (hold = rect)    F5: finish    P: playtest
 # Slices 1-4 done: modal tool menu, rectangle drag fill, controller place/erase,
 # objects (patrol-path authoring, lock/unlock zone variants). Previews here partly
 # mirror level_loader; both want a shared LevelBuilder.
@@ -35,6 +35,7 @@ static func has_session() -> bool:
 @onready var _overwrite_confirm: ConfirmationDialog = $OverwriteConfirm
 @onready var _tool_menu: Control = $UI/ToolMenu
 @onready var _tool_list: VBoxContainer = $UI/ToolMenu/VBox/Scroll/ToolList
+@onready var _grid_ref: MeshInstance3D = $GridRef
 
 var _tool := "none"              # active tool: "none" (free control) or an ObjectRegistry type id
 var _tool_mode := "lock"         # extend_lock_zone variant chosen in the menu (lock | unlock)
@@ -42,6 +43,7 @@ var _path_active := false        # a patrol path is being authored (A extends it
 var _path_cell := Vector2i.ZERO  # spawn cell of the path being authored (its _objects key)
 var _menu_open := false
 var _dragging := false           # place held: painting a rectangle (paint tools)
+var _erase_dragging := false     # erase held: clearing a rectangle (any tool)
 var _drag_min := Vector2i.ZERO   # footprint min/max snapshot at the press corner
 var _drag_max := Vector2i.ZERO
 var _preview: MeshInstance3D = null
@@ -83,6 +85,11 @@ func _process(delta: float) -> void:
 		if _status_t <= 0.0:
 			_status = ""
 	_handle_place_drag()
+	_handle_erase_drag()
+	# Infinite canvas: the void grid plane trails the cube, snapped to whole
+	# cells so the world-space grid lines never visibly shift.
+	_grid_ref.position.x = float(roundi(_player.position.x))
+	_grid_ref.position.z = float(roundi(_player.position.z))
 	_refresh()  # keep the readout live as the cube moves
 
 
@@ -110,9 +117,6 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event.is_action_pressed("editor_none"):
 		_select_tool("none")
-		return
-	if event.is_action_pressed("erase"):
-		_erase()
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
@@ -146,12 +150,48 @@ func _handle_place_drag() -> void:
 		if _dragging:
 			_cancel_drag()
 		return
-	if Input.is_action_just_pressed("place"):
+	if Input.is_action_just_pressed("place") and not _erase_dragging:
 		_begin_place()
 	if Input.is_action_just_released("place"):
 		_end_place()
 	elif _dragging:
 		_update_place_preview()
+
+
+# --- Erase drag (B / X / Backspace): tap = clear the footprint's top layer,
+# hold + move = clear the rectangle. Tool-independent; while authoring a node
+# path it instead undoes the newest node. ---
+
+func _handle_erase_drag() -> void:
+	if _menu_open or _finishing or _overwrite_confirm.visible:
+		if _erase_dragging:
+			_erase_dragging = false
+			_free_preview()
+		return
+	if Input.is_action_just_pressed("erase") and not _dragging and not _erase_dragging:
+		if _path_active:
+			_pop_path_node()
+			_refresh()
+			return
+		_erase_dragging = true
+		var d: Vector3i = _player.get_dimensions()
+		_drag_min = _player.get_footprint_min()
+		_drag_max = _drag_min + Vector2i(d.x - 1, d.z - 1)
+		_create_preview(Color(1.0, 0.25, 0.2, 0.3))
+	if Input.is_action_just_released("erase") and _erase_dragging:
+		_erase_dragging = false
+		_commit_erase_rect()
+		_free_preview()
+	elif _erase_dragging:
+		_update_place_preview()
+
+
+func _commit_erase_rect() -> void:
+	var r: Array = _drag_rect()
+	for x in range(r[0], r[2] + 1):
+		for z in range(r[1], r[3] + 1):
+			_erase_cell(Vector2i(x, z))
+	_refresh()
 
 
 func _is_paint_tool() -> bool:
@@ -203,12 +243,12 @@ func _commit_rect() -> void:
 	_refresh()
 
 
-func _create_preview() -> void:
+func _create_preview(color: Color = Color(0.3, 0.8, 1.0, 0.25)) -> void:
 	_preview = MeshInstance3D.new()
 	_preview.mesh = BoxMesh.new()
 	var m := StandardMaterial3D.new()
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	m.albedo_color = Color(0.3, 0.8, 1.0, 0.25)
+	m.albedo_color = color
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_preview.set_surface_override_material(0, m)
 	add_child(_preview)
@@ -379,18 +419,6 @@ func _stamp_object_at(id: String, cell: Vector2i, params: Dictionary) -> void:
 	_vis[key] = node
 
 
-func _erase() -> void:
-	# While authoring a node path, erase = undo the newest node instead.
-	if _path_active:
-		_pop_path_node()
-		_refresh()
-		return
-	# Erase mirrors the stamp: clears the cube's whole footprint (one cell when compact).
-	for cell: Vector2i in _footprint_cells():
-		_erase_cell(cell)
-	_refresh()
-
-
 func _erase_cell(cell: Vector2i) -> void:
 	# Clear the topmost occupied layer at one cell (object over overlay over base).
 	for layer in ["object", "overlay", "base"]:
@@ -531,8 +559,10 @@ func _preview_mesh(id: String) -> MeshInstance3D:
 	var mat := StandardMaterial3D.new()
 	match id:
 		"tall_wall":
+			# Match the in-game look (risen tile, static wall shader) so authoring previews true.
 			mi.mesh = _box(Vector3(1, 1, 1))
-			mat.albedo_color = Color(0.4, 0.4, 0.5)
+			mi.set_surface_override_material(0, preload("res://wall_material.tres"))
+			return mi
 		"safety_edge":
 			mi.mesh = _box(Vector3(1, 0.1, 1))
 			mat.albedo_color = Color(0.9, 0.15, 0.15)
@@ -593,8 +623,8 @@ func _refresh() -> void:
 	var shape: Vector3i = _player.get_dimensions()
 	var tag := "  (built-in copy: saving makes a new custom level)" if _current_readonly else ""
 	var status_line := ("\n" + _status) if _status != "" else ""
-	var path_line := "\nPATH: A = add node, A on last node = finish, X/LT = undo" if _path_active else ""
-	_info.text = "Editing: %s%s\nCell (%d, %d)   Cube %dx%dx%d   Tool: %s\nWASD move, arrows/E/Q shape; Tab menu; Enter place (hold+move = fill); X erase; ` none; F5 finish; P playtest\n%d tiles   %d overlay   %d objects%s%s" % [
+	var path_line := "\nPATH: A = add node, A on last node = finish, X/B = undo" if _path_active else ""
+	_info.text = "Editing: %s%s\nCell (%d, %d)   Cube %dx%dx%d   Tool: %s\nWASD move, arrows/E/Q shape; Tab menu; Enter place (hold = fill); X/B erase (hold = fill); ` none; F5 finish; P playtest\n%d tiles   %d overlay   %d objects%s%s" % [
 		_level_name, tag, c.x, c.y, shape.x, shape.y, shape.z, _tool_label(_tool), _base.size(), _overlay.size(), _objects.size(), path_line, status_line
 	]
 

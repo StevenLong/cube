@@ -4,20 +4,27 @@ const DISTANCE := 12.0
 const H_ANGLE := 0.0        # square-on to grid
 const ELEV_MIN := 0.2        # ~11 degrees - almost side-on
 const ELEV_MAX := 1.3        # ~74 degrees - almost top-down
+const ELEV_DEFAULT := 0.7854 # 45 degrees down - the angle playtesting kept landing on
 const TILT_SPEED := 1.2
 
-var _elevation := 0.6155     # ~35 degrees - true isometric default
+# The chosen angle persists across restarts and levels for the whole app session,
+# so a player who found their angle never re-adjusts after a reset.
+static var saved_elevation := ELEV_DEFAULT
+
+var _elevation := ELEV_DEFAULT
 var _target: Node3D
 
 
 func _ready() -> void:
 	_target = get_node("../Player")
+	_elevation = saved_elevation
 	process_mode = Node.PROCESS_MODE_ALWAYS
 
 
 func _process(delta: float) -> void:
 	var tilt := Input.get_axis("camera_tilt_down", "camera_tilt_up")
 	_elevation = clampf(_elevation + tilt * TILT_SPEED * delta, ELEV_MIN, ELEV_MAX)
+	saved_elevation = _elevation
 
 	var h := DISTANCE * cos(_elevation)
 	var v := DISTANCE * sin(_elevation)
