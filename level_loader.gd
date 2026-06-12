@@ -27,6 +27,8 @@ class_name LevelLoader
 const TEMPLATE_PATH := "res://level_template.tscn"
 
 const WALL_TALL := 1.0
+const FLOOR_DEPTH := 2.0  # floor tiles are 2u-deep boxes with tops at y=0; walls share that bottom
+const WALL_MATERIAL := preload("res://wall_material.tres")  # static grid look: thin top lines, floor-style sides, no dynamic overlays
 const SAFE_EDGE_HEIGHT := 0.4   # low invisible blocker; the red line is its only visual
 const SAFE_EDGE_Y := 0.02       # red line height above floor top
 const SAFE_EDGE_PERP := 0.04    # thickness across the edge
@@ -38,14 +40,11 @@ const DIRS_4: Array[Vector2i] = [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0
 static var requested_file: String = ""   # the active level's file. A launcher sets it; the loader keeps it (does NOT clear) so reload_current_scene (restart) replays the same file. Every painted_level launcher must set it, or a stale value leaks in.
 static var return_to_editor: bool = false   # set by the editor's playtest; level.gd then returns to the editor on exit instead of the main menu
 
-var _wall_mat: StandardMaterial3D
 var _edge_mat: StandardMaterial3D
 var _wall_idx := 0          # running Wall* counter; nav keys off unique Wall names
 
 
 func _ready() -> void:
-	_wall_mat = StandardMaterial3D.new()
-	_wall_mat.albedo_color = Color(0.4, 0.4, 0.5)
 	_edge_mat = StandardMaterial3D.new()
 	_edge_mat.albedo_color = Color(0.9, 0.15, 0.15)
 	_edge_mat.emission_enabled = true
@@ -76,6 +75,10 @@ func _parse(text: String) -> Dictionary:
 		push_error("level_loader: %s is not a JSON object" % level_file)
 		return {}
 	var doc: Dictionary = json
+	var version := int(doc.get("version", 0))
+	if version != 1:
+		push_error("level_loader: %s has unsupported version %d (expected 1)" % [level_file, version])
+		return {}
 	var data: Dictionary = _parse_base(doc.get("base", []))
 	data["overlay"] = _parse_overlay(doc.get("overlay", []))
 	data["objects"] = doc.get("objects", [])
@@ -149,8 +152,12 @@ func _populate(world: Node3D, data: Dictionary) -> void:
 		world.add_child(tile)
 
 	_wall_idx = 0
-	for cell in data["tall"]:
-		world.add_child(_make_wall(cell, WALL_TALL, _wall_mat))
+	# Contiguous wall cells merge into one Wall* body each: the ground shader's
+	# occlusion list caps at MAX_WALLS=16 BODIES (player.gd), so per-cell walls
+	# silently stop occluding in any real maze. Nav and the shader both read
+	# multi-cell boxes correctly already.
+	for rect in _merge_rects(data["tall"]):
+		world.add_child(_make_wall_rect(rect, WALL_TALL, WALL_MATERIAL))
 	for cell in data["edges"]:
 		_build_safety_edge(world, cell, data["floor"])
 
@@ -160,7 +167,9 @@ func _populate(world: Node3D, data: Dictionary) -> void:
 
 func _build_safety_edge(world: Node3D, cell: Vector2i, floor_cells: Dictionary) -> void:
 	# Formalized safety_edge: an invisible low blocker (cube + nav) plus a thin red
-	# line on every side that faces floor (the edge it guards). No visible body.
+	# line on every side that faces floor (the edge it guards). No visible body and
+	# deliberately NO tile: it marks an impasse at a boundary without walling up
+	# the visuals; the red line on the floor's edge is the whole readout.
 	world.add_child(_make_wall(cell, SAFE_EDGE_HEIGHT, null))
 	for d in DIRS_4:
 		if floor_cells.has(cell + d):
@@ -298,23 +307,79 @@ func _cell(value: Variant) -> Vector2i:
 	return Vector2i.ZERO
 
 
-func _make_wall(cell: Vector2i, height: float, mat: StandardMaterial3D) -> StaticBody3D:
-	# Named Wall* and box-shaped so enemy_sphere._build_nav_grid blocks the cell.
-	# mat == null builds an INVISIBLE blocker (the safety_edge body).
+func _make_wall(cell: Vector2i, height: float, mat: Material) -> StaticBody3D:
+	# Single-cell wall body (used per-cell by safety edges).
+	return _make_wall_rect(Rect2i(cell.x, cell.y, 1, 1), height, mat)
+
+
+func _make_wall_rect(rect: Rect2i, height: float, mat: Material) -> StaticBody3D:
+	# Named Wall* and box-shaped so enemy_sphere._build_nav_grid blocks every
+	# covered cell (it reads the collider's box footprint) and the ground shader
+	# gets one AABB for the whole run. mat == null builds an INVISIBLE blocker
+	# (the safety_edge body). Visible walls wear the grid material and extend
+	# DOWN to the floor tiles' bottom, so a wall reads as a risen floor tile and
+	# there is no void gap beneath it.
 	var body := StaticBody3D.new()
 	body.name = "Wall%d" % _wall_idx
 	_wall_idx += 1
-	body.position = Vector3(cell.x, height * 0.5, cell.y)
+	var top_y := height
+	var bottom_y := -FLOOR_DEPTH if mat != null else 0.0
+	var size := Vector3(rect.size.x, top_y - bottom_y, rect.size.y)
+	body.position = Vector3(
+		rect.position.x + (rect.size.x - 1) * 0.5,
+		(top_y + bottom_y) * 0.5,
+		rect.position.y + (rect.size.y - 1) * 0.5
+	)
 	if mat != null:
 		var mesh := MeshInstance3D.new()
+		# Explicit name: player._push_walls_to_shader looks up "MeshInstance3D",
+		# and runtime add_child auto-names ("@MeshInstance3D@N") broke that
+		# silently, painted levels have been pushing ZERO wall AABBs to the
+		# ground shader since the data-driven pivot.
+		mesh.name = "MeshInstance3D"
 		var box := BoxMesh.new()
-		box.size = Vector3(1, height, 1)
+		box.size = size
 		mesh.mesh = box
 		mesh.set_surface_override_material(0, mat)
 		body.add_child(mesh)
 	var col := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
-	shape.size = Vector3(1, height, 1)
+	shape.size = size
 	col.shape = shape
 	body.add_child(col)
 	return body
+
+
+func _merge_rects(cells: Array[Vector2i]) -> Array[Rect2i]:
+	# Greedy rectangle cover: the top-left-most unused cell starts a rect, which
+	# grows right as far as cells exist, then down while every cell of the next
+	# row exists. Not optimal in pathological layouts, but collapses straight
+	# runs and solid blocks (the common wall shapes) to one body each.
+	var remaining: Dictionary = {}
+	for c in cells:
+		remaining[c] = true
+	var ordered: Array = cells.duplicate()
+	ordered.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return a.y < b.y or (a.y == b.y and a.x < b.x))
+	var rects: Array[Rect2i] = []
+	for c in ordered:
+		var cell: Vector2i = c
+		if not remaining.has(cell):
+			continue
+		var w := 1
+		while remaining.has(Vector2i(cell.x + w, cell.y)):
+			w += 1
+		var h := 1
+		var grow := true
+		while grow:
+			for x in range(cell.x, cell.x + w):
+				if not remaining.has(Vector2i(x, cell.y + h)):
+					grow = false
+					break
+			if grow:
+				h += 1
+		for x in range(cell.x, cell.x + w):
+			for z in range(cell.y, cell.y + h):
+				remaining.erase(Vector2i(x, z))
+		rects.append(Rect2i(cell.x, cell.y, w, h))
+	return rects
