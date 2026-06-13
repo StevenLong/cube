@@ -1,79 +1,80 @@
-# Handoff, 2026-06-12
+# Handoff, 2026-06-13
 
-## Headline: VALIDATION GATE PASSED (user authored 3 levels; "the loop can work"). Pre-authoring fixes done, plus two playtest-notes batches (audio, noise muffling, wall restyle, camera, controller revision, editor QoL, ink-trail fix). NEXT = user keeps playtesting and feeding notes; tuning dials below.
+## Headline: third playtest-notes batch landed (dodge feel + cooldown HUD, input buffering, in-game pause menu + editor command menu for controller, quieter steps, wall-muffled... wait that was last time; this time: dodge priming/HUD, buffer, pause menus, step volume, knock gate, wave-clear, dodge-escape-by-geography). Loop validated; user is iterating on feel. NEXT = right-stick extend precision (drift), then continue playtest notes.
 
-## Gate result
-The user built 3 levels in the editor and judged the reactive-stealth loop workable. Still
-playtesting; expect more note batches. Phase 8.5's gate and pre-authoring items are ticked in
-the game-dev task list.
+## What happened this session (all tested headless, NOT yet hand-tested by user beyond a first run)
+- **Dodge (#1)**: holding dodge now LOCKS OUT tumbling (prime without stepping); a charged dodge
+  fires on a direction, a cooling one holds still. New **DODGE recharge bar** (bottom-center of the
+  level UI) fills as cooldown drains, bright when usable. Dodge also gated on `not god_mode` (fixes a
+  latent editor-cursor dodge when holding A/place in free control).
+- **Input buffering (#2)**: discrete shape presses (collapse + all extends) made mid-tumble are
+  buffered (`_buf_action`/`_take_action`, 0.3s grace that does NOT expire mid-animation) and applied
+  on settle instead of being dropped. Editor single/object placement is gated to fire only when the
+  cube is settled (rect drag still begins settled then grows while tumbling). Movement TAPS are NOT
+  buffered (held movement already chains) — easy follow-up if step-chaining feels off.
+- **Controller menus (#3)**: in-game **pause menu** (Start/Esc: Resume / Restart / Quit) replaces the
+  old instant-quit; **editor command menu** (Start/Esc: Resume / Playtest / Save / Quit) makes
+  playtest+save reachable on the pad. Both controller-navigable. Caveat: editor Save overwrites
+  silently once named; naming a NEW level still needs the keyboard once (no controller text entry).
+- **Noise waves persisting (#4)**: cleared on spawn (`_reset_ground_overlays`, also zeros stale
+  footprints from the shared material) AND on every game-over state (tree pauses there, so a live
+  wave would freeze on the floor). New `clear_noise_waves()` on the player.
+- **Dodge escape (#5)**: the enemy now tracks the cube's VISUAL position during a dodge, not the
+  landing `grid_pos` (which snaps at dodge start). Dodge only shakes a pursuer when the geometry
+  actually breaks line of sight — geography-dependent, as the user wanted. Code comment in
+  enemy_sphere `_is_seeing_player` explains it; do NOT "fix" it back.
+- **Steps too loud (#6)**: noise radius now `STEP_RADIUS_NORMAL = 2.5` / `STEP_RADIUS_SPRINT = 5.0`
+  (+ extension), down from 4/8. Top-of-file constants, tune freely.
+- **Knock on safety edges (#7)**: knock only fires against a full-height wall (`_has_tall_wall`,
+  probes above the 0.4u edge top); safety edges and void no longer knock.
+- **Editor tool menu (#8)**: focus now WRAPS (down past the bottom loops to top). Tiled-grid menu
+  redesign still deferred (user said later).
 
-## What happened this session
-- **Pre-authoring fixes**: contiguous wall cells merge into one Wall* body (greedy rect cover;
-  the shader's MAX_WALLS=16 now counts regions, not cells); loader rejects version != 1; enemy
-  vision samples the cuboid's full height (tall cube is seen over a 1u wall; also closes the
-  old safety_edge see-over item). **Latent bug found**: runtime add_child auto-names children
-  ("@MeshInstance3D@25"), so player._push_walls_to_shader's name lookup found nothing: painted
-  levels had ZERO shader wall occlusion since the data-driven pivot. Fixed with an explicit
-  mesh.name in the loader.
-- **Notes batch 1**: STEP_GAIN 0.4 on the player's own step audio (noise radius untouched);
-  NOISE_WALL_MUFFLE 0.45 (a wall-blocked sound path cuts heard radius; a knock's origin is
-  inside the knocked wall and rays skip the shape they start in, so knock carries through its
-  own wall but further walls muffle it); camera defaults to 45 deg and the chosen angle
-  persists via a static across restarts and levels; editor grid plane trails the cube
-  (infinite canvas); READY/menus polish carried from last session held up.
-- **Controller revision (user call)**: RB = extend-up (extend cluster on the right), RT =
-  collapse, LB/LT = camera tilt up/down, B FREED in gameplay; editor erase = B (L3 unbound).
-- **Ink-trail fix** (user-reported alcove loop): trail memory. The enemy records the freshness
-  (alpha) of the newest print it has investigated; only strictly fresher prints can retarget
-  it. _trail_alpha decays at the print fade rate so a cleared trail stays cleared while
-  genuinely new prints still trigger. Kills the walk-the-trail-backwards INVESTIGATE/PATROL
-  ping-pong.
-- **Notes batch 2 (wall look)**: dedicated STATIC wall shader (shaders/wall.gdshader +
-  wall_material.tres): thin per-cell lines on top (no gradient halo), floor-slab side styling,
-  and NONE of the floor's dynamic overlays, so waves/cones no longer paint wall tops. Wall
-  boxes extend down to the floor tiles' bottom (risen-tile read, no void gap beneath).
-  GOTCHA learned: the floor's look lives in grid_ground_material.tres PARAMETER OVERRIDES, not
-  the shader defaults; copy instance values when cloning a look. Safety edges deliberately
-  have NO tile (user affirmed the pattern: boundary marker, not terrain). Editor: B/X/Backspace
-  erase now mirrors place (tap = footprint top layer, hold = rectangle with red preview).
+## NEXT (priority order)
+1. **Right-stick extend precision / drift** (user note 2026-06-13). The right stick is extend
+   width/depth only (camera is on LB/LT now), so a generous deadzone is safe. Drift + diagonal
+   axis cross-talk make isolating one axis hard. Candidate fixes, in order of effort: raise the
+   right-stick extend action deadzones in project.godot (currently 0.5; try ~0.6-0.7, needs the
+   user's feel); OR handle extend in code with dominant-axis filtering (only the larger axis
+   registers) instead of per-axis InputMap events; OR move extend to the d-pad/face buttons. Dial
+   the deadzone WITH the user, do not guess a value.
+2. Continue acting on playtest-notes batches.
+3. Post-gate queue when notes settle: paint-model revision (only if authoring keeps hurting);
+   tall-for-intel player side (see over 1u walls when extended up); UI button-prompt overlay;
+   progression/save phase (flagged must-have before level-set production).
 
-## Tuning dials the user may ask to turn
-- player.gd STEP_GAIN (0.4), KNOCK volume (still full).
-- enemy_sphere.gd NOISE_WALL_MUFFLE (0.45), DETECT_* table (untouched, tuning pass pending).
-- camera_controller.gd ELEV_DEFAULT (0.7854 = 45 deg).
-- wall_material.tres line params (top core 0.008 vs floor's 0.005; sides match floor exactly).
+## Tuning dials
+- player.gd STEP_RADIUS_NORMAL (2.5) / STEP_RADIUS_SPRINT (5.0); INPUT_BUFFER_TIME (0.3); KNOCK full.
+- enemy_sphere.gd NOISE_WALL_MUFFLE (0.45), DETECT_* table (still untuned).
+- camera_controller.gd ELEV_DEFAULT (45 deg).
+- level.gd DODGE_BAR_W / colors.
+- project.godot right-stick extend deadzones (see NEXT 1).
 
 ## Controls (current)
-Game pad: left stick/dpad move, right stick extend w/d, RB extend-up, RT collapse, A dodge,
-X sprint, LB/LT camera tilt, Start pause; B unused in gameplay. Menus: A accept, B back,
-WASD/arrows/dpad navigate. Editor: A place (hold = rect), B/X/Backspace erase (hold = rect;
-path authoring: undo node), Y/Tab menu, Back/grave None, RT collapse brush, F5 finish,
-P playtest, Start/Esc exit (session auto-saved; main menu Editor > Continue restores).
-
-## NEXT
-1. User continues playtesting; act on the next notes batch.
-2. Post-gate queue when notes settle: paint-model revision ONLY if authoring keeps hurting;
-   tall-for-intel player side (see over 1u walls when extended up); UI button-prompt overlay.
-3. Start sketching the progression/save phase (task-list Deferred flags it as must-have before
-   level-set production).
+Pad: left stick/dpad move, right stick extend w/d, RB extend-up, RT collapse, A dodge (hold = prime,
+locks movement), X sprint, LB/LT camera tilt, Start pause menu; B = unused in gameplay / editor erase.
+Menus: A accept, B back, WASD/arrows/dpad navigate. Editor: A place (hold = rect), B/X/Backspace erase
+(hold = rect; path tools: undo node), Y/Tab tool menu (loops), Back/grave None, Start/Esc command menu
+(resume/playtest/save/quit), F5 finish, P playtest.
 
 ## Open / loose (carried)
-- DEBUG_DETECTION still true in enemy_sphere.gd (remove when the detection tuning pass starts).
-- Pause in a normal level still insta-quits the run (editor side is safe); pause menu deferred.
+- HIDAPI "Error opening gamepad at index N" on launch = engine-level phantom-device warning (Steam
+  build of Godot virtualizes pads); harmless, the real controller works. Not our code.
+- DEBUG_DETECTION still true in enemy_sphere.gd (remove when detection tuning starts).
+- Dodge bar + pause menu only in level_template (painted levels). Old tutorial/sandbox scenes lack
+  them; level.gd resolves those nodes null-safely and falls back to exit-on-pause, so no crash.
 - One global extend-lock per level (link layer pending); editor warns, loader syncs stale unlocks.
 - Editor preview vs loader drift (shared LevelBuilder) grows with each object type.
 - Gate fence corners: translucent post/panel overlap seams (cosmetic).
-- Tab can be eaten by GUI focus; Y is the robust menu open.
 
 ## Verify recipe (`~/.local/bin/godot` v4.6; exit code 0 even on errors, so grep)
 - Parse: `godot --headless --editor --quit 2>&1 | grep -E "SCRIPT ERROR|Parse Error|SHADER ERROR|Busy"`
-- Smoke: `godot --headless --quit-after 120 res://<scene>.tscn 2>&1 | grep -iE "ERROR|nil|invalid|cannot|failed"` (filter vulkan/audio/display/leaked)
-- Headless can't press keys: drive editor/enemy methods from a throwaway `extends SceneTree`
-  script run with `-s`. `await process_frame` after add_child or @onready refs are Nil.
-  Compare PackedFloat32Array values with a tolerance (float32 truncation). Delete the script
-  and its `.uid` after.
+- Smoke: `godot --headless --quit-after 90 res://<scene>.tscn 2>&1 | grep -iE "ERROR|nil|invalid|cannot|failed"` (filter vulkan/audio/display/leaked)
+- Logic: throwaway `extends SceneTree` run with `-s`; `await process_frame` after add_child (or
+  @onready/refs are Nil); compare PackedFloat32Array with a tolerance (float32 truncation). For
+  physics point/ray queries (e.g. `_has_tall_wall`) await ~6-8 frames so static bodies register.
+  Delete the script + its `.uid` after.
 
 ## Memory
-- Updated `project_control_remap_plan` (revised pad layout). New `feedback_godot_runtime_gotchas`
-  (runtime auto-naming breaks name lookups; .tres overrides shadow shader defaults). Editor
-  model memory still current except erase = B. Plus the standing cube memories.
+- No new memory this session; the durable design intent (dodge escape = geography, not a timer) lives
+  as a code comment in enemy_sphere `_is_seeing_player`. Standing cube memories unchanged.
