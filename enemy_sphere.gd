@@ -553,8 +553,20 @@ func _is_seeing_player() -> bool:
 			return false
 		forward /= fl
 	var space := get_world_3d().direct_space_state
-	var fmin: Vector2i = _player.get_footprint_min()
-	var dims: Vector3i = _player.get_dimensions()
+	# During a dodge the cube is a 1x1 sliding between cells; track its VISUAL
+	# position, not grid_pos (which snapped to the landing cell when the dodge
+	# began). Without this the enemy "sees" the destination from frame one, so a
+	# dodge toward cover dropped detection like a smoke bomb while the cube was
+	# still out in the open. Now a dodge only escapes when the geometry actually
+	# breaks line of sight.
+	var fmin: Vector2i
+	var dims: Vector3i
+	if _player.is_dodging():
+		fmin = Vector2i(roundi(_player.global_position.x), roundi(_player.global_position.z))
+		dims = Vector3i.ONE
+	else:
+		fmin = _player.get_footprint_min()
+		dims = _player.get_dimensions()
 	for dx in range(dims.x):
 		for dz in range(dims.z):
 			var to_sample := Vector3(fmin.x + dx, 0.0, fmin.y + dz) - global_position

@@ -9,6 +9,11 @@ signal fell
 
 const TUMBLE_DURATION := 0.3
 const STEP_GAIN := 0.4  # master loudness of the player's own step audio (~ -8 dB); the gameplay noise radius is unaffected
+const STEP_RADIUS_NORMAL := 2.5  # walk-step noise wave radius in cells (tactical, not whole-level)
+const STEP_RADIUS_SPRINT := 5.0  # sprint-step noise radius: the loud, risky option
+const INPUT_BUFFER_TIME := 0.3   # grace window to apply a shape/collapse press made mid-move
+const SAFETY_EDGE_PROBE_Y := 0.7 # above the 0.4u safety-edge top: a wall here is full-height (knockable)
+const BUFFERABLE: Array[String] = ["collapse", "extend_left", "extend_right", "extend_fwd", "extend_back", "extend_up"]
 const SPRINT_DURATION := 0.15
 const DODGE_DISTANCE := 5
 const DODGE_DURATION := 0.4
@@ -72,6 +77,8 @@ var _dodge_start_pos := Vector3.ZERO
 var _dodge_end_pos := Vector3.ZERO
 var _dodge_cooldown_t := 0.0
 var _knock_cooldown_t := 0.0
+var _buf_action := ""   # latest buffered discrete shape press (see _capture_buffer)
+var _buf_t := 0.0       # remaining grace on the buffered action
 var _dodge_duration := DODGE_DURATION
 var _slide_last_cell: Vector2i = Vector2i.ZERO
 var _ext := [0, 0, 0, 0, 0]
@@ -133,6 +140,7 @@ func _ready() -> void:
 	# here push to every tile's top surface in one go.
 	_ground_material = GROUND_MATERIAL
 	_push_walls_to_shader()
+	_reset_ground_overlays()
 	_box_mesh = _mesh_instance.mesh.duplicate() as BoxMesh
 	_mesh_instance.mesh = _box_mesh
 	_player_material = (_mesh_instance.get_surface_override_material(0) as StandardMaterial3D).duplicate()
@@ -467,6 +475,44 @@ func footprint_covers(cell: Vector2i) -> bool:
 
 func is_dodging() -> bool:
 	return _dodging
+
+
+func get_dodge_cooldown_ratio() -> float:
+	# 1.0 right after a dodge, ramps to 0.0 when ready again. The HUD bar reads this.
+	return clampf(_dodge_cooldown_t / DODGE_COOLDOWN, 0.0, 1.0)
+
+
+func is_dodge_available() -> bool:
+	return _dodge_cooldown_t <= 0.0 and not _is_extended() and not suppress_dodge and not god_mode
+
+
+func _reset_ground_overlays() -> void:
+	# A reloaded scene shares the ground material resource, which still holds the
+	# previous run's wave/footprint arrays. The per-frame pushes only cover live
+	# entries, so empty lists would leave stale ripples and prints on the floor.
+	# Zero them once on spawn for a clean start.
+	clear_noise_waves()
+	var zp := PackedVector2Array()
+	zp.resize(MAX_FOOTPRINTS)
+	var za := PackedFloat32Array()
+	za.resize(MAX_FOOTPRINTS)
+	_ground_material.set_shader_parameter("footprint_positions", zp)
+	_ground_material.set_shader_parameter("footprint_alphas", za)
+
+
+func clear_noise_waves() -> void:
+	# Drop all in-flight noise waves and zero the shader arrays. Called on spawn
+	# and by the level on a game-over state (the tree pauses there, so the player
+	# stops processing and a live wave would otherwise freeze on the floor).
+	_waves.clear()
+	var zo := PackedVector2Array()
+	zo.resize(MAX_WAVES)
+	var zf := PackedFloat32Array()
+	zf.resize(MAX_WAVES)
+	_ground_material.set_shader_parameter("wave_origins", zo)
+	_ground_material.set_shader_parameter("wave_half_extents", zo)
+	_ground_material.set_shader_parameter("wave_radii", zf)
+	_ground_material.set_shader_parameter("wave_alphas", zf)
 
 
 func truncate_dodge_to(cell: Vector2i) -> void:
@@ -854,7 +900,7 @@ func _play_step(noise_level: float) -> void:
 	_step_player.volume_db = linear_to_db(STEP_GAIN * noise_level * size_factor)
 	_step_player.pitch_scale = 1.0 - ext_sum * 0.08
 	_step_player.play()
-	var max_radius: float = (8.0 if noise_level > 1.0 else 4.0) + ext_sum
+	var max_radius: float = (STEP_RADIUS_SPRINT if noise_level > 1.0 else STEP_RADIUS_NORMAL) + float(ext_sum)
 	if _waves.size() >= MAX_WAVES:
 		_waves.pop_front()
 	# Wave originates from the footprint of the landed face
@@ -949,8 +995,47 @@ func _move_just_pressed() -> bool:
 		or Input.is_action_just_pressed("move_back"))
 
 
+func _capture_buffer() -> void:
+	# Record the latest discrete shape press so it can fire when the current move
+	# settles (consumed by _take_action). Movement and dodge are held inputs and
+	# are read live, never buffered.
+	for action in BUFFERABLE:
+		if Input.is_action_just_pressed(action):
+			_buf_action = action
+			_buf_t = INPUT_BUFFER_TIME
+			return
+
+
+func _take_action(action: String) -> bool:
+	# True (and consumes) if `action` is the buffered press. Fresh presses route
+	# through the buffer too (captured the same frame), so this is the only read
+	# site for these actions.
+	if _buf_action == action and _buf_t > 0.0:
+		_buf_action = ""
+		return true
+	return false
+
+
+func _has_tall_wall(cell: Vector2i) -> bool:
+	# A full-height wall occupies this cell (probed above the safety-edge top), as
+	# opposed to a short safety edge or open void. Gates the knock so only real
+	# walls can be rapped.
+	return not _extend_cell_clear(cell, SAFETY_EDGE_PROBE_Y)
+
+
 func _process(delta: float) -> void:
 	_decay_footprints(delta)
+	# Input buffer: a discrete shape press (collapse/extend) made mid-animation is
+	# held so it fires when the move settles instead of being eaten by the early
+	# returns below. The grace timer only counts down while NOT animating (an idle
+	# frame consumes it immediately), so it survives a long tumble but still
+	# expires if nothing acts on it.
+	var mid_anim := _tumbling or _dodging or _bumping or _falling
+	if not mid_anim and _buf_t > 0.0:
+		_buf_t = maxf(_buf_t - delta, 0.0)
+		if _buf_t <= 0.0:
+			_buf_action = ""
+	_capture_buffer()
 	for i in range(_waves.size() - 1, -1, -1):
 		_waves[i].t = minf(_waves[i].t + delta / WAVE_DURATION, 1.0)
 		if _waves[i].t >= 1.0:
@@ -1113,28 +1198,27 @@ func _process(delta: float) -> void:
 		_update_mesh()
 		return
 
-	# Extend on dedicated keys, no held modifier: arrows grow width/depth, E grows up.
-	# Movement (WASD) is on separate keys, so an extend can't be misread as a move.
+	# Extend / collapse are discrete shape changes, read through the input buffer
+	# (_take_action) so a press made mid-tumble applies on settle instead of being
+	# dropped. Arrows grow width/depth, E grows up; collapse resets to a cube.
 	if not _extend_locked:
 		var ext := -1
-		if Input.is_action_just_pressed("extend_left"):
+		if _take_action("extend_left"):
 			ext = EXT_LEFT
-		elif Input.is_action_just_pressed("extend_right"):
+		elif _take_action("extend_right"):
 			ext = EXT_RIGHT
-		elif Input.is_action_just_pressed("extend_fwd"):
+		elif _take_action("extend_fwd"):
 			ext = EXT_FWD
-		elif Input.is_action_just_pressed("extend_back"):
+		elif _take_action("extend_back"):
 			ext = EXT_BACK
-		elif Input.is_action_just_pressed("extend_up"):
+		elif _take_action("extend_up"):
 			ext = EXT_UP
 		if ext != -1:
 			_try_extend(ext)
 			_update_mesh()
 			return
 
-	# Collapse to a cube on its own button (Q / collapse), separate from movement
-	# and dodge, so it can never be confused with either.
-	if _is_extended() and not _extend_locked and Input.is_action_just_pressed("collapse"):
+	if _is_extended() and not _extend_locked and _take_action("collapse"):
 		_reset_extensions()
 		_update_mesh()
 		# Collapse shifts grid_pos to the cuboid centre; if that lands on void
@@ -1142,24 +1226,30 @@ func _process(delta: float) -> void:
 		_check_fall_at_settle()
 		return
 
-	var dodge_primed := Input.is_action_pressed("dodge") and _dodge_cooldown_t <= 0.0 and not _is_extended() and not suppress_dodge
+	# Holding dodge primes it AND locks out tumbling, so you can line up a dodge
+	# without stepping. A ready dodge fires on a direction; a cooling one just
+	# holds still (the HUD bar shows why). Extension and god_mode (editor cursor)
+	# disable dodge entirely.
+	var dodge_held := (Input.is_action_pressed("dodge")
+		and not _is_extended() and not suppress_dodge and not god_mode)
+	var dodge_ready := dodge_held and _dodge_cooldown_t <= 0.0
 
-	if dodge_primed and move.length() > 0.5:
+	if dodge_ready and move.length() > 0.5:
 		_begin_dodge(_pick_dir(move))
-	elif not dodge_primed and move.length() > 0.5:
+	elif not dodge_held and move.length() > 0.5:
 		_begin_tumble(_pick_dir(move))
 
-	# A directional tap that couldn't tumble (no move started). A cube raps the
-	# adjacent wall: a loud knock enemies investigate. An extended shape can't fit
-	# and bounces back with a soft thud (won't-fit feedback), never knocking — knock
-	# is cube-only, like sprint and dodge. The just-pressed edge stops a held
-	# direction into a wall from spamming either; you re-press.
-	if (not _tumbling and not _dodging and not dodge_primed
+	# A directional tap that couldn't tumble. A compact cube raps an adjacent
+	# FULL-HEIGHT wall (a loud knock to investigate); it does NOT knock on a short
+	# safety edge or empty void. An extended shape bumps back with a soft thud.
+	# The just-pressed edge stops a held direction from spamming either.
+	if (not _tumbling and not _dodging and not dodge_held
 			and move.length() > 0.5 and _move_just_pressed()):
+		var kdir := _pick_dir(move)
 		if _is_extended():
-			_begin_blocked_bump(_pick_dir(move))
-		elif _knock_cooldown_t <= 0.0:
-			_emit_knock(_pick_dir(move))
+			_begin_blocked_bump(kdir)
+		elif _knock_cooldown_t <= 0.0 and _has_tall_wall(grid_pos + kdir):
+			_emit_knock(kdir)
 			_knock_cooldown_t = KNOCK_COOLDOWN
 
 	_update_mesh()
