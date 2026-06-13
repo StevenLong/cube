@@ -10,6 +10,10 @@ const RESTART_DELAY := 0.5
 
 const FLOOR_TILE_SCENE := preload("res://FloorTile.tscn")
 
+const DODGE_BAR_W := 140.0
+const DODGE_READY_COLOR := Color(0.3, 0.85, 1.0, 0.9)
+const DODGE_COOL_COLOR := Color(0.5, 0.5, 0.55, 0.7)
+
 # Any first gameplay input releases READY, not just movement: extending into a
 # shape or priming a dodge are as valid an opening move as a tumble. Event-driven
 # (see _input) so the starting press itself still applies the same frame.
@@ -26,6 +30,7 @@ var spotted: bool = false
 
 var _pulse_t: float = 0.0
 var _complete_t: float = 0.0
+var _pause_open: bool = false
 var _pending_complete: bool = false
 var _end_cell: Vector2i = Vector2i.ZERO
 var _start_material: StandardMaterial3D
@@ -43,6 +48,13 @@ var _enemies: Array[Node] = []
 @onready var _result_moves: Label = get_node("../UI/ResultsPanel/VBox/Moves")
 @onready var _result_time: Label = get_node("../UI/ResultsPanel/VBox/Time")
 @onready var _result_spotted: Label = get_node("../UI/ResultsPanel/VBox/Spotted")
+# Optional HUD nodes: present in level_template, absent in older hand-authored
+# scenes (sandbox/tutorials), so resolve them null-safely and guard every use.
+@onready var _dodge_fill: ColorRect = get_node_or_null("../UI/DodgeBar/Fill")
+@onready var _pause_panel: Control = get_node_or_null("../UI/PausePanel")
+@onready var _resume_button: Button = get_node_or_null("../UI/PausePanel/VBox/ResumeButton")
+@onready var _restart_button: Button = get_node_or_null("../UI/PausePanel/VBox/RestartButton")
+@onready var _quit_button: Button = get_node_or_null("../UI/PausePanel/VBox/QuitButton")
 
 
 func _ready() -> void:
@@ -71,26 +83,53 @@ func _ready() -> void:
 		_result_spotted.hide()
 	_end_area.area_entered.connect(_on_end_entered)
 	_end_area.area_exited.connect(_on_end_exited)
+	if _pause_panel != null:
+		_resume_button.pressed.connect(_toggle_pause)
+		_restart_button.pressed.connect(_restart)
+		_quit_button.pressed.connect(_exit_to_menu)
+		_pause_panel.hide()
 	_enter_ready()
 
 
 func _input(event: InputEvent) -> void:
-	if state == State.READY:
+	if state == State.READY and not _pause_open:
 		for action in START_ACTIONS:
 			if event.is_action_pressed(action):
 				_enter_playing()
 				break
 	if event.is_action_pressed("pause"):
-		get_tree().paused = false
-		if LevelLoader.return_to_editor:
-			# Came from the editor's playtest: restore the editor session (the
-			# editor snapshotted it on launch), not the scratch file, so the
-			# editor comes back as the level it was editing.
-			LevelLoader.return_to_editor = false
-			LevelEditor.open_session = true
-			get_tree().change_scene_to_file("res://editor.tscn")
+		# Mid-run: open the pause menu. Otherwise (ready screen, results screen, or
+		# any scene without a pause panel) fall straight back to the menu.
+		if _pause_panel != null and (state == State.PLAYING or _pause_open):
+			_toggle_pause()
 		else:
-			get_tree().change_scene_to_file("res://main_menu.tscn")
+			_exit_to_menu()
+
+
+func _toggle_pause() -> void:
+	_pause_open = not _pause_open
+	get_tree().paused = _pause_open
+	_pause_panel.visible = _pause_open
+	if _pause_open:
+		_resume_button.grab_focus()
+
+
+func _restart() -> void:
+	get_tree().paused = false
+	get_tree().reload_current_scene()
+
+
+func _exit_to_menu() -> void:
+	get_tree().paused = false
+	if LevelLoader.return_to_editor:
+		# Came from the editor's playtest: restore the editor session (the editor
+		# snapshotted it on launch), not the scratch file, so the editor comes
+		# back as the level it was editing.
+		LevelLoader.return_to_editor = false
+		LevelEditor.open_session = true
+		get_tree().change_scene_to_file("res://editor.tscn")
+	else:
+		get_tree().change_scene_to_file("res://main_menu.tscn")
 
 
 func _process(delta: float) -> void:
@@ -98,6 +137,7 @@ func _process(delta: float) -> void:
 	var pulse: float = PULSE_BASE + sin(_pulse_t * PULSE_RATE) * PULSE_AMPLITUDE
 	_start_material.emission_energy_multiplier = pulse
 	_end_material.emission_energy_multiplier = pulse
+	_update_dodge_bar()
 
 	match state:
 		State.READY:
@@ -108,6 +148,16 @@ func _process(delta: float) -> void:
 			_complete_t += delta
 			if _complete_t >= RESTART_DELAY and _restart_pressed():
 				get_tree().reload_current_scene()
+
+
+func _update_dodge_bar() -> void:
+	# Fill grows back as the cooldown drains; bright when dodge is actually
+	# available (ready, compact, not in the editor), dim while recharging.
+	if _dodge_fill == null:
+		return
+	var ratio: float = _player.get_dodge_cooldown_ratio()
+	_dodge_fill.size.x = DODGE_BAR_W * (1.0 - ratio)
+	_dodge_fill.color = DODGE_READY_COLOR if _player.is_dodge_available() else DODGE_COOL_COLOR
 
 
 func _restart_pressed() -> bool:
@@ -135,6 +185,7 @@ func _enter_playing() -> void:
 func _enter_complete() -> void:
 	state = State.COMPLETE
 	_complete_t = 0.0
+	_player.clear_noise_waves()  # the tree pauses here; clear so no wave freezes on the floor
 	get_tree().paused = true
 	_result_title.text = "Level Complete"
 	_result_moves.text = "Moves: %d" % moves
@@ -148,6 +199,7 @@ func _enter_complete() -> void:
 func _enter_caught() -> void:
 	state = State.CAUGHT
 	_complete_t = 0.0
+	_player.clear_noise_waves()
 	get_tree().paused = true
 	_result_title.text = "Caught"
 	_result_moves.text = "Moves: %d" % moves
@@ -159,6 +211,7 @@ func _enter_caught() -> void:
 func _enter_fell() -> void:
 	state = State.FELL
 	_complete_t = 0.0
+	_player.clear_noise_waves()
 	get_tree().paused = true
 	_result_title.text = "Fell"
 	_result_moves.text = "Moves: %d" % moves
