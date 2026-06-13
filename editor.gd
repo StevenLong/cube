@@ -36,8 +36,14 @@ static func has_session() -> bool:
 @onready var _tool_menu: Control = $UI/ToolMenu
 @onready var _tool_list: VBoxContainer = $UI/ToolMenu/VBox/Scroll/ToolList
 @onready var _grid_ref: MeshInstance3D = $GridRef
+@onready var _command_menu: Control = $UI/CommandMenu
+@onready var _cmd_resume: Button = $UI/CommandMenu/VBox/ResumeButton
+@onready var _cmd_playtest: Button = $UI/CommandMenu/VBox/PlaytestButton
+@onready var _cmd_save: Button = $UI/CommandMenu/VBox/SaveButton
+@onready var _cmd_quit: Button = $UI/CommandMenu/VBox/QuitButton
 
 var _tool := "none"              # active tool: "none" (free control) or an ObjectRegistry type id
+var _command_open := false       # the Start/Esc command menu (resume/playtest/save/quit) is up
 var _tool_mode := "lock"         # extend_lock_zone variant chosen in the menu (lock | unlock)
 var _path_active := false        # a patrol path is being authored (A extends it)
 var _path_cell := Vector2i.ZERO  # spawn cell of the path being authored (its _objects key)
@@ -68,7 +74,12 @@ func _ready() -> void:
 	_cancel_button.pressed.connect(_close_finish)
 	_name_edit.text_submitted.connect(_on_name_submitted)
 	_overwrite_confirm.confirmed.connect(_confirm_overwrite)
+	_cmd_resume.pressed.connect(_close_command)
+	_cmd_playtest.pressed.connect(func() -> void: _close_command(); _enter_play())
+	_cmd_save.pressed.connect(func() -> void: _close_command(); _quick_save())
+	_cmd_quit.pressed.connect(_quit_to_menu)
 	_finish_panel.hide()
+	_command_menu.hide()
 	_tool_menu.hide()
 	if open_session:
 		open_session = false
@@ -96,6 +107,12 @@ func _process(delta: float) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if _overwrite_confirm.visible:
 		return   # the overwrite dialog owns input
+	if _command_open:
+		# the command menu owns input while open; Esc/Start closes it
+		if event.is_action_pressed("ui_cancel") or event.is_action_pressed("pause"):
+			_close_command()
+			get_viewport().set_input_as_handled()
+		return
 	if _menu_open:
 		# the tool menu owns input while open; Esc/B closes it
 		if event.is_action_pressed("ui_cancel"):
@@ -109,8 +126,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("pause"):
-		_save_session()   # leaving never loses work; Continue restores this
-		get_tree().change_scene_to_file("res://main_menu.tscn")
+		# Start/Esc opens the command menu (resume / playtest / save / quit) so all
+		# of those work on a controller, not just keyboard F5/P.
+		_open_command()
 		return
 	if event.is_action_pressed("editor_menu"):
 		_open_menu()
@@ -146,11 +164,14 @@ func _place() -> void:
 # --- Place drag: tap = one stamp, hold + tumble = fill the rectangle (paint tiles) ---
 
 func _handle_place_drag() -> void:
-	if _menu_open or _finishing or _overwrite_confirm.visible or _tool == "none":
+	if _menu_open or _finishing or _command_open or _overwrite_confirm.visible or _tool == "none":
 		if _dragging:
 			_cancel_drag()
 		return
-	if Input.is_action_just_pressed("place") and not _erase_dragging:
+	# Begin only while the cube is settled, so a single tap can't place at the
+	# tumble's destination cell before the cube visually lands there. A rect drag
+	# begins settled then grows as you tumble (release commits), so this is fine.
+	if Input.is_action_just_pressed("place") and not _erase_dragging and not _player.is_moving():
 		_begin_place()
 	if Input.is_action_just_released("place"):
 		_end_place()
@@ -163,12 +184,12 @@ func _handle_place_drag() -> void:
 # path it instead undoes the newest node. ---
 
 func _handle_erase_drag() -> void:
-	if _menu_open or _finishing or _overwrite_confirm.visible:
+	if _menu_open or _finishing or _command_open or _overwrite_confirm.visible:
 		if _erase_dragging:
 			_erase_dragging = false
 			_free_preview()
 		return
-	if Input.is_action_just_pressed("erase") and not _dragging and not _erase_dragging:
+	if Input.is_action_just_pressed("erase") and not _dragging and not _erase_dragging and (_path_active or not _player.is_moving()):
 		if _path_active:
 			_pop_path_node()
 			_refresh()
@@ -641,6 +662,16 @@ func _build_tool_menu() -> void:
 			_add_tool_button(id, "Unlock Zone", "unlock")
 		else:
 			_add_tool_button(id, String(ObjectRegistry.TYPES[id]["name"]))
+	# Wrap focus: Down past the last entry loops to the first and vice versa, so
+	# controller navigation never dead-ends at the bottom of the list.
+	var n := _tool_list.get_child_count()
+	if n > 1:
+		var first := _tool_list.get_child(0) as Control
+		var last := _tool_list.get_child(n - 1) as Control
+		first.focus_neighbor_top = first.get_path_to(last)
+		first.focus_previous = first.get_path_to(last)
+		last.focus_neighbor_bottom = last.get_path_to(first)
+		last.focus_next = last.get_path_to(first)
 
 
 func _add_tool_button(id: String, label: String, variant: String = "lock") -> void:
@@ -664,6 +695,39 @@ func _close_menu() -> void:
 	_menu_open = false
 	_player.process_mode = Node.PROCESS_MODE_INHERIT
 	_tool_menu.hide()
+
+
+# --- Command menu (Start/Esc): resume / playtest / save / quit, all reachable on
+# a controller. Freezes the cube while open, like the tool menu (the tree is not
+# paused; the editor cursor is the player). ---
+
+func _open_command() -> void:
+	_command_open = true
+	_player.process_mode = Node.PROCESS_MODE_DISABLED
+	_command_menu.show()
+	_cmd_resume.grab_focus()
+
+
+func _close_command() -> void:
+	_command_open = false
+	_player.process_mode = Node.PROCESS_MODE_INHERIT
+	_command_menu.hide()
+
+
+func _quick_save() -> void:
+	# Controller-friendly save: overwrite the current file silently once it has a
+	# name. A brand-new level still needs the name panel (keyboard) the first time.
+	if _current_path == "":
+		_open_finish()
+		return
+	_write_level(_current_path, _level_name)
+	_current_readonly = false
+	_flash("Saved \"%s\"" % _level_name)
+
+
+func _quit_to_menu() -> void:
+	_save_session()   # leaving never loses work; Continue restores this
+	get_tree().change_scene_to_file("res://main_menu.tscn")
 
 
 func _select_tool(id: String, variant: String = "lock") -> void:
