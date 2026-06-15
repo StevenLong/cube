@@ -145,10 +145,11 @@ func _populate(world: Node3D, data: Dictionary) -> void:
 	(world.get_node("StartTile") as Node3D).position = Vector3(start.x, 0.01, start.y)
 	(world.get_node("EndTile") as Node3D).position = Vector3(end.x, 0.01, end.y)
 
-	# A gate's cells must be walkable floor: when the gate lowers, the player walks
-	# across them. Merge every gate cell into the floor set so each gets a floor
-	# tile (and is reachable by nav / the guide-path BFS), not just the first node.
-	_add_gate_floor(data)
+	# Gate cells and lock/unlock footprints must be walkable floor: the player walks
+	# a lowered gate, and forms/re-seats the shape across a zone's whole footprint.
+	# Merge those cells into the floor set so each gets a tile (and is reachable by
+	# nav / the guide-path BFS), not just the authored base cells.
+	_add_object_floor(data)
 
 	var floor_scene: PackedScene = ObjectRegistry.scene_for("floor")
 	for cell in data["floor"]:
@@ -238,25 +239,33 @@ func _build_objects(world: Node3D, data: Dictionary) -> void:
 	_build_lock_links(world, lock_zones, unlock_zones, gates, _walkable_cells(data))
 
 
-func _add_gate_floor(data: Dictionary) -> void:
-	# Every cell a gate spans becomes floor, so lowering the gate leaves walkable
-	# ground rather than a gap. Uses the same node + between-cell span as the gate.
+func _add_object_floor(data: Dictionary) -> void:
+	# Gate spans and lock/unlock footprints become floor, so a lowered gate leaves
+	# walkable ground and a zone's whole required footprint has floor to form on.
 	var floor_cells: Dictionary = data["floor"]
 	for obj in data.get("objects", []):
-		if typeof(obj) != TYPE_DICTIONARY or String(obj.get("type", "")) != "extend_lock_gate":
+		if typeof(obj) != TYPE_DICTIONARY:
 			continue
-		var nds: Array = obj.get("nodes", [obj.get("cell", [0, 0])])
-		for i in nds.size():
-			var a := _cell(nds[i])
-			floor_cells[a] = true
-			if i < nds.size() - 1:
-				var b := _cell(nds[i + 1])
-				var av := Vector2(a.x, a.y)
-				var bv := Vector2(b.x, b.y)
-				var steps := maxi(1, ceili(av.distance_to(bv) * 2.0))
-				for s in range(steps + 1):
-					var p := av.lerp(bv, float(s) / float(steps))
-					floor_cells[Vector2i(roundi(p.x), roundi(p.y))] = true
+		match String(obj.get("type", "")):
+			"extend_lock_gate":
+				var nds: Array = obj.get("nodes", [obj.get("cell", [0, 0])])
+				for i in nds.size():
+					var a := _cell(nds[i])
+					floor_cells[a] = true
+					if i < nds.size() - 1:
+						var b := _cell(nds[i + 1])
+						var av := Vector2(a.x, a.y)
+						var bv := Vector2(b.x, b.y)
+						var steps := maxi(1, ceili(av.distance_to(bv) * 2.0))
+						for s in range(steps + 1):
+							var p := av.lerp(bv, float(s) / float(steps))
+							floor_cells[Vector2i(roundi(p.x), roundi(p.y))] = true
+			"extend_lock_zone":
+				var cell := _cell(obj.get("cell", [0, 0]))
+				var dims := _vec3i(obj.get("required_dims", ObjectRegistry.default_param("extend_lock_zone", "required_dims")))
+				for i in range(dims.x):       # width = x
+					for j in range(dims.z):   # depth = z
+						floor_cells[cell + Vector2i(i, j)] = true
 
 
 func _walkable_cells(data: Dictionary) -> Dictionary:
@@ -280,21 +289,43 @@ func _build_lock_links(world: Node3D, locks: Array, unlocks: Array, gates: Array
 	# first lock is the anchor (the link layer will make this per-instance later).
 	if locks.is_empty():
 		return
-	var lock_cell := _cell_of(locks[0])
+	var lock_cell := _zone_center_cell(locks[0])
 	for gate in gates:
 		# lock->gate: shown while the gate is shut, hidden once it opens.
 		var holder := _new_link_holder(false)
-		_draw_grid_path(holder, lock_cell, _cell_of(gate), walkable, Color(0.9, 0.55, 0.15), 0.07)
+		_draw_grid_path(holder, lock_cell, _gate_center_cell(gate), walkable, Color(0.9, 0.55, 0.15), 0.07)
 		world.add_child(holder)
 	for u in unlocks:
 		# lock->unlock: hidden until the gate opens (player locked), then shown.
 		var holder := _new_link_holder(true)
-		_draw_grid_path(holder, lock_cell, _cell_of(u), walkable, Color(0.25, 0.85, 0.4), 0.04)
+		_draw_grid_path(holder, lock_cell, _zone_center_cell(u), walkable, Color(0.25, 0.85, 0.4), 0.04)
 		world.add_child(holder)
 
 
-func _cell_of(node: Node3D) -> Vector2i:
-	return Vector2i(roundi(node.position.x), roundi(node.position.z))
+func _zone_center_cell(zone: Node3D) -> Vector2i:
+	# Centre of a lock/unlock footprint, so guide lines connect centrally rather
+	# than at the min corner (integer-floored, so it stays a valid grid cell).
+	var c := Vector2i(roundi(zone.position.x), roundi(zone.position.z))
+	var dims: Vector3i = zone.required_dims
+	@warning_ignore("integer_division")
+	return c + Vector2i((dims.x - 1) / 2, (dims.z - 1) / 2)
+
+
+func _gate_center_cell(gate: Node3D) -> Vector2i:
+	# Centre of a gate's node span (its bounding box), for central guide-line ends.
+	var nds: Array = gate.nodes
+	if nds.is_empty():
+		return Vector2i(roundi(gate.position.x), roundi(gate.position.z))
+	var minc: Vector2i = nds[0]
+	var maxc: Vector2i = nds[0]
+	for n in nds:
+		var v: Vector2i = n
+		minc.x = mini(minc.x, v.x)
+		minc.y = mini(minc.y, v.y)
+		maxc.x = maxi(maxc.x, v.x)
+		maxc.y = maxi(maxc.y, v.y)
+	@warning_ignore("integer_division")
+	return Vector2i((minc.x + maxc.x) / 2, (minc.y + maxc.y) / 2)
 
 
 func _new_link_holder(visible_when_locked: bool) -> Node3D:
