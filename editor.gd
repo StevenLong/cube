@@ -97,6 +97,10 @@ func _process(delta: float) -> void:
 			_status = ""
 	_handle_place_drag()
 	_handle_erase_drag()
+	# Self-heal a stuck highlight: if no drag is active, no preview should exist.
+	# Catches any path where a drag ended without freeing its preview box.
+	if not _dragging and not _erase_dragging and _preview != null:
+		_free_preview()
 	# Infinite canvas: the void grid plane trails the cube, snapped to whole
 	# cells so the world-space grid lines never visibly shift.
 	_grid_ref.position.x = float(roundi(_player.position.x))
@@ -265,6 +269,7 @@ func _commit_rect() -> void:
 
 
 func _create_preview(color: Color = Color(0.3, 0.8, 1.0, 0.25)) -> void:
+	_free_preview()   # never orphan an existing preview (would leave a stuck highlight)
 	_preview = MeshInstance3D.new()
 	_preview.mesh = BoxMesh.new()
 	var m := StandardMaterial3D.new()
