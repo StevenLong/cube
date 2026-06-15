@@ -145,6 +145,11 @@ func _populate(world: Node3D, data: Dictionary) -> void:
 	(world.get_node("StartTile") as Node3D).position = Vector3(start.x, 0.01, start.y)
 	(world.get_node("EndTile") as Node3D).position = Vector3(end.x, 0.01, end.y)
 
+	# A gate's cells must be walkable floor: when the gate lowers, the player walks
+	# across them. Merge every gate cell into the floor set so each gets a floor
+	# tile (and is reachable by nav / the guide-path BFS), not just the first node.
+	_add_gate_floor(data)
+
 	var floor_scene: PackedScene = ObjectRegistry.scene_for("floor")
 	for cell in data["floor"]:
 		var tile: Node3D = floor_scene.instantiate()
@@ -161,7 +166,7 @@ func _populate(world: Node3D, data: Dictionary) -> void:
 	for cell in data["edges"]:
 		_build_safety_edge(world, cell, data["floor"])
 
-	_build_objects(world, data["objects"])
+	_build_objects(world, data)
 	_build_overlay(world, data.get("overlay", {}))
 
 
@@ -190,13 +195,15 @@ func _make_edge_strip(cell: Vector2i, dir: Vector2i) -> MeshInstance3D:
 	return mi
 
 
-func _build_objects(world: Node3D, objects: Array) -> void:
+func _build_objects(world: Node3D, data: Dictionary) -> void:
 	# Dispatch each typed instance to its builder. New object types register here.
+	var objects: Array = data.get("objects", [])
 	var enemy_idx := 0
 	var zone_idx := 0
 	var gate_idx := 0
 	var lock_zones: Array = []
 	var unlock_zones: Array = []
+	var gates: Array = []
 	for obj in objects:
 		if typeof(obj) != TYPE_DICTIONARY:
 			continue
@@ -212,7 +219,9 @@ func _build_objects(world: Node3D, objects: Array) -> void:
 				(lock_zones if zone.mode == 0 else unlock_zones).append(zone)
 				zone_idx += 1
 			"extend_lock_gate":
-				world.add_child(_build_gate(spec, cell, gate_idx))
+				var gate: Node3D = _build_gate(spec, cell, gate_idx)
+				world.add_child(gate)
+				gates.append(gate)
 				gate_idx += 1
 			_:
 				push_warning("level_loader: unknown object type '%s', skipped" % spec.get("type", ""))
@@ -226,6 +235,135 @@ func _build_objects(world: Node3D, objects: Array) -> void:
 			if not _same_dims_set(u.required_dims, lock_zones[0].required_dims):
 				push_warning("level_loader: unlock dims %s unreachable from lock %s, synced" % [u.required_dims, lock_zones[0].required_dims])
 				u.required_dims = lock_zones[0].required_dims
+	_build_lock_links(world, lock_zones, unlock_zones, gates, _walkable_cells(data))
+
+
+func _add_gate_floor(data: Dictionary) -> void:
+	# Every cell a gate spans becomes floor, so lowering the gate leaves walkable
+	# ground rather than a gap. Uses the same node + between-cell span as the gate.
+	var floor_cells: Dictionary = data["floor"]
+	for obj in data.get("objects", []):
+		if typeof(obj) != TYPE_DICTIONARY or String(obj.get("type", "")) != "extend_lock_gate":
+			continue
+		var nds: Array = obj.get("nodes", [obj.get("cell", [0, 0])])
+		for i in nds.size():
+			var a := _cell(nds[i])
+			floor_cells[a] = true
+			if i < nds.size() - 1:
+				var b := _cell(nds[i + 1])
+				var av := Vector2(a.x, a.y)
+				var bv := Vector2(b.x, b.y)
+				var steps := maxi(1, ceili(av.distance_to(bv) * 2.0))
+				for s in range(steps + 1):
+					var p := av.lerp(bv, float(s) / float(steps))
+					floor_cells[Vector2i(roundi(p.x), roundi(p.y))] = true
+
+
+func _walkable_cells(data: Dictionary) -> Dictionary:
+	# Floor cells the guide path may run along: floor minus full-height walls minus
+	# safety edges. Gate cells stay walkable (the path runs through the doorway).
+	var out: Dictionary = {}
+	for cell in data.get("floor", {}):
+		out[cell] = true
+	for cell in data.get("tall", []):
+		out.erase(cell)
+	for cell in data.get("edges", []):
+		out.erase(cell)
+	return out
+
+
+func _build_lock_links(world: Node3D, locks: Array, unlocks: Array, gates: Array, walkable: Dictionary) -> void:
+	# Guide lines so the lock puzzle reads at a glance, routed ALONG THE GRID (not
+	# crow-flies): an orange path from the lock to the gate it opens (always shown),
+	# and a green path from the lock to its unlock zone (shown only once the gate is
+	# open, i.e. while extend-locked). One global lock per level for now, so the
+	# first lock is the anchor (the link layer will make this per-instance later).
+	if locks.is_empty():
+		return
+	var lock_cell := _cell_of(locks[0])
+	for gate in gates:
+		# lock->gate: shown while the gate is shut, hidden once it opens.
+		var holder := _new_link_holder(false)
+		_draw_grid_path(holder, lock_cell, _cell_of(gate), walkable, Color(0.9, 0.55, 0.15), 0.07)
+		world.add_child(holder)
+	for u in unlocks:
+		# lock->unlock: hidden until the gate opens (player locked), then shown.
+		var holder := _new_link_holder(true)
+		_draw_grid_path(holder, lock_cell, _cell_of(u), walkable, Color(0.25, 0.85, 0.4), 0.04)
+		world.add_child(holder)
+
+
+func _cell_of(node: Node3D) -> Vector2i:
+	return Vector2i(roundi(node.position.x), roundi(node.position.z))
+
+
+func _new_link_holder(visible_when_locked: bool) -> Node3D:
+	var h := Node3D.new()
+	h.set_script(load("res://guide_line.gd"))
+	h.set("visible_when_locked", visible_when_locked)
+	return h
+
+
+func _draw_grid_path(holder: Node3D, start: Vector2i, goal: Vector2i, walkable: Dictionary, color: Color, y: float) -> void:
+	var path := _grid_path(start, goal, walkable)
+	if path.size() < 2:
+		# No grid route (e.g. the target is off-floor): fall back to a straight line
+		# so the relationship is still shown.
+		holder.add_child(_make_link_segment(Vector2(start.x, start.y), Vector2(goal.x, goal.y), color, y))
+		return
+	for i in range(path.size() - 1):
+		holder.add_child(_make_link_segment(Vector2(path[i].x, path[i].y), Vector2(path[i + 1].x, path[i + 1].y), color, y))
+
+
+func _grid_path(start: Vector2i, goal: Vector2i, walkable: Dictionary) -> Array[Vector2i]:
+	# 4-connected BFS over walkable cells. Returns start..goal inclusive, or [] if
+	# either endpoint is off-floor or no orthogonal route exists.
+	if not walkable.has(start) or not walkable.has(goal):
+		return []
+	if start == goal:
+		return [start]
+	var came: Dictionary = {}
+	var visited: Dictionary = {start: true}
+	var frontier: Array[Vector2i] = [start]
+	var dirs: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+	while not frontier.is_empty():
+		var cur: Vector2i = frontier.pop_front()
+		if cur == goal:
+			break
+		for d in dirs:
+			var n: Vector2i = cur + d
+			if walkable.has(n) and not visited.has(n):
+				visited[n] = true
+				came[n] = cur
+				frontier.append(n)
+	if not came.has(goal):
+		return []
+	var path: Array[Vector2i] = [goal]
+	var c := goal
+	while c != start:
+		c = came[c]
+		path.push_front(c)
+	return path
+
+
+func _make_link_segment(a: Vector2, b: Vector2, color: Color, y: float) -> MeshInstance3D:
+	# A thin emissive strip on the floor from a -> b (cell centres), rotated so the
+	# box's long (z) axis runs along the segment. Visual guide only, no collision.
+	var mi := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(0.08, 0.02, maxf(a.distance_to(b), 0.01))
+	mi.mesh = box
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.emission_enabled = true
+	mat.emission = color
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var mid := (a + b) * 0.5
+	mi.position = Vector3(mid.x, y, mid.y)
+	mi.rotation.y = atan2(b.x - a.x, b.y - a.y)
+	return mi
 
 
 func _same_dims_set(a: Vector3i, b: Vector3i) -> bool:
