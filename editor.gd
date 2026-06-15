@@ -821,8 +821,9 @@ func _enter_play() -> void:
 		return
 	f.store_string(JSON.stringify(data, "  "))
 	f.close()
-	# Session too: the return path restores from it, so the editor comes back as
-	# the level it was editing (name, file, readonly), not as the scratch file.
+	# Autosave the session: "Back to Editor" (and Editor > Continue) restore it.
+	# return_to_editor flags the playtest context so the in-level menus show the
+	# Back to Editor button; "Quit to Menu" still goes to the main menu.
 	_save_session()
 	LevelLoader.requested_file = PLAYTEST_PATH
 	LevelLoader.return_to_editor = true

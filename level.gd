@@ -48,12 +48,16 @@ var _enemies: Array[Node] = []
 @onready var _result_moves: Label = get_node("../UI/ResultsPanel/VBox/Moves")
 @onready var _result_time: Label = get_node("../UI/ResultsPanel/VBox/Time")
 @onready var _result_spotted: Label = get_node("../UI/ResultsPanel/VBox/Spotted")
+@onready var _result_restart: Button = get_node_or_null("../UI/ResultsPanel/VBox/RestartButton")
+@onready var _result_back_button: Button = get_node_or_null("../UI/ResultsPanel/VBox/BackToEditorButton")
+@onready var _result_quit: Button = get_node_or_null("../UI/ResultsPanel/VBox/QuitButton")
 # Optional HUD nodes: present in level_template, absent in older hand-authored
 # scenes (sandbox/tutorials), so resolve them null-safely and guard every use.
 @onready var _dodge_fill: ColorRect = get_node_or_null("../UI/DodgeBar/Fill")
 @onready var _pause_panel: Control = get_node_or_null("../UI/PausePanel")
 @onready var _resume_button: Button = get_node_or_null("../UI/PausePanel/VBox/ResumeButton")
 @onready var _restart_button: Button = get_node_or_null("../UI/PausePanel/VBox/RestartButton")
+@onready var _pause_back_button: Button = get_node_or_null("../UI/PausePanel/VBox/BackToEditorButton")
 @onready var _quit_button: Button = get_node_or_null("../UI/PausePanel/VBox/QuitButton")
 
 
@@ -68,6 +72,10 @@ func _ready() -> void:
 	_end_material = (_end_tile.get_surface_override_material(0) as StandardMaterial3D).duplicate()
 	_end_tile.set_surface_override_material(0, _end_material)
 	_end_cell = Vector2i(roundi(_end_tile.position.x), roundi(_end_tile.position.z))
+	# The start tile is just visual noise once you've spawned; hide it. The goal
+	# instead gets a tall light beacon so it reads from across a large level.
+	_start_tile.visible = false
+	_build_end_beacon()
 	_player.tumbled.connect(_on_player_tumbled)
 	_player.move_settled.connect(_on_player_move_settled)
 	_player.caught.connect(_on_player_caught)
@@ -83,11 +91,21 @@ func _ready() -> void:
 		_result_spotted.hide()
 	_end_area.area_entered.connect(_on_end_entered)
 	_end_area.area_exited.connect(_on_end_exited)
+	# Back to Editor appears only during an editor playtest; in a normal level it
+	# stays hidden (and the focus chain skips it).
+	var in_playtest := LevelLoader.return_to_editor
 	if _pause_panel != null:
 		_resume_button.pressed.connect(_toggle_pause)
 		_restart_button.pressed.connect(_restart)
 		_quit_button.pressed.connect(_exit_to_menu)
+		_pause_back_button.pressed.connect(_back_to_editor)
+		_pause_back_button.visible = in_playtest
 		_pause_panel.hide()
+	if _result_restart != null:
+		_result_restart.pressed.connect(_restart)
+		_result_quit.pressed.connect(_exit_to_menu)
+		_result_back_button.pressed.connect(_back_to_editor)
+		_result_back_button.visible = in_playtest
 	_enter_ready()
 
 
@@ -120,16 +138,21 @@ func _restart() -> void:
 
 
 func _exit_to_menu() -> void:
+	# Always to the main menu, including from an editor playtest. The editor
+	# auto-saved its session on launch, so Editor > Continue resumes editing; this
+	# keeps "Quit to Menu" meaning the same thing everywhere.
 	get_tree().paused = false
-	if LevelLoader.return_to_editor:
-		# Came from the editor's playtest: restore the editor session (the editor
-		# snapshotted it on launch), not the scratch file, so the editor comes
-		# back as the level it was editing.
-		LevelLoader.return_to_editor = false
-		LevelEditor.open_session = true
-		get_tree().change_scene_to_file("res://editor.tscn")
-	else:
-		get_tree().change_scene_to_file("res://main_menu.tscn")
+	LevelLoader.return_to_editor = false
+	get_tree().change_scene_to_file("res://main_menu.tscn")
+
+
+func _back_to_editor() -> void:
+	# Playtest-only: jump straight back to the editor with the session restored
+	# (saved when the playtest launched).
+	get_tree().paused = false
+	LevelLoader.return_to_editor = false
+	LevelEditor.open_session = true
+	get_tree().change_scene_to_file("res://editor.tscn")
 
 
 func _process(delta: float) -> void:
@@ -145,9 +168,28 @@ func _process(delta: float) -> void:
 		State.PLAYING:
 			time_elapsed += delta
 		State.COMPLETE, State.CAUGHT, State.FELL:
-			_complete_t += delta
-			if _complete_t >= RESTART_DELAY and _restart_pressed():
-				get_tree().reload_current_scene()
+			pass   # results panel buttons (Restart / Quit) drive what happens next
+
+
+func _build_end_beacon() -> void:
+	# Vertical light pillar over the goal so it stands out from afar and from the
+	# (now hidden) start. Translucent, unshaded, no collision; childed to the end
+	# tile so it tracks the goal cell.
+	var beam := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(0.22, 5.0, 0.22)
+	beam.mesh = box
+	var mat := StandardMaterial3D.new()
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(1.0, 0.75, 0.2, 0.35)
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.75, 0.2)
+	mat.emission_energy_multiplier = 2.0
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	beam.material_override = mat
+	beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	beam.position = Vector3(0.0, 2.5, 0.0)
+	_end_tile.add_child(beam)
 
 
 func _update_dodge_bar() -> void:
@@ -160,13 +202,10 @@ func _update_dodge_bar() -> void:
 	_dodge_fill.color = DODGE_READY_COLOR if _player.is_dodge_available() else DODGE_COOL_COLOR
 
 
-func _restart_pressed() -> bool:
-	return (Input.is_action_just_pressed("dodge")
-		or Input.is_action_just_pressed("extend_up")
-		or Input.is_action_just_pressed("move_left")
-		or Input.is_action_just_pressed("move_right")
-		or Input.is_action_just_pressed("move_forward")
-		or Input.is_action_just_pressed("move_back"))
+func _show_results() -> void:
+	_results_panel.show()
+	if _result_restart != null:
+		_result_restart.grab_focus()
 
 
 func _enter_ready() -> void:
@@ -193,7 +232,7 @@ func _enter_complete() -> void:
 	_result_spotted.text = "Spotted: %s" % ("Yes" if spotted else "No")
 	if not _enemies.is_empty():
 		_result_spotted.show()
-	_results_panel.show()
+	_show_results()
 
 
 func _enter_caught() -> void:
@@ -205,7 +244,7 @@ func _enter_caught() -> void:
 	_result_moves.text = "Moves: %d" % moves
 	_result_time.text = "Time: %.1fs" % time_elapsed
 	_result_spotted.hide()
-	_results_panel.show()
+	_show_results()
 
 
 func _enter_fell() -> void:
@@ -217,7 +256,7 @@ func _enter_fell() -> void:
 	_result_moves.text = "Moves: %d" % moves
 	_result_time.text = "Time: %.1fs" % time_elapsed
 	_result_spotted.hide()
-	_results_panel.show()
+	_show_results()
 
 
 func _on_player_tumbled() -> void:
