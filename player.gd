@@ -34,7 +34,8 @@ const WEDGE_INSET := 0.05  # shrink the sampled box in _tip_collides_at: keeps r
 const MAX_WAVES := 8
 const MAX_FOOTPRINTS := 64
 const FOOTPRINT_FADE_TIME := 12.0  # seconds for a deposited print to fade out and clear
-const MAX_WALLS := 16
+const MAX_WALLS := 64  # shader occlusion list (cone clipping); large levels exceed 16 wall regions
+const EXTEND_PROBE_Y := 0.2  # below the 0.4u safety-edge top: extension is blocked by edges, not just tall walls
 const FOCUS_SMOOTH_RATE := 25.0
 const BLEND_ENTER_TIME := 0.4  # seconds in cover + still before is_blending engages (and visual fully fades)
 const BLEND_EXIT_TIME := 0.15  # faster fade-out so peeking out is visible to enemies sooner than re-blending
@@ -371,22 +372,25 @@ func _extend_side_clear(side: int) -> bool:
 	var maxx: int = grid_pos.x + _ext[EXT_RIGHT]
 	var minz: int = grid_pos.y - _ext[EXT_FWD]
 	var maxz: int = grid_pos.y + _ext[EXT_BACK]
+	# Probe low (EXTEND_PROBE_Y) so a safety edge (a short 0.4u blocker) stops the
+	# extension too, not just full-height walls. The default 0.5 probe sailed over
+	# the edge and let the cube extend across an impassable boundary.
 	match side:
 		EXT_LEFT:
 			for z in range(minz, maxz + 1):
-				if not _extend_cell_clear(Vector2i(minx - 1, z)):
+				if not _extend_cell_clear(Vector2i(minx - 1, z), EXTEND_PROBE_Y):
 					return false
 		EXT_RIGHT:
 			for z in range(minz, maxz + 1):
-				if not _extend_cell_clear(Vector2i(maxx + 1, z)):
+				if not _extend_cell_clear(Vector2i(maxx + 1, z), EXTEND_PROBE_Y):
 					return false
 		EXT_FWD:
 			for x in range(minx, maxx + 1):
-				if not _extend_cell_clear(Vector2i(x, minz - 1)):
+				if not _extend_cell_clear(Vector2i(x, minz - 1), EXTEND_PROBE_Y):
 					return false
 		EXT_BACK:
 			for x in range(minx, maxx + 1):
-				if not _extend_cell_clear(Vector2i(x, maxz + 1)):
+				if not _extend_cell_clear(Vector2i(x, maxz + 1), EXTEND_PROBE_Y):
 					return false
 	return true
 

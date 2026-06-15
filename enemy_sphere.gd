@@ -35,6 +35,7 @@ const NEIGHBORS_8: Array[Vector2i] = [
 const PATH_CELL_ARRIVE := 0.15
 const PURSUIT_REPATH_INTERVAL := 0.3
 const SILHOUETTE_ALPHA := 0.0
+const ENEMY_LOS_FADE := false  # base play: enemies always visible (perfect vision). Set true for the future "blinded" debuff to fade enemies behind walls.
 const VISIBILITY_LERP_RATE := 8.0
 const PURSUIT_LOS_PADDING := 0.45
 
@@ -200,7 +201,7 @@ func _process(delta: float) -> void:
 				_last_seen_pos = Vector3(_last_seen_pos.x, position.y, _last_seen_pos.z)
 				_enter_state(State.INVESTIGATE)
 
-	var target_alpha := 1.0 if (_debug_reveal or _visible_to_player()) else SILHOUETTE_ALPHA
+	var target_alpha := 1.0 if (not ENEMY_LOS_FADE or _debug_reveal or _visible_to_player()) else SILHOUETTE_ALPHA
 	if not _visibility_initialized:
 		_visibility_alpha = target_alpha
 		_visibility_initialized = true

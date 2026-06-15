@@ -22,10 +22,13 @@ uniform vec3 cone_colors[8];
 uniform float cone_alphas[8];
 
 uniform vec2 player_xz;
-uniform vec2 wall_mins[16];
-uniform vec2 wall_maxs[16];
+uniform vec2 wall_mins[64];
+uniform vec2 wall_maxs[64];
 uniform int wall_count;
 uniform float dark_factor = 0.25;
+// Player line-of-sight fog is OFF for base play (perfect vision). Kept here behind
+// this flag for a future "blinded" debuff. Cones still clip on walls regardless.
+uniform bool player_los_enabled = false;
 
 uniform vec3 top_base_color : source_color = vec3(0.06, 0.06, 0.12);
 uniform vec3 side_color : source_color = vec3(0.04, 0.04, 0.08);
@@ -153,15 +156,22 @@ void fragment() {
 		}
 		vec3 with_waves = mix(grid_color, vec3(0.9, 0.55, 0.0), wave_total * 0.55);
 
-		// Player line-of-sight: 1 if straight line from player to fragment clears
-		// every wall AABB, else 0.
-		float visibility = segment_blocked(player_xz, world_xz) ? 0.0 : 1.0;
+		// Player line-of-sight fog: OFF by default (perfect vision), so floor stays
+		// fully lit and the whole level reads. Enable player_los_enabled for the
+		// future "blinded" debuff to darken floor the player cannot see.
+		float player_vis = 1.0;
+		if (player_los_enabled) {
+			player_vis = segment_blocked(player_xz, world_xz) ? 0.0 : 1.0;
+		}
 
 		// Vision cone overlays: one tinted sector per enemy, each in its own array
 		// slot, so multiple cones coexist instead of stomping a single set of
 		// uniforms. A slot with cone_radii[i] <= 0 is inactive. Where cones overlap
 		// the strongest (highest intensity) wins the color so neither washes out.
-		// Gated on visibility so cones only render on ground the player can see.
+		// Each cone is clipped on walls from the ENEMY's viewpoint, so the danger
+		// sector stops at a wall instead of bleeding to the far side (accurate to
+		// what the enemy can actually see). The wall test runs only for in-sector
+		// pixels to keep the cost down.
 		float cone_intensity = 0.0;
 		vec3 cone_color = vec3(0.0);
 		for (int i = 0; i < 8; i++) {
@@ -172,7 +182,7 @@ void fragment() {
 			float cone_dist = length(to_cone);
 			if (cone_dist > 0.05 && cone_dist < cone_radii[i]) {
 				float cone_dot = dot(to_cone / cone_dist, cone_dirs[i]);
-				if (cone_dot >= cone_half_angle_cos[i]) {
+				if (cone_dot >= cone_half_angle_cos[i] && !segment_blocked(cone_origins[i], world_xz)) {
 					float dist_fade = 1.0 - cone_dist / cone_radii[i];
 					float edge_fade = smoothstep(
 						cone_half_angle_cos[i],
@@ -187,7 +197,7 @@ void fragment() {
 				}
 			}
 		}
-		vec3 with_cone = mix(with_waves, cone_color, cone_intensity * visibility);
+		vec3 with_cone = mix(with_waves, cone_color, cone_intensity);
 
 		// Ink footprints: each print is a soft-edge tile centered on its cell, so
 		// adjacent per-cell prints tile into a continuous oblong.
@@ -200,6 +210,6 @@ void fragment() {
 		}
 
 		vec3 final_color = mix(with_cone, vec3(0.1, 0.15, 0.3), ink_total);
-		ALBEDO = final_color * mix(dark_factor, 1.0, visibility);
+		ALBEDO = final_color * mix(dark_factor, 1.0, player_vis);
 	}
 }
