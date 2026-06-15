@@ -1,80 +1,72 @@
-# Handoff, 2026-06-13
+# Handoff, 2026-06-15
 
-## Headline: third playtest-notes batch landed (dodge feel + cooldown HUD, input buffering, in-game pause menu + editor command menu for controller, quieter steps, wall-muffled... wait that was last time; this time: dodge priming/HUD, buffer, pause menus, step volume, knock gate, wave-clear, dodge-escape-by-geography). Loop validated; user is iterating on feel. NEXT = right-stick extend precision (drift), then continue playtest notes.
+## Headline: visual-coherence + lock-puzzle-readability pass from a partner playtest. Perfect vision is now the DEFAULT (LoS kept behind a flag for a future debuff); gate redesigned as raised/lowered floor tiles; lock guide lines route along the grid; end screens have buttons; AA on; playtest has Back to Editor. Loop validated; iterating on feel/clarity.
 
-## What happened this session (all tested headless, NOT yet hand-tested by user beyond a first run)
-- **Dodge (#1)**: holding dodge now LOCKS OUT tumbling (prime without stepping); a charged dodge
-  fires on a direction, a cooling one holds still. New **DODGE recharge bar** (bottom-center of the
-  level UI) fills as cooldown drains, bright when usable. Dodge also gated on `not god_mode` (fixes a
-  latent editor-cursor dodge when holding A/place in free control).
-- **Input buffering (#2)**: discrete shape presses (collapse + all extends) made mid-tumble are
-  buffered (`_buf_action`/`_take_action`, 0.3s grace that does NOT expire mid-animation) and applied
-  on settle instead of being dropped. Editor single/object placement is gated to fire only when the
-  cube is settled (rect drag still begins settled then grows while tumbling). Movement TAPS are NOT
-  buffered (held movement already chains) — easy follow-up if step-chaining feels off.
-- **Controller menus (#3)**: in-game **pause menu** (Start/Esc: Resume / Restart / Quit) replaces the
-  old instant-quit; **editor command menu** (Start/Esc: Resume / Playtest / Save / Quit) makes
-  playtest+save reachable on the pad. Both controller-navigable. Caveat: editor Save overwrites
-  silently once named; naming a NEW level still needs the keyboard once (no controller text entry).
-- **Noise waves persisting (#4)**: cleared on spawn (`_reset_ground_overlays`, also zeros stale
-  footprints from the shared material) AND on every game-over state (tree pauses there, so a live
-  wave would freeze on the floor). New `clear_noise_waves()` on the player.
-- **Dodge escape (#5)**: the enemy now tracks the cube's VISUAL position during a dodge, not the
-  landing `grid_pos` (which snaps at dodge start). Dodge only shakes a pursuer when the geometry
-  actually breaks line of sight — geography-dependent, as the user wanted. Code comment in
-  enemy_sphere `_is_seeing_player` explains it; do NOT "fix" it back.
-- **Steps too loud (#6)**: noise radius now `STEP_RADIUS_NORMAL = 2.5` / `STEP_RADIUS_SPRINT = 5.0`
-  (+ extension), down from 4/8. Top-of-file constants, tune freely.
-- **Knock on safety edges (#7)**: knock only fires against a full-height wall (`_has_tall_wall`,
-  probes above the 0.4u edge top); safety edges and void no longer knock.
-- **Editor tool menu (#8)**: focus now WRAPS (down past the bottom loops to top). Tiled-grid menu
-  redesign still deferred (user said later).
+## What happened this session (all tested headless; gate visuals + AA need the user's eyes)
+- **Perfect vision is the default (LoS removed for base play).** The partner playtest with LoS off
+  read better, so floor fog and enemy silhouette-fade are OFF by default and gated behind flags for
+  a future "blinded" debuff: shader `player_los_enabled` (false) and enemy_sphere `ENEMY_LOS_FADE`
+  (false). The temporary DEBUG_XRAY hack from the live session is gone, folded into these.
+- **Cones clip on walls from the ENEMY's viewpoint** (shader), so a danger sector stops at a wall
+  instead of bleeding through. This was the real cause of "vision through walls on big levels."
+  Enemy ACTUAL sight was always a physics raycast (accurate); only the cone visual lied.
+- **Wall buffer 16 -> 64** (player.gd MAX_WALLS + shader arrays) so large levels (the 736-tile one)
+  don't overflow the cone-occlusion list.
+- **Extend through safety edges fixed**: extension now probes at y=0.2 (below the 0.4u edge top), so
+  a safety edge blocks extension, not just full-height walls (EXTEND_PROBE_Y).
+- **Gate redesigned as raised/lowered floor tiles** (extend_lock_gate.gd): the bright ghost fence is
+  gone. Doorway cells are red-grid tiles (same wall shader, red lines) that rise into a 1u blocking
+  wall while shut and sink flush into the floor (walkable) when the player commits. Fixes from the
+  first cut: red GRID material (not flat black), BOX_H=1.9 so a lowered tile tucks to the floor
+  bottom (no poking out below the level), and the loader floors EVERY gate cell (not just the first
+  node) so the others aren't fall-through gaps.
+- **Lock guide lines route along the grid** (level_loader `_grid_path` BFS over walkable floor),
+  not crow-flies. lock->gate line shows while shut, hides when open; lock->unlock line hidden until
+  open (guide_line.gd, `visible_when_locked`).
+- **End screens (death/finish) have buttons**: Restart / Quit to Menu (+ Back to Editor in playtest),
+  controller-navigable, focus on Restart. The old press-any-key auto-loop is gone.
+- **Anti-aliasing on**: MSAA 4x + FXAA (project.godot [rendering]). MSAA for geometry edges, FXAA for
+  the shader-drawn thin grid lines. If still rough, deeper fix is fwidth analytic AA in the line shader.
+- **Playtest exit**: "Quit to Menu" now goes to the MAIN MENU everywhere (consistent). Added a
+  **Back to Editor** button (pause menu + results), shown only during a playtest, restoring the
+  autosaved editor session. Editor > Continue also still works.
 
 ## NEXT (priority order)
-1. **Right-stick extend precision / drift** (user note 2026-06-13). The right stick is extend
-   width/depth only (camera is on LB/LT now), so a generous deadzone is safe. Drift + diagonal
-   axis cross-talk make isolating one axis hard. Candidate fixes, in order of effort: raise the
-   right-stick extend action deadzones in project.godot (currently 0.5; try ~0.6-0.7, needs the
-   user's feel); OR handle extend in code with dominant-axis filtering (only the larger axis
-   registers) instead of per-axis InputMap events; OR move extend to the d-pad/face buttons. Dial
-   the deadzone WITH the user, do not guess a value.
-2. Continue acting on playtest-notes batches.
-3. Post-gate queue when notes settle: paint-model revision (only if authoring keeps hurting);
-   tall-for-intel player side (see over 1u walls when extended up); UI button-prompt overlay;
-   progression/save phase (flagged must-have before level-set production).
+1. Right-stick extend precision / drift (carried; dial deadzone WITH the user, see prior handoff).
+2. Continue partner playtest notes.
+3. Planned but not built (from playtest): extend-lock telegraph rework (single tile + lock icon ->
+   ghost of YOUR cube expanding to the required dims on landing; behavior is easy, the icon waits on
+   the icon system); floor extending downward to "infinity" (exploratory; pairs with the gate work).
+4. Deferred systems: per-face ink + cube-as-display (faces show state/expressions/timers); icon set
+   (padlock/key/droplet); save/progression (unblocks the level-intro/par/highscore screen); these
+   are the bigger design chunks.
 
 ## Tuning dials
-- player.gd STEP_RADIUS_NORMAL (2.5) / STEP_RADIUS_SPRINT (5.0); INPUT_BUFFER_TIME (0.3); KNOCK full.
-- enemy_sphere.gd NOISE_WALL_MUFFLE (0.45), DETECT_* table (still untuned).
-- camera_controller.gd ELEV_DEFAULT (45 deg).
-- level.gd DODGE_BAR_W / colors.
-- project.godot right-stick extend deadzones (see NEXT 1).
-
-## Controls (current)
-Pad: left stick/dpad move, right stick extend w/d, RB extend-up, RT collapse, A dodge (hold = prime,
-locks movement), X sprint, LB/LT camera tilt, Start pause menu; B = unused in gameplay / editor erase.
-Menus: A accept, B back, WASD/arrows/dpad navigate. Editor: A place (hold = rect), B/X/Backspace erase
-(hold = rect; path tools: undo node), Y/Tab tool menu (loops), Back/grave None, Start/Esc command menu
-(resume/playtest/save/quit), F5 finish, P playtest.
+- shader `player_los_enabled` (false) / enemy_sphere `ENEMY_LOS_FADE` (false): the future debuff.
+- player.gd STEP_RADIUS_* , INPUT_BUFFER_TIME, EXTEND_PROBE_Y, MAX_WALLS(64).
+- enemy_sphere NOISE_WALL_MUFFLE, DETECT_* (still untuned).
+- extend_lock_gate RAISE_TIME / RAISED_TOP / BOX_H / RED_* colors.
+- project.godot msaa_3d(2=4x) + screen_space_aa(1=FXAA).
 
 ## Open / loose (carried)
-- HIDAPI "Error opening gamepad at index N" on launch = engine-level phantom-device warning (Steam
-  build of Godot virtualizes pads); harmless, the real controller works. Not our code.
+- **Tutorials**: the old hand-authored tutorial scenes' end/results screen is left behind: it predates
+  the pause/results-button + controller rework, so it does not work on controller. NOT a problem now
+  (tutorials get rebuilt as data levels in Phase 9); noted so it is not lost. Also Cube Game Tasks Phase 9.
+- Editor gate preview still draws the OLD ghost fence (in-game gate is now red tiles): preview != play
+  for gates until the editor preview is updated. Editor/loader drift (shared LevelBuilder) general issue.
+- Cones clip on `Wall*` only, so a raised gate (named "Gate") does NOT clip the cone visual (enemy
+  real sight IS blocked by it, via raycast). Add gates to the shader wall list if it reads wrong.
+- HIDAPI "gamepad index N" warning on launch = harmless engine/Steam-build phantom-device noise.
 - DEBUG_DETECTION still true in enemy_sphere.gd (remove when detection tuning starts).
-- Dodge bar + pause menu only in level_template (painted levels). Old tutorial/sandbox scenes lack
-  them; level.gd resolves those nodes null-safely and falls back to exit-on-pause, so no crash.
 - One global extend-lock per level (link layer pending); editor warns, loader syncs stale unlocks.
-- Editor preview vs loader drift (shared LevelBuilder) grows with each object type.
-- Gate fence corners: translucent post/panel overlap seams (cosmetic).
 
-## Verify recipe (`~/.local/bin/godot` v4.6; exit code 0 even on errors, so grep)
+## Verify recipe (`~/.local/bin/godot` v4.6; exit 0 even on errors, so grep)
 - Parse: `godot --headless --editor --quit 2>&1 | grep -E "SCRIPT ERROR|Parse Error|SHADER ERROR|Busy"`
 - Smoke: `godot --headless --quit-after 90 res://<scene>.tscn 2>&1 | grep -iE "ERROR|nil|invalid|cannot|failed"` (filter vulkan/audio/display/leaked)
-- Logic: throwaway `extends SceneTree` run with `-s`; `await process_frame` after add_child (or
-  @onready/refs are Nil); compare PackedFloat32Array with a tolerance (float32 truncation). For
-  physics point/ray queries (e.g. `_has_tall_wall`) await ~6-8 frames so static bodies register.
-  Delete the script + its `.uid` after.
+- Logic: throwaway `extends SceneTree` run with `-s`; `await process_frame` after add_child (refs Nil
+  otherwise); physics point/ray queries need ~6-8 frames for static bodies; PackedFloat32 compare with
+  tolerance. Delete the script + `.uid` after.
 
 ## Memory
-- No new memory this session; the durable design intent (dodge escape = geography, not a timer) lives
-  as a code comment in enemy_sphere `_is_seeing_player`. Standing cube memories unchanged.
+- No new memory this session; durable design intents live as code comments (perfect-vision flags,
+  dodge-escape-by-geography). Standing cube memories unchanged.
