@@ -6,6 +6,7 @@ signal move_settled
 signal noise_emitted(origin: Vector2, max_radius: float, duration: float)
 signal caught
 signal fell
+signal wedged  # tipped into a gap but jammed before clearing it; its own fail, not a fall
 
 const TUMBLE_DURATION := 0.3
 const STEP_GAIN := 0.4  # master loudness of the player's own step audio (~ -8 dB); the gameplay noise radius is unaffected
@@ -26,7 +27,8 @@ const BUMP_DURATION := 0.25  # won't-fit lean-and-rock-back for a blocked extend
 const BUMP_ANGLE := PI / 10.0  # peak lean (~18 deg) before rocking back, scaled down near a wall
 const BUMP_CLEARANCE := 0.15  # air gap kept between the lean's leading corner and the wall
 const FALL_GRAVITY := 25.0  # units/s^2; accelerates the cube straight down after settling on void
-const FALL_END_Y := -6.0  # cube is below view by here; emit `fell` and let level take over
+const FALL_END_Y := -25.0  # let the cube plunge well into the void (visible fall) before `fell` hands off to the level
+const EXPRESSION_COUNT := 4  # fail-state "broken screen" faces in the cube shader's expr_color
 const TIP_ANGULAR_ACCEL := 25.0  # rad/s^2 — rotational gravity tipping the cube into the hole
 const TIP_INITIAL_VEL := 1.5  # rad/s initial kick; handles the knife-edge balance case
 const TIP_END_ANGLE := PI / 2.0  # at 90° the cuboid has tipped past the edge; hand off to straight drop
@@ -84,6 +86,7 @@ var _buf_t := 0.0       # remaining grace on the buffered action
 var _dodge_flash := 0.0 # counts down the green "ready" edge blink after the cooldown ends
 var _dodge_heat_max := 0.0  # peak heat for the current/last dodge (= distance / DODGE_DISTANCE)
 var _ready_player: AudioStreamPlayer  # soft chime when the dodge cools to ready
+var _expression := -1   # active fail-screen face index (-1 = none); chosen at random on a fail
 var _dodge_duration := DODGE_DURATION
 var _slide_last_cell: Vector2i = Vector2i.ZERO
 var _ext := [0, 0, 0, 0, 0]
@@ -204,7 +207,15 @@ func _collect_puddle_cells(group: String) -> Dictionary:
 
 func _on_contact(area: Area3D) -> void:
 	if (area.collision_layer & LAYER_ENEMY) != 0:
+		_trigger_fail_face()   # show the broken-screen face before the level pauses
 		caught.emit()
+
+
+func _trigger_fail_face() -> void:
+	# Pick a random fail "screen" and push it immediately, so the cube shows it
+	# even if the tree pauses (caught) the same frame before the next _process.
+	_expression = randi() % EXPRESSION_COUNT
+	_push_cube_material()
 
 
 func _on_puddle_entered(area: Area3D) -> void:
@@ -747,6 +758,8 @@ func _begin_fall() -> void:
 	is_blending = false
 	is_hiding = false
 	_blend_phase = 0.0
+	# Show a random fail "screen" while it falls/wedges (pushed by _push_cube_material below).
+	_expression = randi() % EXPRESSION_COUNT
 	_push_cube_material()
 	_setup_tip()
 
@@ -1111,7 +1124,7 @@ func _process(delta: float) -> void:
 			# the wedge is on screen before the results panel appears.
 			_wedge_hold_t += delta
 			if _wedge_hold_t >= WEDGE_HOLD_TIME:
-				fell.emit()
+				wedged.emit()   # jammed in a gap: its own fail, not a fall
 				_falling = false
 				_tipping = false
 				_wedged = false
@@ -1542,6 +1555,7 @@ func _push_cube_material() -> void:
 	_player_material.set_shader_parameter("cube_half", _box_mesh.size * 0.5)
 	_player_material.set_shader_parameter("dodge_heat", heat)
 	_player_material.set_shader_parameter("dodge_flash", _dodge_flash / DODGE_FLASH_TIME)
+	_player_material.set_shader_parameter("expression", _expression)
 
 
 func _compute_face_ink() -> PackedFloat32Array:

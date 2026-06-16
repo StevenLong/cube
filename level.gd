@@ -1,7 +1,7 @@
 class_name Level
 extends Node
 
-enum State { READY, PLAYING, COMPLETE, CAUGHT, FELL }
+enum State { READY, PLAYING, COMPLETE, CAUGHT, FELL, WEDGED }
 
 const PULSE_BASE := 1.5
 const PULSE_AMPLITUDE := 1.0
@@ -75,6 +75,7 @@ func _ready() -> void:
 	_player.move_settled.connect(_on_player_move_settled)
 	_player.caught.connect(_on_player_caught)
 	_player.fell.connect(_on_player_fell)
+	_player.wedged.connect(_on_player_wedged)
 	# Wire every enemy in the scene (any sibling exposing entered_pursuit) so the
 	# Spotted readout reflects all guards, not just one. Backward compatible with
 	# single-enemy scenes and the no-enemy tutorials.
@@ -161,7 +162,7 @@ func _process(delta: float) -> void:
 			pass   # released by any START_ACTIONS press in _input
 		State.PLAYING:
 			time_elapsed += delta
-		State.COMPLETE, State.CAUGHT, State.FELL:
+		State.COMPLETE, State.CAUGHT, State.FELL, State.WEDGED:
 			pass   # results panel buttons (Restart / Quit) drive what happens next
 
 
@@ -243,6 +244,18 @@ func _enter_fell() -> void:
 	_show_results()
 
 
+func _enter_wedged() -> void:
+	state = State.WEDGED
+	_complete_t = 0.0
+	_player.clear_noise_waves()
+	get_tree().paused = true
+	_result_title.text = "Wedged"
+	_result_moves.text = "Moves: %d" % moves
+	_result_time.text = "Time: %.1fs" % time_elapsed
+	_result_spotted.hide()
+	_show_results()
+
+
 func _on_player_tumbled() -> void:
 	if state == State.PLAYING:
 		moves += 1
@@ -260,6 +273,11 @@ func _on_player_caught() -> void:
 func _on_player_fell() -> void:
 	if state == State.PLAYING:
 		_enter_fell()
+
+
+func _on_player_wedged() -> void:
+	if state == State.PLAYING:
+		_enter_wedged()
 
 
 func _on_end_entered(_area: Area3D) -> void:
