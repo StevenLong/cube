@@ -1,72 +1,79 @@
-# Handoff, 2026-06-15
+# Handoff, 2026-06-16
 
-## Headline: visual-coherence + lock-puzzle-readability pass from a partner playtest. Perfect vision is now the DEFAULT (LoS kept behind a flag for a future debuff); gate redesigned as raised/lowered floor tiles; lock guide lines route along the grid; end screens have buttons; AA on; playtest has Back to Editor. Loop validated; iterating on feel/clarity.
+## Headline: lock-puzzle clarity + "infinite floor" visual pass, all from playtest feedback. Loop is validated; we're deep in feel/clarity iteration. Next direction is open (see NEXT) — likely per-face ink / cube-as-display or save/progression.
 
-## What happened this session (all tested headless; gate visuals + AA need the user's eyes)
-- **Perfect vision is the default (LoS removed for base play).** The partner playtest with LoS off
-  read better, so floor fog and enemy silhouette-fade are OFF by default and gated behind flags for
-  a future "blinded" debuff: shader `player_los_enabled` (false) and enemy_sphere `ENEMY_LOS_FADE`
-  (false). The temporary DEBUG_XRAY hack from the live session is gone, folded into these.
-- **Cones clip on walls from the ENEMY's viewpoint** (shader), so a danger sector stops at a wall
-  instead of bleeding through. This was the real cause of "vision through walls on big levels."
-  Enemy ACTUAL sight was always a physics raycast (accurate); only the cone visual lied.
-- **Wall buffer 16 -> 64** (player.gd MAX_WALLS + shader arrays) so large levels (the 736-tile one)
-  don't overflow the cone-occlusion list.
-- **Extend through safety edges fixed**: extension now probes at y=0.2 (below the 0.4u edge top), so
-  a safety edge blocks extension, not just full-height walls (EXTEND_PROBE_Y).
-- **Gate redesigned as raised/lowered floor tiles** (extend_lock_gate.gd): the bright ghost fence is
-  gone. Doorway cells are red-grid tiles (same wall shader, red lines) that rise into a 1u blocking
-  wall while shut and sink flush into the floor (walkable) when the player commits. Fixes from the
-  first cut: red GRID material (not flat black), BOX_H=1.9 so a lowered tile tucks to the floor
-  bottom (no poking out below the level), and the loader floors EVERY gate cell (not just the first
-  node) so the others aren't fall-through gaps.
-- **Lock guide lines route along the grid** (level_loader `_grid_path` BFS over walkable floor),
-  not crow-flies. lock->gate line shows while shut, hides when open; lock->unlock line hidden until
-  open (guide_line.gd, `visible_when_locked`).
-- **End screens (death/finish) have buttons**: Restart / Quit to Menu (+ Back to Editor in playtest),
-  controller-navigable, focus on Restart. The old press-any-key auto-loop is gone.
-- **Anti-aliasing on**: MSAA 4x + FXAA (project.godot [rendering]). MSAA for geometry edges, FXAA for
-  the shader-drawn thin grid lines. If still rough, deeper fix is fwidth analytic AA in the line shader.
-- **Playtest exit**: "Quit to Menu" now goes to the MAIN MENU everywhere (consistent). Added a
-  **Back to Editor** button (pause menu + results), shown only during a playtest, restoring the
-  autosaved editor session. Editor > Continue also still works.
+## State of the build
+Core loop validated (3 levels authored, "the loop can work"). Editor is a full tool. Controls
+reworked. Recent work has been playtest-driven polish, now mostly visual coherence and lock-puzzle
+readability. Everything below is committed and pushed.
 
-## NEXT (priority order)
-1. Right-stick extend precision / drift (carried; dial deadzone WITH the user, see prior handoff).
-2. Continue partner playtest notes.
-3. Planned but not built (from playtest): extend-lock telegraph rework (single tile + lock icon ->
-   ghost of YOUR cube expanding to the required dims on landing; behavior is easy, the icon waits on
-   the icon system); floor extending downward to "infinity" (exploratory; pairs with the gate work).
-4. Deferred systems: per-face ink + cube-as-display (faces show state/expressions/timers); icon set
-   (padlock/key/droplet); save/progression (unblocks the level-intro/par/highscore screen); these
-   are the bigger design chunks.
+## What landed since the last handoff (commits e01a9f0, 7c6f0c1, 8c7debe; earlier batch 1c4deeb..a0deb75)
+- **Perfect vision is the default** (LoS off; shader `player_los_enabled` / enemy `ENEMY_LOS_FADE`
+  flags reserved for a future "blinded" debuff). Cones clip on walls from the enemy's viewpoint.
+  Wall buffer raised to 64. (batch a0deb75)
+- **Gate = raised/lowered floor tiles** (red grid, rises to block / sinks to walkable), no more
+  bright ghost fence. End screens have Restart/Quit buttons + Back to Editor (playtest only).
+  Anti-aliasing on (MSAA 4x + FXAA). Playtest "Quit to Menu" goes to the main menu. (batch a0deb75)
+- **Extend-lock telegraph rework** (e01a9f0):
+  - LOCK zone: quiet full-footprint marker + floating padlock icon (primitive placeholder);
+    standing in the footprint swaps the icon for a ghost of the cube EXPANDING to the required
+    shape, grown CENTERED on the footprint, ending exactly filling it.
+  - UNLOCK zone: kept the persistent placement/orientation ghost cuboid, now hidden until the gate
+    opens (player extend-locked).
+  - Loader floors the full footprint of every lock/unlock zone (and gate span) so wide/deep shapes
+    have ground; guide lines route to the CENTER cells of lock/gate/unlock.
+- **Editor**: self-heals a stuck area-select highlight (stray preview is freed when no drag is
+  active; `_create_preview` never orphans one). (7c6f0c1)
+- **Infinite floor** (8c7debe): floor + walls are deep columns (60u visual mesh, shallow collision,
+  is_floor unchanged) whose SIDES fade to the void colour from y=-0.5 to y=-45, so they dissolve
+  into nothing instead of showing a bottom at steep camera angles. Void darkened to (0.03,0.03,0.04)
+  everywhere, matching the shader fade target. Gate hides its tiles once fully sunk (no z-fight in
+  the deep column).
+
+## Pending the user's eyes (committed, visual, not yet confirmed in play)
+- Gate red-tile look (rise/sink), AA, the new lock/unlock telegraphs, and the infinite-floor fade
+  depth/darkness. Fade is tunable: `fade_start`(-0.5)/`fade_end`(-45)/`void_color` shader uniforms;
+  `FLOOR_DEPTH`(60, loader) + FloorTile mesh depth must stay above fade_end and match each other.
+
+## NEXT — direction to be decided this session
+Candidates, roughly highest-value first:
+1. **Per-face ink -> cube-as-display.** The inked-face info still isn't shown (gameplay gap), and it
+   bootstraps the cube-faces-as-screens idea (state, expressions, debuff/timing readouts, maybe move
+   the dodge cooldown onto the cube). Needs a per-face shader/material on the cube (currently one
+   surface, one tint).
+2. **Save / progression.** Completion tracking, per-level bests, par. Unblocks the level-intro/par/
+   high-score screen and is needed before producing a level set. Bigger, touches results panel +
+   levels menu + (later) cosmetics + optional objectives.
+3. **Right-stick extend drift.** Carried friction; needs the user's hands to dial deadzone /
+   dominant-axis filtering.
+4. Smaller: icon system (padlock/key/droplet; primitive padlock placeholder exists); editor preview
+   drift (gate/lock previews still show the OLD ghosts, != in-game); fade-to-void refinement if the
+   infinite-floor look needs it.
 
 ## Tuning dials
-- shader `player_los_enabled` (false) / enemy_sphere `ENEMY_LOS_FADE` (false): the future debuff.
-- player.gd STEP_RADIUS_* , INPUT_BUFFER_TIME, EXTEND_PROBE_Y, MAX_WALLS(64).
-- enemy_sphere NOISE_WALL_MUFFLE, DETECT_* (still untuned).
-- extend_lock_gate RAISE_TIME / RAISED_TOP / BOX_H / RED_* colors.
-- project.godot msaa_3d(2=4x) + screen_space_aa(1=FXAA).
+- Infinite floor: shaders `fade_start`/`fade_end`/`void_color`; loader `FLOOR_DEPTH` + FloorTile mesh.
+- player.gd STEP_RADIUS_*, INPUT_BUFFER_TIME, EXTEND_PROBE_Y, MAX_WALLS(64), camera ELEV_DEFAULT.
+- enemy_sphere NOISE_WALL_MUFFLE, DETECT_* (still untuned); ENEMY_LOS_FADE / shader player_los_enabled (debuff).
+- extend_lock_gate RAISE_TIME/RAISED_TOP/BOX_H; extend_lock_zone GHOST_GROW_TIME/ICON_*.
 
 ## Open / loose (carried)
-- **Tutorials**: the old hand-authored tutorial scenes' end/results screen is left behind: it predates
-  the pause/results-button + controller rework, so it does not work on controller. NOT a problem now
-  (tutorials get rebuilt as data levels in Phase 9); noted so it is not lost. Also Cube Game Tasks Phase 9.
-- Editor gate preview still draws the OLD ghost fence (in-game gate is now red tiles): preview != play
-  for gates until the editor preview is updated. Editor/loader drift (shared LevelBuilder) general issue.
-- Cones clip on `Wall*` only, so a raised gate (named "Gate") does NOT clip the cone visual (enemy
-  real sight IS blocked by it, via raycast). Add gates to the shader wall list if it reads wrong.
-- HIDAPI "gamepad index N" warning on launch = harmless engine/Steam-build phantom-device noise.
-- DEBUG_DETECTION still true in enemy_sphere.gd (remove when detection tuning starts).
+- **Tutorials**: old hand-authored scenes; their end screen predates the controller/results rework.
+  Rebuild as data levels in Phase 9 (fixes it for free). Also in Cube Game Tasks Phase 9.
+- Editor previews for gate + lock zone still draw the OLD ghost shapes (preview != play).
+- Cones clip on `Wall*` only, so a raised gate (named "Gate") doesn't clip the cone VISUAL (enemy
+  real sight IS blocked by it via raycast). Add gates to the shader wall list if it reads wrong.
 - One global extend-lock per level (link layer pending); editor warns, loader syncs stale unlocks.
+- DEBUG_DETECTION still true in enemy_sphere.gd (remove when detection tuning starts).
+- HIDAPI "gamepad index N" warning on launch = harmless Steam-build phantom-device noise.
 
 ## Verify recipe (`~/.local/bin/godot` v4.6; exit 0 even on errors, so grep)
-- Parse: `godot --headless --editor --quit 2>&1 | grep -E "SCRIPT ERROR|Parse Error|SHADER ERROR|Busy"`
+- Parse/shader: `godot --headless --editor --quit 2>&1 | grep -E "SCRIPT ERROR|Parse Error|SHADER ERROR"`
 - Smoke: `godot --headless --quit-after 90 res://<scene>.tscn 2>&1 | grep -iE "ERROR|nil|invalid|cannot|failed"` (filter vulkan/audio/display/leaked)
-- Logic: throwaway `extends SceneTree` run with `-s`; `await process_frame` after add_child (refs Nil
-  otherwise); physics point/ray queries need ~6-8 frames for static bodies; PackedFloat32 compare with
-  tolerance. Delete the script + `.uid` after.
+- Logic: throwaway `extends SceneTree` run with `-s`; RUN FROM THE cube DIR (shell cwd drifts after a
+  game-dev push). `await process_frame` after add_child; physics queries need ~6-8 frames; annotate
+  test var types (untyped dynamic access fails inference); PackedFloat32 compare with tolerance.
+  Delete the script + `.uid` after.
 
 ## Memory
-- No new memory this session; durable design intents live as code comments (perfect-vision flags,
-  dodge-escape-by-geography). Standing cube memories unchanged.
+- Durable design intents live as code comments (perfect-vision flags, dodge-escape-by-geography).
+  Standing cube memories unchanged.
