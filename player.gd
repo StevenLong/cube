@@ -28,7 +28,11 @@ const BUMP_ANGLE := PI / 10.0  # peak lean (~18 deg) before rocking back, scaled
 const BUMP_CLEARANCE := 0.15  # air gap kept between the lean's leading corner and the wall
 const FALL_GRAVITY := 25.0  # units/s^2; accelerates the cube straight down after settling on void
 const FALL_END_Y := -25.0  # let the cube plunge well into the void (visible fall) before `fell` hands off to the level
-const EXPRESSION_COUNT := 4  # fail-state "broken screen" faces in the cube shader's expr_color
+# Cube-display expression indices into the shader's expr_color:
+const FAIL_EXPR_COUNT := 4     # fail "broken screen" faces are 0..3
+const SUCCESS_EXPR_START := 4  # success faces are 4..6
+const SUCCESS_EXPR_COUNT := 3
+const PERFECT_EXPR := 7        # special face for a perfect (unspotted) clear
 const TIP_ANGULAR_ACCEL := 25.0  # rad/s^2 — rotational gravity tipping the cube into the hole
 const TIP_INITIAL_VEL := 1.5  # rad/s initial kick; handles the knife-edge balance case
 const TIP_END_ANGLE := PI / 2.0  # at 90° the cuboid has tipped past the edge; hand off to straight drop
@@ -214,7 +218,14 @@ func _on_contact(area: Area3D) -> void:
 func _trigger_fail_face() -> void:
 	# Pick a random fail "screen" and push it immediately, so the cube shows it
 	# even if the tree pauses (caught) the same frame before the next _process.
-	_expression = randi() % EXPRESSION_COUNT
+	_expression = randi() % FAIL_EXPR_COUNT
+	_push_cube_material()
+
+
+func show_success(perfect: bool) -> void:
+	# Called by the level on a clear: a happy face (random) or, for a perfect
+	# unspotted run, the special face. Pushed immediately (the tree pauses).
+	_expression = PERFECT_EXPR if perfect else SUCCESS_EXPR_START + randi() % SUCCESS_EXPR_COUNT
 	_push_cube_material()
 
 
@@ -759,7 +770,7 @@ func _begin_fall() -> void:
 	is_hiding = false
 	_blend_phase = 0.0
 	# Show a random fail "screen" while it falls/wedges (pushed by _push_cube_material below).
-	_expression = randi() % EXPRESSION_COUNT
+	_expression = randi() % FAIL_EXPR_COUNT
 	_push_cube_material()
 	_setup_tip()
 

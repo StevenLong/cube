@@ -210,6 +210,9 @@ func _enter_complete() -> void:
 	state = State.COMPLETE
 	_complete_t = 0.0
 	_player.clear_noise_waves()  # the tree pauses here; clear so no wave freezes on the floor
+	# Happy cube face; the special "perfect" face only when there were guards to
+	# evade and none ever spotted you. Pushed before the pause.
+	_player.show_success(not spotted and not _enemies.is_empty())
 	get_tree().paused = true
 	_result_title.text = "Level Complete"
 	_result_moves.text = "Moves: %d" % moves

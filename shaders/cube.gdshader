@@ -39,6 +39,19 @@ void vertex() {
 	v_obj_pos = VERTEX;
 }
 
+float dot_mask(vec2 uv, vec2 c, float r) {
+	return 1.0 - smoothstep(r - 0.02, r, length(uv - c));
+}
+
+float seg_dist(vec2 p, vec2 a, vec2 b) {
+	vec2 pa = p - a;
+	vec2 ba = b - a;
+	float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+	return length(pa - ba * h);
+}
+
+// Fail screens are 0..3, success screens 4..6, "perfect" is 7 (see player.gd's
+// FAIL_EXPR_COUNT / SUCCESS_EXPR_* / PERFECT_EXPR).
 vec3 expr_color(int e, vec2 uv) {
 	if (e == 0) {
 		// Missing texture: magenta/black checker.
@@ -56,14 +69,37 @@ vec3 expr_color(int e, vec2 uv) {
 		vec3 b = vec3(fract(h * 3.0), fract(h * 7.0), fract(h * 13.0));
 		float jitter = step(0.5, fract(uv.x * 4.0 + h * 10.0));
 		return b * mix(0.4, 1.0, jitter);
+	} else if (e == 3) {
+		// Sad face (frown) on a blue screen (BSOD-ish).
+		vec3 bg = vec3(0.06, 0.12, 0.5);
+		float eyes = dot_mask(uv, vec2(0.37, 0.62), 0.06) + dot_mask(uv, vec2(0.63, 0.62), 0.06);
+		float fy = 0.42 - 1.4 * (uv.x - 0.5) * (uv.x - 0.5);   // corners down = frown
+		float mouth = (1.0 - smoothstep(0.03, 0.055, abs(uv.y - fy))) * step(0.3, uv.x) * step(uv.x, 0.7);
+		return mix(bg, vec3(0.95), clamp(eyes + mouth, 0.0, 1.0));
+	} else if (e == 4) {
+		// Smiley on green.
+		vec3 bg = vec3(0.05, 0.42, 0.16);
+		float eyes = dot_mask(uv, vec2(0.37, 0.62), 0.06) + dot_mask(uv, vec2(0.63, 0.62), 0.06);
+		float fy = 0.32 + 1.4 * (uv.x - 0.5) * (uv.x - 0.5);   // U = smile
+		float mouth = (1.0 - smoothstep(0.03, 0.055, abs(uv.y - fy))) * step(0.3, uv.x) * step(uv.x, 0.7);
+		return mix(bg, vec3(0.98), clamp(eyes + mouth, 0.0, 1.0));
+	} else if (e == 5) {
+		// Success check mark on green.
+		vec3 bg = vec3(0.05, 0.45, 0.16);
+		float d = min(seg_dist(uv, vec2(0.30, 0.52), vec2(0.45, 0.37)), seg_dist(uv, vec2(0.45, 0.37), vec2(0.72, 0.68)));
+		float chk = 1.0 - smoothstep(0.035, 0.06, d);
+		return mix(bg, vec3(0.98), chk);
+	} else if (e == 6) {
+		// Cool smiley with sunglasses on teal.
+		vec3 bg = vec3(0.08, 0.34, 0.4);
+		float glasses = step(0.26, uv.x) * step(uv.x, 0.74) * step(0.56, uv.y) * step(uv.y, 0.68);
+		float fy = 0.32 + 1.4 * (uv.x - 0.5) * (uv.x - 0.5);
+		float mouth = (1.0 - smoothstep(0.03, 0.055, abs(uv.y - fy))) * step(0.3, uv.x) * step(uv.x, 0.7);
+		vec3 c = mix(bg, vec3(0.03), glasses);
+		return mix(c, vec3(0.98), mouth);
 	}
-	// Sad face on a blue screen (BSOD-ish).
-	vec3 bg = vec3(0.06, 0.12, 0.5);
-	float eyes = 1.0 - smoothstep(0.05, 0.07, length(uv - vec2(0.37, 0.62)));
-	eyes += 1.0 - smoothstep(0.05, 0.07, length(uv - vec2(0.63, 0.62)));
-	float fy = 0.32 + 1.4 * (uv.x - 0.5) * (uv.x - 0.5);   // upward-curving (sad) mouth
-	float mouth = (1.0 - smoothstep(0.03, 0.055, abs(uv.y - fy))) * step(0.3, uv.x) * step(uv.x, 0.7);
-	return mix(bg, vec3(0.95), clamp(eyes + mouth, 0.0, 1.0));
+	// 7: "perfect" -- a bright, ordered rainbow (distinct from the chaotic fail bars).
+	return 0.5 + 0.5 * cos(6.2831 * (uv.y + vec3(0.0, 0.33, 0.67)));
 }
 
 void fragment() {
