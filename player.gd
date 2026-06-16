@@ -109,7 +109,7 @@ var _blend_phase: float = 0.0  # 0 exposed -> 1 hidden; rises over BLEND_ENTER_T
 var _cover_color: Color = COLOR_BLENDING  # sampled from a covering wall on blend entry, else fallback
 var _was_wanting_blend := false  # for one-shot cover-color sampling at the transition
 var _ground_material: ShaderMaterial
-var _player_material: StandardMaterial3D
+var _player_material: ShaderMaterial
 var _waves: Array = []
 var _footprints: Array = []
 var _box_mesh: BoxMesh
@@ -144,8 +144,12 @@ func _ready() -> void:
 	_reset_ground_overlays()
 	_box_mesh = _mesh_instance.mesh.duplicate() as BoxMesh
 	_mesh_instance.mesh = _box_mesh
-	_player_material = (_mesh_instance.get_surface_override_material(0) as StandardMaterial3D).duplicate()
+	# Per-face cube shader (the cube's faces are info "screens"; first use is ink).
+	_player_material = ShaderMaterial.new()
+	_player_material.shader = preload("res://shaders/cube.gdshader")
+	_player_material.set_shader_parameter("ink_color", COLOR_MARKED)
 	_mesh_instance.set_surface_override_material(0, _player_material)
+	_push_cube_material()
 	_smoothed_focus = _mesh_instance.global_position
 	_detection_collider = _detection_area.get_node("CollisionShape3D") as CollisionShape3D
 	_detection_shape = (_detection_collider.shape as BoxShape3D).duplicate() as BoxShape3D
@@ -555,6 +559,11 @@ func _update_mesh() -> void:
 		_ext[EXT_UP] * 0.5,
 		(_ext[EXT_BACK] - _ext[EXT_FWD]) * 0.5
 	)
+	# Only rebuild when the shape actually changes. Assigning BoxMesh.size rebuilds
+	# the mesh every call (even to the same value), and this runs every frame; the
+	# per-frame rebuild flickered now that faces carry distinct ink colours.
+	if size == _box_mesh.size and offset == _mesh_instance.position:
+		return
 	_box_mesh.size = size
 	_mesh_instance.transform = Transform3D(Basis.IDENTITY, offset)
 	_detection_shape.size = size
@@ -726,7 +735,7 @@ func _begin_fall() -> void:
 	is_blending = false
 	is_hiding = false
 	_blend_phase = 0.0
-	_player_material.albedo_color = _base_color()
+	_push_cube_material()
 	_setup_tip()
 
 
@@ -1141,7 +1150,7 @@ func _process(delta: float) -> void:
 	var blend_rate := delta / (BLEND_ENTER_TIME if wants_blend else BLEND_EXIT_TIME)
 	_blend_phase = move_toward(_blend_phase, blend_target, blend_rate)
 	is_blending = _blend_phase >= 1.0
-	_player_material.albedo_color = _base_color().lerp(_cover_color, _blend_phase)
+	_push_cube_material()
 
 	if _dodging:
 		_dodge_t = minf(_dodge_t + delta / _dodge_duration, 1.0)
@@ -1187,6 +1196,11 @@ func _process(delta: float) -> void:
 				_check_water_contact_footprint()
 				_maybe_deposit_footprint()
 				move_settled.emit()
+			# Re-push face colours AFTER orientation + settle-frame ink update; the
+			# blend section ran earlier this frame with the OLD orientation, so without
+			# this the cube shows pre-tumble colours for one frame (the blink as ink
+			# crosses top/bottom).
+			_push_cube_material()
 		_update_mesh()
 		return
 
@@ -1485,14 +1499,34 @@ func _any_marked() -> bool:
 
 
 func _base_color() -> Color:
-	# Color the player would be ignoring blend. The blend fade in _process lerps
-	# from this toward _cover_color by _blend_phase, so locked/marked states stay
-	# visible until cover-fade is complete.
+	# Body colour ignoring blend and ink. Ink is now shown PER FACE by the cube
+	# shader (not a whole-cube tint), so this is just the locked/normal body state;
+	# the blend fade lerps it toward _cover_color by _blend_phase.
 	if _extend_locked:
 		return COLOR_LOCKED
-	if _any_marked():
-		return COLOR_MARKED
 	return COLOR_NORMAL
+
+
+func _push_cube_material() -> void:
+	# Drive the per-face cube shader: body/cover/blend plus which mesh faces are
+	# inked. Pushed every visual frame (cheap) so blend and orientation stay live.
+	_player_material.set_shader_parameter("base_color", _base_color())
+	_player_material.set_shader_parameter("cover_color", _cover_color)
+	_player_material.set_shader_parameter("blend_phase", _blend_phase)
+	_player_material.set_shader_parameter("face_ink", _compute_face_ink())
+
+
+func _compute_face_ink() -> PackedFloat32Array:
+	# Map logical face marks to MESH-LOCAL faces via the current orientation, so an
+	# inked face shows on whichever side it has rolled to. Index order matches the
+	# shader and the FACE_* ids: +X, -X, +Y, -Y, +Z, -Z.
+	var dirs := [Vector3.RIGHT, Vector3.LEFT, Vector3.UP, Vector3.DOWN, Vector3.BACK, Vector3.FORWARD]
+	var inv := _orient.inverse()
+	var out := PackedFloat32Array()
+	out.resize(6)
+	for i in 6:
+		out[i] = 1.0 if _face_marks[_dir_to_face_id(inv * dirs[i])] else 0.0
+	return out
 
 
 static func _make_splash_sound() -> AudioStreamWAV:
