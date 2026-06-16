@@ -18,6 +18,7 @@ const SPRINT_DURATION := 0.15
 const DODGE_DISTANCE := 5
 const DODGE_DURATION := 0.4
 const DODGE_COOLDOWN := 1.5
+const DODGE_FLASH_TIME := 0.3  # green "ready" edge blink duration when the cooldown completes
 const WAVE_DURATION := 0.4
 const KNOCK_RADIUS := 10.0  # wall-knock noise radius (knock is a cube-only ability)
 const KNOCK_COOLDOWN := 0.4  # min seconds between wall knocks
@@ -80,6 +81,9 @@ var _dodge_cooldown_t := 0.0
 var _knock_cooldown_t := 0.0
 var _buf_action := ""   # latest buffered discrete shape press (see _capture_buffer)
 var _buf_t := 0.0       # remaining grace on the buffered action
+var _dodge_flash := 0.0 # counts down the green "ready" edge blink after the cooldown ends
+var _dodge_heat_max := 0.0  # peak heat for the current/last dodge (= distance / DODGE_DISTANCE)
+var _ready_player: AudioStreamPlayer  # soft chime when the dodge cools to ready
 var _dodge_duration := DODGE_DURATION
 var _slide_last_cell: Vector2i = Vector2i.ZERO
 var _ext := [0, 0, 0, 0, 0]
@@ -137,6 +141,10 @@ func _ready() -> void:
 	grid_pos = Vector2i(roundi(position.x), roundi(position.z))
 	_step_player.stream = _make_step_sound()
 	_splash_player.stream = _make_splash_sound()
+	_ready_player = AudioStreamPlayer.new()
+	_ready_player.stream = _make_ready_sound()
+	_ready_player.volume_db = -15.0   # soft hint, not a klaxon
+	add_child(_ready_player)
 	# Shared resource across every FloorTile and this player; uniforms set on it
 	# here push to every tile's top surface in one go.
 	_ground_material = GROUND_MATERIAL
@@ -653,6 +661,10 @@ func _begin_dodge(dir: Vector2i) -> void:
 	_slide_last_cell = Vector2i(roundi(_dodge_start_pos.x), roundi(_dodge_start_pos.z))
 	_dodge_t = 0.0
 	_dodge_duration = DODGE_DURATION * float(max_dist) / float(DODGE_DISTANCE)
+	# Peak heat (and therefore cooldown) scales with distance travelled: a dodge
+	# cut short by a wall runs less hot and recovers faster, so 1-cell dodges are
+	# cheap, quiet micro-steps in tight spaces.
+	_dodge_heat_max = float(max_dist) / float(DODGE_DISTANCE)
 	_dodging = true
 
 
@@ -1075,6 +1087,11 @@ func _process(delta: float) -> void:
 
 	if _dodge_cooldown_t > 0.0:
 		_dodge_cooldown_t = maxf(_dodge_cooldown_t - delta, 0.0)
+		if _dodge_cooldown_t == 0.0:
+			_dodge_flash = DODGE_FLASH_TIME   # just cooled to ready: fire the green blink
+			_ready_player.play()              # soft positive "dodge ready" chime
+	if _dodge_flash > 0.0:
+		_dodge_flash = maxf(_dodge_flash - delta, 0.0)
 	if _knock_cooldown_t > 0.0:
 		_knock_cooldown_t = maxf(_knock_cooldown_t - delta, 0.0)
 
@@ -1166,7 +1183,8 @@ func _process(delta: float) -> void:
 		if _dodge_t >= 1.0:
 			_dodging = false
 			position = _dodge_end_pos
-			_dodge_cooldown_t = DODGE_COOLDOWN
+			# Cooldown is proportional to the heat built up (distance travelled).
+			_dodge_cooldown_t = DODGE_COOLDOWN * _dodge_heat_max
 			_check_fall_at_settle()
 			if not _falling:
 				_check_ink_contact()
@@ -1514,6 +1532,16 @@ func _push_cube_material() -> void:
 	_player_material.set_shader_parameter("cover_color", _cover_color)
 	_player_material.set_shader_parameter("blend_phase", _blend_phase)
 	_player_material.set_shader_parameter("face_ink", _compute_face_ink())
+	# Dodge cooldown shown as edge heat on the cube (replaces the HUD bar). Heat
+	# BUILDS over the dodge (0 -> peak), then dissipates over the cooldown.
+	var heat: float
+	if _dodging:
+		heat = _dodge_heat_max * _dodge_t
+	else:
+		heat = clampf(_dodge_cooldown_t / DODGE_COOLDOWN, 0.0, 1.0)
+	_player_material.set_shader_parameter("cube_half", _box_mesh.size * 0.5)
+	_player_material.set_shader_parameter("dodge_heat", heat)
+	_player_material.set_shader_parameter("dodge_flash", _dodge_flash / DODGE_FLASH_TIME)
 
 
 func _compute_face_ink() -> PackedFloat32Array:
@@ -1560,6 +1588,30 @@ static func _make_step_sound() -> AudioStreamWAV:
 	for i in samples:
 		var env := exp(-float(i) / 300.0)
 		var val := int(sin(float(i) * TAU * 150.0 / rate) * env * 32767.0)
+		data[i * 2] = val & 0xFF
+		data[i * 2 + 1] = (val >> 8) & 0xFF
+	stream.data = data
+	return stream
+
+
+static func _make_ready_sound() -> AudioStreamWAV:
+	# Soft, short, rising blip: a gentle "dodge ready" confirmation. Quiet (low
+	# amplitude), pitch glides up a fifth, with a soft attack and gentle release.
+	var rate := 44100
+	var samples := int(rate * 0.16)
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = rate
+	stream.stereo = false
+	var data := PackedByteArray()
+	data.resize(samples * 2)
+	var phase := 0.0
+	for i in samples:
+		var u := float(i) / float(samples)
+		var freq := lerpf(680.0, 1020.0, u)
+		phase += TAU * freq / float(rate)
+		var env := minf(u / 0.05, 1.0) * (1.0 - smoothstep(0.6, 1.0, u))
+		var val := int(sin(phase) * env * 0.22 * 32767.0)
 		data[i * 2] = val & 0xFF
 		data[i * 2 + 1] = (val >> 8) & 0xFF
 	stream.data = data

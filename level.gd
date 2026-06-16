@@ -10,10 +10,6 @@ const RESTART_DELAY := 0.5
 
 const FLOOR_TILE_SCENE := preload("res://FloorTile.tscn")
 
-const DODGE_BAR_W := 140.0
-const DODGE_READY_COLOR := Color(0.3, 0.85, 1.0, 0.9)
-const DODGE_COOL_COLOR := Color(0.5, 0.5, 0.55, 0.7)
-
 # Any first gameplay input releases READY, not just movement: extending into a
 # shape or priming a dodge are as valid an opening move as a tumble. Event-driven
 # (see _input) so the starting press itself still applies the same frame.
@@ -53,7 +49,6 @@ var _enemies: Array[Node] = []
 @onready var _result_quit: Button = get_node_or_null("../UI/ResultsPanel/VBox/QuitButton")
 # Optional HUD nodes: present in level_template, absent in older hand-authored
 # scenes (sandbox/tutorials), so resolve them null-safely and guard every use.
-@onready var _dodge_fill: ColorRect = get_node_or_null("../UI/DodgeBar/Fill")
 @onready var _pause_panel: Control = get_node_or_null("../UI/PausePanel")
 @onready var _resume_button: Button = get_node_or_null("../UI/PausePanel/VBox/ResumeButton")
 @onready var _restart_button: Button = get_node_or_null("../UI/PausePanel/VBox/RestartButton")
@@ -160,7 +155,6 @@ func _process(delta: float) -> void:
 	var pulse: float = PULSE_BASE + sin(_pulse_t * PULSE_RATE) * PULSE_AMPLITUDE
 	_start_material.emission_energy_multiplier = pulse
 	_end_material.emission_energy_multiplier = pulse
-	_update_dodge_bar()
 
 	match state:
 		State.READY:
@@ -190,16 +184,6 @@ func _build_end_beacon() -> void:
 	beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	beam.position = Vector3(0.0, 2.5, 0.0)
 	_end_tile.add_child(beam)
-
-
-func _update_dodge_bar() -> void:
-	# Fill grows back as the cooldown drains; bright when dodge is actually
-	# available (ready, compact, not in the editor), dim while recharging.
-	if _dodge_fill == null:
-		return
-	var ratio: float = _player.get_dodge_cooldown_ratio()
-	_dodge_fill.size.x = DODGE_BAR_W * (1.0 - ratio)
-	_dodge_fill.color = DODGE_READY_COLOR if _player.is_dodge_available() else DODGE_COOL_COLOR
 
 
 func _show_results() -> void:
