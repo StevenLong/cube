@@ -1,76 +1,79 @@
 # Handoff, 2026-06-16
 
-## Headline: cube-as-display built and proven as a system. The cube's faces now show state: per-face ink, the dodge cooldown as edge heat (distance-scaled), and fail/success "screen" expressions. Plus left-stick menu nav, wedged as its own fail, and a longer fall. Loop validated; still in feel/clarity iteration.
+## Headline: reoriented after drift, then built the save / progression system end to end (4 slices, all verified). The cube now records per-level completion + best time + perfect-stealth, the levels menu shows it, and a new best time shows a gold-chevron face on the cube. Trackers re-synced to reality first; we held one spine the whole way and nothing drifted in.
 
-## State of the build
-Core loop validated. Editor is a full tool. Controls reworked. Recent work = playtest-driven
-polish, now centered on the cube-as-display system. Everything below is committed and pushed.
+## The reorientation (why this session started)
+The dev flagged that things felt "lost and forgotten." Diagnosis: since the validation
+gate passed (06-12) every session had been reactive playtest polish, and the task list
+had drifted from reality (per-face ink + fall-off-level were done but unchecked; the whole
+cube-as-display system wasn't in the plan). Fixes:
+- Re-synced game-dev/Cube Game Tasks.md to match the build (cube-as-display block added,
+  done items checked, save promoted out of Deferred into Phase 8.6).
+- Adopted an anti-drift rule: ONE spine at a time; playtest notes go to this parking list,
+  not into the live session, unless a note is blocking.
+- Picked the next spine deliberately: save / progression (the documented gate before a
+  level set; also unblocks the PB cube face we'd stubbed).
 
-## Cube-as-display system (the throughline this session)
-The player cube uses a custom shaded shader (shaders/cube.gdshader) whose faces are info
-"screens". The player pushes state to it each visual frame via `_push_cube_material()`:
-- **Per-face ink** (commit f811c37): inked faces show on the cube, mapped from logical face
-  marks to mesh faces via orientation so an inked face rolls with the cube. Replaced the old
-  whole-cube tint. Re-pushed at tumble-settle so it doesn't blink one frame stale.
-- **Dodge cooldown as heat** (commit 14f7755): a dodge heats the edges (glow builds over the
-  slide), dissipates from the corners inward to each edge's middle, then a green edge blink +
-  soft chime when ready. PEAK HEAT (and so cooldown TIME) scales with dodge distance, so a
-  short/blocked dodge is cheap + quiet -> a movement tech. Replaced the HUD dodge bar. Hot edge
-  darkens into a groove so it reads on a white cube, not just the inked one.
-- **Fail/success expressions** (commits 301b1a4, latest): on a fail the faces become a random
-  "broken screen" (0..3: missing-texture checker, red X, glitch bars, sad/frown face); on a
-  clear, a happy face (4..6: smiley, check, sunglasses smiley); a perfect stealth clear (guards
-  present, never spotted) shows a rainbow (7). Indices partitioned, named in shader + player.gd
-  (FAIL_EXPR_COUNT / SUCCESS_EXPR_START / SUCCESS_EXPR_COUNT / PERFECT_EXPR).
-  **Extend the system**: add a branch in expr_color + bump the relevant range; the player picks
-  and pushes via `_trigger_fail_face()` (player-side) or `show_success(perfect)` (level-side).
+## Save / progression (the spine, complete) -- Phase 8.6
+Static `SaveManager` class (save_manager.gd), same pattern as LevelLoader/LevelEditor (NO
+autoload). File: user://save.json, lazy-loaded, full flush per write, version + _migrate so
+a bad/old file can't crash a load. Levels keyed by resource path.
+- **Slice 1**: SaveManager + schema. `get_record(path)` (defensive copy; empty defaults),
+  `is_completed(path)`, `record_result(path, time, perfect)` (marks complete, keeps faster
+  time, perfect sticky-OR).
+- **Slice 2**: `level.gd _enter_complete()` records on a real clear. GUARDED: skips when
+  `LevelLoader.return_to_editor` or the path is empty, so editor playtests (scratch file)
+  never write a record.
+- **Slice 3**: `levels_menu.gd` shows a status column per row, read from the save: blank if
+  unplayed, `✓ 9.0s` if cleared, `✓ 9.0s ★` if perfect.
+- **Slice 4**: new-best cube face. `player.gd` NEW_BEST_EXPR = 8, `show_success(perfect,
+  new_best)` with precedence **perfect (7) > new-best (8) > ordinary success (4..6)**.
+  cube.gdshader index 8 = gold forward chevrons on dark (a speed/record motif, kept distinct
+  from the perfect rainbow and the menu ★). `_enter_complete` reads the OLD record before
+  overwriting to detect a genuine new best (first clear is ordinary, not a PB).
 
-## Also this session
-- **Left stick navigates menus** (d08a4ab): re-added the analog ui_* events the WASD override
-  had dropped.
-- **Wedged is its own fail** (301b1a4): distinct `wedged` signal -> WEDGED state + "Wedged"
-  results title, not counted as a fall.
-- **Longer fall** (301b1a4): FALL_END_Y -6 -> -25, so a fall plunges into the void (showing its
-  fail face) before the results, instead of freezing almost immediately.
+All four verified headless (SaveManager persistence + merge rules; real-play-records vs
+playtest-skipped; menu row wiring; precedence across runs; shader compiles in a smoke load).
 
-## NEXT
-1. **Start/end-of-level screen pass** (user flagged): right now the results panel covers the cube,
-   so the happy/fail face is barely seen. A proper intro/outro (camera + timing) should show the
-   cube's expression, the goal/par, etc. Ties to Cube Game Tasks Phase 8 "Level intro/outro".
-2. **`/add-obj` skill** — documented in SPEC_object_anatomy.md, prerequisite (stable registry/
-   loader/editor pattern) now MET, so it's unblocked. High leverage before producing objects/a
-   level set. (A fail-screen skill was considered and rejected: boilerplate is trivial, the
-   creative GLSL isn't automatable.)
-3. **Save / progression** — needed for the level set and unlocks the PB/high-score expression
-   variants (more success indices, gated on saved data).
-4. **Right-stick extend drift** (carried) — needs the user's hands to dial deadzone.
-5. More cube-display channels if wanted (debuff readouts — but no debuff system yet).
+## Expression index map (cube.gdshader expr_color + player.gd constants)
+FAIL 0..3 (checker / red X / glitch bars / sad face) ; SUCCESS 4..6 (smiley / check /
+sunglasses) ; PERFECT 7 (rainbow) ; NEW_BEST 8 (gold chevrons). Add one: new expr_color
+branch + bump the matching constant; the player picks via `_trigger_fail_face()` (fail) or
+`show_success(perfect, new_best)` (clear).
+
+## NEXT (parking list; pick ONE as the next spine)
+1. **Level set + content** -- the natural follow-on now that progress is tracked. A handful
+   of real levels (the editor can author them) gives the save data something to measure.
+   Tutorials (Phase 9) ride on top; their old scenes are stale and controller-broken, so
+   rebuild as data levels.
+2. **Start/end-of-level screen pass** -- results panel still covers the cube, so the new
+   success/fail faces are barely seen. Intro/outro (camera + timing) to show them + goal/par.
+   Ties to Phase 8 "Level intro/outro".
+3. **Broader save vision (DEFERRED until a level set exists)**: unlock chain, cosmetics,
+   optional-objective tracking. No point building these against a single level.
+4. **Right-stick extend drift** (carried) -- needs the dev's hands to dial deadzone.
 
 ## Tuning dials (cube display)
-- cube.gdshader: edge_band / edge_darken / glow_strength / heat_color / ready_color (dodge heat);
-  expr_color patterns; cube_half/dodge_heat/dodge_flash/expression are pushed by the player.
+- cube.gdshader: edge_band / edge_darken / glow_strength / heat_color / ready_color (dodge
+  heat); expr_color patterns (incl. the new chevron geometry at index 8).
 - player.gd: DODGE_FLASH_TIME, _ready_player.volume_db (-15), DODGE_COOLDOWN, FALL_END_Y (-25),
-  FAIL_EXPR_COUNT / SUCCESS_EXPR_* / PERFECT_EXPR.
+  FAIL_EXPR_COUNT / SUCCESS_EXPR_* / PERFECT_EXPR / NEW_BEST_EXPR.
 
 ## Open / loose (carried)
-- Infinite floor: deep columns + side fade to void (fade_start/fade_end shader uniforms; FLOOR_DEPTH
-  must exceed fade_end). Lock-puzzle telegraphs reworked (lock = tile+icon+expand ghost; unlock =
-  placement ghost shown only when gate open). Gate = raised/lowered red floor tiles.
-- Results panel covers the cube (the start/end pass above).
+- Infinite floor: deep columns + side fade to void (fade_start/fade_end; FLOOR_DEPTH > fade_end).
+- Lock-puzzle telegraphs reworked (lock = tile+icon+expand ghost; unlock = placement ghost
+  shown only when gate open). Gate = raised/lowered red floor tiles.
 - Editor previews for gate + lock zone still draw OLD ghosts (preview != play).
-- Tutorials: old hand-authored scenes; end screen predates the controller/results rework; rebuild
-  as data levels (Phase 9) fixes it.
 - DEBUG_DETECTION still true in enemy_sphere.gd. One global extend-lock per level (link layer pending).
 
 ## Verify recipe (`~/.local/bin/godot` v4.6; exit 0 even on errors, so grep). RUN FROM THE cube DIR.
 - Parse: `godot --headless --editor --quit 2>&1 | grep -E "SCRIPT ERROR|Parse Error|SHADER ERROR"`
-- SHADER runtime errors (e.g. `return` in fragment) are NOT caught by the parse check above; only
-  the smoke run catches them: `godot --headless --quit-after 60 res://painted_level.tscn 2>&1 | grep -i "SHADER ERROR"`.
-- Logic: throwaway `extends SceneTree` run with `-s`; `await process_frame` after add_child; physics
-  queries need ~6-8 frames; `paused = false` if you need the player to _process; annotate test var
-  types (untyped dynamic access fails inference); don't assign untyped literals to typed Array[T]
-  properties; PackedFloat32 compare with tolerance. Delete the script + `.uid` after.
+- SHADER runtime/compile errors (e.g. `return` in fragment) are NOT caught by parse; only a
+  smoke run is: `godot --headless --quit-after 30 res://painted_level.tscn 2>&1 | grep -i "SHADER ERROR"`.
+- Logic: throwaway `extends SceneTree` run with `-s`; the loader builds via call_deferred so
+  await ~6 frames after add_child before finding the Level node; set test var types; clean
+  user://save.json between cases (and after); delete the script + `.uid` when done.
 
 ## Memory
-- New `project_cube_display` (the cube-as-display system + how to extend expressions). Standing
-  cube memories unchanged.
+- Updated `project_cube_display` (expression map now includes NEW_BEST = 8; how to extend).
+  Standing cube + save memories otherwise unchanged.

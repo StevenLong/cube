@@ -50,6 +50,15 @@ func _add_row(level_name: String, path: String, deletable: bool) -> void:
 	if _first_button == null:
 		_first_button = play
 
+	var status := Label.new()
+	status.custom_minimum_size = Vector2(120, 48)
+	status.add_theme_font_size_override("font_size", 18)
+	status.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	status.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	status.add_theme_color_override("font_color", Color(0.5, 0.85, 0.6))
+	status.text = _status_text(path)
+	row.add_child(status)
+
 	var edit := Button.new()
 	edit.custom_minimum_size = Vector2(80, 48)
 	edit.add_theme_font_size_override("font_size", 18)
@@ -66,6 +75,18 @@ func _add_row(level_name: String, path: String, deletable: bool) -> void:
 		row.add_child(del)
 
 	_rows.add_child(row)
+
+
+func _status_text(path: String) -> String:
+	# Completion tick + best time from the save; a star marks a perfect-stealth clear.
+	# Blank for an unplayed level.
+	var rec: Dictionary = SaveManager.get_record(path)
+	if not rec["completed"]:
+		return ""
+	var t: String = "✓ %.1fs" % rec["best_time"]
+	if rec["perfect"]:
+		t += " ★"
+	return t
 
 
 func _user_level_files() -> Array:

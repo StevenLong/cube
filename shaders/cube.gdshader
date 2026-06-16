@@ -97,9 +97,21 @@ vec3 expr_color(int e, vec2 uv) {
 		float mouth = (1.0 - smoothstep(0.03, 0.055, abs(uv.y - fy))) * step(0.3, uv.x) * step(uv.x, 0.7);
 		vec3 c = mix(bg, vec3(0.03), glasses);
 		return mix(c, vec3(0.98), mouth);
+	} else if (e == 7) {
+		// "perfect" -- a bright, ordered rainbow (distinct from the chaotic fail bars).
+		return 0.5 + 0.5 * cos(6.2831 * (uv.y + vec3(0.0, 0.33, 0.67)));
 	}
-	// 7: "perfect" -- a bright, ordered rainbow (distinct from the chaotic fail bars).
-	return 0.5 + 0.5 * cos(6.2831 * (uv.y + vec3(0.0, 0.33, 0.67)));
+	// 8: "new best time" -- gold forward chevrons on dark (a speed / record motif,
+	// kept distinct from the perfect rainbow and the menu's perfect star).
+	vec3 bg = vec3(0.05, 0.04, 0.0);
+	float d = seg_dist(uv, vec2(0.34, 0.5), vec2(0.21, 0.72));
+	d = min(d, seg_dist(uv, vec2(0.34, 0.5), vec2(0.21, 0.28)));
+	d = min(d, seg_dist(uv, vec2(0.50, 0.5), vec2(0.37, 0.72)));
+	d = min(d, seg_dist(uv, vec2(0.50, 0.5), vec2(0.37, 0.28)));
+	d = min(d, seg_dist(uv, vec2(0.66, 0.5), vec2(0.53, 0.72)));
+	d = min(d, seg_dist(uv, vec2(0.66, 0.5), vec2(0.53, 0.28)));
+	float chev = 1.0 - smoothstep(0.04, 0.065, d);
+	return mix(bg, vec3(1.0, 0.82, 0.2), chev);
 }
 
 void fragment() {

@@ -212,7 +212,17 @@ func _enter_complete() -> void:
 	_player.clear_noise_waves()  # the tree pauses here; clear so no wave freezes on the floor
 	# Happy cube face; the special "perfect" face only when there were guards to
 	# evade and none ever spotted you. Pushed before the pause.
-	_player.show_success(not spotted and not _enemies.is_empty())
+	var perfect := not spotted and not _enemies.is_empty()
+	# A new best only counts if the level was already cleared AND this run was faster;
+	# the first-ever clear shows an ordinary success, not a personal best.
+	var new_best := false
+	# Persist progress, but only for real plays; an editor playtest runs a scratch
+	# file (return_to_editor) and must not write a record for it.
+	if not LevelLoader.return_to_editor and LevelLoader.requested_file != "":
+		var prev: Dictionary = SaveManager.get_record(LevelLoader.requested_file)
+		new_best = prev["completed"] and time_elapsed < prev["best_time"]
+		SaveManager.record_result(LevelLoader.requested_file, time_elapsed, perfect)
+	_player.show_success(perfect, new_best)
 	get_tree().paused = true
 	_result_title.text = "Level Complete"
 	_result_moves.text = "Moves: %d" % moves

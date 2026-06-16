@@ -33,6 +33,7 @@ const FAIL_EXPR_COUNT := 4     # fail "broken screen" faces are 0..3
 const SUCCESS_EXPR_START := 4  # success faces are 4..6
 const SUCCESS_EXPR_COUNT := 3
 const PERFECT_EXPR := 7        # special face for a perfect (unspotted) clear
+const NEW_BEST_EXPR := 8       # special face for a new best time (when not perfect)
 const TIP_ANGULAR_ACCEL := 25.0  # rad/s^2 — rotational gravity tipping the cube into the hole
 const TIP_INITIAL_VEL := 1.5  # rad/s initial kick; handles the knife-edge balance case
 const TIP_END_ANGLE := PI / 2.0  # at 90° the cuboid has tipped past the edge; hand off to straight drop
@@ -222,10 +223,16 @@ func _trigger_fail_face() -> void:
 	_push_cube_material()
 
 
-func show_success(perfect: bool) -> void:
-	# Called by the level on a clear: a happy face (random) or, for a perfect
-	# unspotted run, the special face. Pushed immediately (the tree pauses).
-	_expression = PERFECT_EXPR if perfect else SUCCESS_EXPR_START + randi() % SUCCESS_EXPR_COUNT
+func show_success(perfect: bool, new_best: bool = false) -> void:
+	# Called by the level on a clear. Precedence: a perfect (unspotted) run shows the
+	# special perfect face; otherwise a new best time shows the speed-record face;
+	# otherwise a random happy face. Pushed immediately (the tree pauses).
+	if perfect:
+		_expression = PERFECT_EXPR
+	elif new_best:
+		_expression = NEW_BEST_EXPR
+	else:
+		_expression = SUCCESS_EXPR_START + randi() % SUCCESS_EXPR_COUNT
 	_push_cube_material()
 
 
