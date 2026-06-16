@@ -26,6 +26,12 @@ uniform float side_line_falloff_width : hint_range(0.0, 0.5) = 0.0;
 uniform float side_line_falloff_exp : hint_range(1.0, 10.0) = 1.0;
 uniform float side_line_glow_strength : hint_range(0.0, 1.5) = 0.0;
 
+// Infinite-floor fade: wall column sides dissolve to the void colour as they
+// descend (matches grid_ground.gdshader). void_color must match the background.
+uniform vec3 void_color : source_color = vec3(0.03, 0.03, 0.04);
+uniform float fade_start = -0.5;
+uniform float fade_end = -45.0;
+
 varying vec3 v_world_pos;
 varying vec3 v_world_norm;
 
@@ -59,7 +65,9 @@ void fragment() {
 			side_line_falloff_exp,
 			side_line_glow_strength
 		);
-		ALBEDO = mix(side_color, grid_line_color, side_intensity);
+		vec3 side_albedo = mix(side_color, grid_line_color, side_intensity);
+		float depth_fade = clamp((fade_start - v_world_pos.y) / (fade_start - fade_end), 0.0, 1.0);
+		ALBEDO = mix(side_albedo, void_color, depth_fade);
 	} else {
 		// Top face: thin per-cell grid lines, nothing else.
 		vec2 cell_uv = fract(v_world_pos.xz + vec2(0.5));

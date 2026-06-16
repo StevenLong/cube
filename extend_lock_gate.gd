@@ -114,8 +114,10 @@ func _apply_visual() -> void:
 	# by the floor tile above it.
 	var top := lerpf(LOWERED_TOP, RAISED_TOP, _raise_t)
 	var center_y := top - BOX_H * 0.5
+	var lowered := _raise_t <= 0.01   # fully sunk: hide so it doesn't z-fight inside the deep floor column
 	for m in _meshes:
 		m.position.y = center_y
+		m.visible = not lowered
 	for c in _shapes:
 		c.position.y = center_y
 		c.disabled = _raise_t < 0.5   # passable once mostly lowered

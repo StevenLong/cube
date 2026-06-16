@@ -7,7 +7,7 @@
 
 [sub_resource type="Environment" id="Env"]
 background_mode = 1
-background_color = Color(0.03, 0.03, 0.05, 1)
+background_color = Color(0.03, 0.03, 0.04, 1)
 
 [sub_resource type="ShaderMaterial" id="VoidGrid"]
 shader = ExtResource("2")

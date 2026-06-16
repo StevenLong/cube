@@ -34,6 +34,14 @@ uniform vec3 top_base_color : source_color = vec3(0.06, 0.06, 0.12);
 uniform vec3 side_color : source_color = vec3(0.04, 0.04, 0.08);
 uniform vec3 grid_line_color : source_color = vec3(0.0, 1.0, 1.0);
 
+// Infinite-floor fade: the column SIDES dissolve to the void colour as they
+// descend, so deep platforms read as plunging into nothing rather than ending at
+// a visible bottom (which shows at steep near-top-down camera angles). void_color
+// must match the WorldEnvironment background so the fade is seamless.
+uniform vec3 void_color : source_color = vec3(0.03, 0.03, 0.04);
+uniform float fade_start = -0.5;   // world y where the side fade begins
+uniform float fade_end = -45.0;    // world y where the side is fully void (must be above FLOOR_DEPTH)
+
 // Top-face edge line: thin bright core + power-curve glow halo. The glow
 // drops fast at first (high exp) and lingers further than smoothstep would.
 uniform float line_core_width : hint_range(0.0, 0.05) = 0.008;
@@ -124,7 +132,9 @@ void fragment() {
 			side_line_falloff_exp,
 			side_line_glow_strength
 		);
-		ALBEDO = mix(side_color, grid_line_color, side_intensity);
+		vec3 side_albedo = mix(side_color, grid_line_color, side_intensity);
+		float depth_fade = clamp((fade_start - v_world_pos.y) / (fade_start - fade_end), 0.0, 1.0);
+		ALBEDO = mix(side_albedo, void_color, depth_fade);
 	} else {
 		vec2 world_xz = v_world_pos.xz;
 

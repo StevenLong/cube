@@ -27,7 +27,7 @@ class_name LevelLoader
 const TEMPLATE_PATH := "res://level_template.tscn"
 
 const WALL_TALL := 1.0
-const FLOOR_DEPTH := 2.0  # floor tiles are 2u-deep boxes with tops at y=0; walls share that bottom
+const FLOOR_DEPTH := 60.0  # visual depth of floor/wall columns; must exceed the shader fade_end and match FloorTile.tscn's mesh depth.
 const WALL_MATERIAL := preload("res://wall_material.tres")  # static grid look: thin top lines, floor-style sides, no dynamic overlays
 const SAFE_EDGE_HEIGHT := 0.4   # low invisible blocker; the red line is its only visual
 const SAFE_EDGE_Y := 0.02       # red line height above floor top
