@@ -170,8 +170,15 @@ overlay grid plus the object list.
 ## Current objects (catalog)
 
 - **Base tiles:** `floor` (`.`), `tall_wall` (`#`), `safety_edge` (was `=`),
-  `void` (space), `start` (`S`, placed single, exactly-one), `end` (`E`, single,
-  exactly-one).
+  `glass_wall` (`g`), `void` (space), `start` (`S`, placed single, exactly-one),
+  `end` (`E`, single, exactly-one).
+  - **`glass_wall`**: a 1u solid the body can't pass (a `Wall*` body on layer 1, so
+    it blocks the cube's tumble and routes enemy nav around it) but enemy vision and
+    detection see straight THROUGH it. Implemented by tagging the body into group
+    `glass`; `enemy_sphere` adds those RIDs to the `exclude` list of its three LoS
+    rays. Sits on its own floor tile (a clear pane can't mask a void) and its mesh is
+    not named `MeshInstance3D`, so the player's floor vision-cone reads through it.
+    Purpose: a risk-free window to teach guard behaviour. (See `_make_glass_rect`.)
 - **Overlay tiles:** `ink`, `water`.
 - **Instances:** `enemy_sphere` (`path`; `lethal_on_contact`; needs `Wall*` nav
   plus a grid_ground cone slot), `extend_lock_zone` (`single`; params `mode` +

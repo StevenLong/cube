@@ -41,6 +41,7 @@ static var requested_file: String = ""   # the active level's file. A launcher s
 static var return_to_editor: bool = false   # set by the editor's playtest; level.gd then returns to the editor on exit instead of the main menu
 
 var _edge_mat: StandardMaterial3D
+var _glass_mat: StandardMaterial3D
 var _wall_idx := 0          # running Wall* counter; nav keys off unique Wall names
 
 
@@ -51,6 +52,13 @@ func _ready() -> void:
 	_edge_mat.emission = Color(0.9, 0.15, 0.15)
 	_edge_mat.emission_energy_multiplier = SAFE_EDGE_ENERGY
 	_edge_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_glass_mat = StandardMaterial3D.new()
+	_glass_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_glass_mat.albedo_color = Color(0.4, 0.8, 1.0, 0.18)
+	_glass_mat.emission_enabled = true
+	_glass_mat.emission = Color(0.4, 0.8, 1.0)
+	_glass_mat.emission_energy_multiplier = 0.2
+	_glass_mat.cull_mode = BaseMaterial3D.CULL_DISABLED  # both faces of the pane visible
 	# Deferred: add_child into the freshly-entering scene root errors mid-_ready.
 	_load.call_deferred()
 
@@ -94,6 +102,7 @@ func _parse_base(rows: Array) -> Dictionary:
 	var floor_cells: Dictionary = {}
 	var tall: Array[Vector2i] = []
 	var edges: Array[Vector2i] = []
+	var glass: Array[Vector2i] = []
 	var start := Vector2i.ZERO
 	var end := Vector2i.ZERO
 	for z in rows.size():
@@ -113,9 +122,11 @@ func _parse_base(rows: Array) -> Dictionary:
 					tall.append(cell)
 				"safety_edge":
 					edges.append(cell)
+				"glass_wall":
+					glass.append(cell)
 				_:
 					pass             # void / unknown
-	return {"floor": floor_cells, "tall": tall, "edges": edges, "start": start, "end": end}
+	return {"floor": floor_cells, "tall": tall, "edges": edges, "glass": glass, "start": start, "end": end}
 
 
 func _parse_overlay(rows: Array) -> Dictionary:
@@ -151,6 +162,11 @@ func _populate(world: Node3D, data: Dictionary) -> void:
 	# nav / the guide-path BFS), not just the authored base cells.
 	_add_object_floor(data)
 
+	# A glass pane is a 1u-tall wall (not a sunk column), so it can't hide the void
+	# beneath it: give every glass cell a floor tile, like gate/zone footprints.
+	for cell in data["glass"]:
+		data["floor"][cell] = true
+
 	var floor_scene: PackedScene = ObjectRegistry.scene_for("floor")
 	for cell in data["floor"]:
 		var tile: Node3D = floor_scene.instantiate()
@@ -164,6 +180,8 @@ func _populate(world: Node3D, data: Dictionary) -> void:
 	# multi-cell boxes correctly already.
 	for rect in _merge_rects(data["tall"]):
 		world.add_child(_make_wall_rect(rect, WALL_TALL, WALL_MATERIAL))
+	for rect in _merge_rects(data["glass"]):
+		world.add_child(_make_glass_rect(rect))
 	for cell in data["edges"]:
 		_build_safety_edge(world, cell, data["floor"])
 
@@ -275,6 +293,8 @@ func _walkable_cells(data: Dictionary) -> Dictionary:
 	for cell in data.get("floor", {}):
 		out[cell] = true
 	for cell in data.get("tall", []):
+		out.erase(cell)
+	for cell in data.get("glass", []):
 		out.erase(cell)
 	for cell in data.get("edges", []):
 		out.erase(cell)
@@ -511,6 +531,41 @@ func _make_wall_rect(rect: Rect2i, height: float, mat: Material) -> StaticBody3D
 		mesh.mesh = box
 		mesh.set_surface_override_material(0, mat)
 		body.add_child(mesh)
+	var col := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = size
+	col.shape = shape
+	body.add_child(col)
+	return body
+
+
+func _make_glass_rect(rect: Rect2i) -> StaticBody3D:
+	# A glass wall: a normal layer-1 solid named Wall* — so it blocks the player's
+	# tumble and the sphere's body, and nav routes around it exactly like any wall —
+	# but tagged into group "glass" so enemy_sphere adds it to the EXCLUDE list of its
+	# vision rays. Guards therefore see and detect straight through it (the point: a
+	# risk-free window onto patrol behaviour) while it stays physically solid.
+	# It is 1u tall on its own floor tile (see _populate), not a sunk column, since a
+	# clear pane can't mask a void. The mesh is deliberately NOT named "MeshInstance3D"
+	# so player._push_walls_to_shader skips it and the floor cone reads through the glass.
+	var body := StaticBody3D.new()
+	body.name = "Wall%d" % _wall_idx
+	_wall_idx += 1
+	body.add_to_group("glass")
+	var size := Vector3(rect.size.x, WALL_TALL, rect.size.y)
+	body.position = Vector3(
+		rect.position.x + (rect.size.x - 1) * 0.5,
+		WALL_TALL * 0.5,
+		rect.position.y + (rect.size.y - 1) * 0.5
+	)
+	var mesh := MeshInstance3D.new()
+	mesh.name = "GlassPane"
+	var box := BoxMesh.new()
+	box.size = size
+	mesh.mesh = box
+	mesh.set_surface_override_material(0, _glass_mat)
+	mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	body.add_child(mesh)
 	var col := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
 	shape.size = size

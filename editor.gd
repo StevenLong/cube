@@ -594,6 +594,14 @@ func _preview_mesh(id: String) -> MeshInstance3D:
 			mat.albedo_color = Color(0.9, 0.15, 0.15)
 			mat.emission_enabled = true
 			mat.emission = Color(0.9, 0.15, 0.15)
+		"glass_wall":
+			# Transparent cyan pane: matches the in-game glass look (see _make_glass_rect).
+			mi.mesh = _box(Vector3(1, 1, 1))
+			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			mat.albedo_color = Color(0.4, 0.8, 1.0, 0.25)
+			mat.emission_enabled = true
+			mat.emission = Color(0.4, 0.8, 1.0)
+			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 		"enemy_sphere":
 			mi.mesh = _sphere(0.4)
 			mat.albedo_color = Color(0.7, 0.7, 0.75)

@@ -1,18 +1,56 @@
 extends Control
 
+# Tutorials menu: data-driven, one Play button per tutorial in order. Tutorials are
+# shipped data levels (res://levels/data/tut_*.json) launched through the same loader
+# path as the levels menu. Register a tutorial in TUTORIALS once it is promoted into
+# the repo; the displayed number is its position here, so reordering is automatic.
+# "Old Tutorials" opens the pre-pipeline .tscn tutorials, kept for reference only.
 
-@onready var _t1_button: Button = $VBox/Tutorial1Button
-@onready var _t2_button: Button = $VBox/Tutorial2Button
-@onready var _t3_button: Button = $VBox/Tutorial3Button
+const TUTORIALS := [
+	# {"name": "Movement", "path": "res://levels/data/tut_01_movement.json"},
+]
+
+@onready var _rows: VBoxContainer = $VBox/Scroll/Rows
+@onready var _old_button: Button = $VBox/OldTutorialsButton
 @onready var _back_button: Button = $VBox/BackButton
+
+var _first_button: Button = null
 
 
 func _ready() -> void:
-	_t1_button.pressed.connect(_load.bind("res://levels/tutorial_01_move.tscn"))
-	_t2_button.pressed.connect(_load.bind("res://levels/tutorial_02_gaps.tscn"))
-	_t3_button.pressed.connect(_load.bind("res://levels/tutorial_03_bridge.tscn"))
+	_build_list()
+	_old_button.pressed.connect(_load.bind("res://old_tutorials_menu.tscn"))
 	_back_button.pressed.connect(_load.bind("res://main_menu.tscn"))
-	_t1_button.grab_focus()
+	if _first_button != null:
+		_first_button.grab_focus()
+	else:
+		_old_button.grab_focus()
+
+
+func _build_list() -> void:
+	if TUTORIALS.is_empty():
+		var empty := Label.new()
+		empty.text = "No tutorials yet."
+		empty.add_theme_font_size_override("font_size", 18)
+		empty.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		empty.add_theme_color_override("font_color", Color(0.6, 0.6, 0.65))
+		_rows.add_child(empty)
+		return
+	for i in TUTORIALS.size():
+		var t: Dictionary = TUTORIALS[i]
+		var b := Button.new()
+		b.custom_minimum_size = Vector2(0, 48)
+		b.add_theme_font_size_override("font_size", 22)
+		b.text = "%d: %s" % [i + 1, t["name"]]
+		b.pressed.connect(_play.bind(t["path"]))
+		_rows.add_child(b)
+		if _first_button == null:
+			_first_button = b
+
+
+func _play(level_file: String) -> void:
+	LevelLoader.requested_file = level_file
+	_load("res://painted_level.tscn")
 
 
 func _input(event: InputEvent) -> void:

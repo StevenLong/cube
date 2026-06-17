@@ -96,6 +96,7 @@ var _player: Player
 var _pending_sounds: Array = []
 var _ground_material: ShaderMaterial
 var _nav_blocked: Dictionary = {}
+var _vision_exclude: Array[RID] = []  # glass-wall RIDs the LoS rays ignore (see-through-but-solid)
 var _path: Array[Vector2i] = []
 var _path_idx: int = 0
 var _search_cells: Array[Vector2i] = []
@@ -133,6 +134,11 @@ func _ready() -> void:
 	_setup_alert_glyph()
 	_setup_ghost()
 	_build_nav_grid()
+	# Glass walls are solid to bodies but transparent to vision: collect their RIDs
+	# so the LoS rays below see straight through them (see _make_glass_rect, group "glass").
+	for g in get_tree().get_nodes_in_group("glass"):
+		if g is CollisionObject3D:
+			_vision_exclude.append((g as CollisionObject3D).get_rid())
 	if waypoints.size() > 0:
 		_set_path_to(waypoints[_target_idx])
 	if DEBUG_DETECTION:
@@ -581,6 +587,7 @@ func _is_seeing_player() -> bool:
 				var sample := Vector3(fmin.x + dx, 0.5 + dy, fmin.y + dz)
 				var query := PhysicsRayQueryParameters3D.create(global_position, sample)
 				query.collide_with_areas = false
+				query.exclude = _vision_exclude   # glass is see-through
 				if space.intersect_ray(query).is_empty():
 					_last_visible_sample = sample
 					return true
@@ -625,6 +632,7 @@ func _visible_footprint_pos() -> Vector3:
 				continue
 		var query := PhysicsRayQueryParameters3D.create(origin, fp_world)
 		query.collide_with_areas = false
+		query.exclude = _vision_exclude   # glass is see-through
 		if space.intersect_ray(query).is_empty():
 			_seen_footprint_alpha = alphas[i]
 			return fp_world
@@ -1048,6 +1056,7 @@ func _visible_to_player() -> bool:
 	var space := get_world_3d().direct_space_state
 	var query := PhysicsRayQueryParameters3D.create(_player.global_position, global_position)
 	query.collide_with_areas = false
+	query.exclude = _vision_exclude   # glass is see-through
 	return space.intersect_ray(query).is_empty()
 
 
