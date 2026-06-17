@@ -1,71 +1,64 @@
-# Handoff, 2026-06-17
+# Handoff, 2026-06-17 (session 2)
 
-## Headline: started the level-set spine by replacing the tutorial plumbing. Reworked the tutorials menu to data-driven (empty until levels are authored) and parked the stale .tscn tutorials in an Old Tutorials submenu. Then built a new object the observation tutorials need: the glass_wall (solid to bodies, transparent to enemy vision), end to end and verified. Agreed a 6-tutorial set and the editor->tutorial promotion pipeline.
+## Headline: stood up a notes-intake protocol, then cleared the whole Phase 10 enemy/detection spine (N2, N8, N3) from the dev's playtest batch. N2 and N8 confirmed in playtest; N3 verified headless (feel-check pending). The dev also finished tutorials 1-5, but their files are not on this machine yet, so promotion is still blocked.
 
-## Tutorials menu rework (the spine for this session) -- Phase 9 plumbing
-The old system hard-coded three .tscn scene launchers; the new one mirrors the levels
-menu (data-driven). DONE + smoke-verified:
-- `tutorials_menu.gd` / `.tscn`: a `TUTORIALS` registry array (currently EMPTY -> shows
-  "No tutorials yet"), dynamic rows, launches JSON via `LevelLoader.requested_file` +
-  painted_level.tscn. Displayed number = array position (reorder = automatic).
-- `old_tutorials_menu.gd` / `.tscn`: NEW submenu reachable from Tutorials, launches the
-  three stale `levels/tutorial_*.tscn` for reference. Untouched and removable once their
-  content is rebuilt as data levels.
-- Nothing deleted; the .tscn tutorials still exist.
+## Notes-intake protocol (new standing rule)
+The dev wanted batches of notes triaged into a plan instead of derailing each session.
+Agreed protocol (saved as memory feedback_notes_intake): on a notes batch, itemize ->
+classify -> flag urgency -> ask clarifications (batched) -> file into the task list with
+a proposed order -> pick ONE spine. Triage is the deliverable; never implement from notes
+in the same pass; notes never change the active spine unless flagged Blocking and approved.
 
-## glass_wall object (enabler for observation tutorials) -- new base tile
-A 1u wall the body can't pass but enemy VISION sees through: a risk-free window to teach
-guard behaviour. DONE + verified (parse, default-level regression, and a built glass level
-asserting all wiring). Approach chosen for minimal blast radius: glass is a normal layer-1
-`Wall*` solid in EVERY system (player tumble-block, nav routing, noise, blend all free),
-and the ONLY detection change is that `enemy_sphere` excludes glass RIDs from its 3 LoS rays.
-- `object_registry.gd`: `glass_wall` base tile, glyph `g`. Auto-appears in the editor palette.
-- `level_loader.gd`: parses `g`, `_make_glass_rect` (merged panes, group "glass", mesh NOT
-  named "MeshInstance3D" so the floor cone reads through it), gives each glass cell a floor
-  tile (no void under a clear pane), keeps guide paths off glass.
-- `enemy_sphere.gd`: gathers group "glass" RIDs at _ready; `query.exclude = _vision_exclude`
-  on `_is_seeing_player`, `_visible_footprint_pos`, `_visible_to_player`.
-- `editor.gd`: glass preview mesh (cyan pane, not a grey box).
-- `SPEC_object_anatomy.md`: glass added to the base-tile catalog (anti-drift).
-- **v1 choices to remember**: glass BLOCKS sound (noise ray still treats it as a wall);
-  and because it is a layer-1 wall, the blend-cover test counts it, so DON'T flank the
-  player with glass on two opposite sides at their height or they would hide from a guard
-  looking through it. A normal one-sided window is unaffected. Both easy to special-case later.
+## Playtest batch triaged (game-dev/Cube Game Tasks.md)
+10 items filed. Phase 10 (the dev's chosen spine) = N2 + N8 + N3, now DONE. The rest is in
+a Backlog section: N4 (editor dodge), N6 (ink implies floor), N7 (place input buffering),
+N10 (remove last-known ghost, add a LoS scan line), N9a (blend colour match), N9b (blend
+idle animation), N1 (dodge chime clash), N5 (guide line beelines over a gap in PLAY).
 
-## Agreed tutorial set (signature situation each, not bare mechanic)
-1 Movement; 2 First guard (sprint + noise, guard introduced here); 3 Extension (lock gate);
-4 Blend (flush-height hide); 5 Ink + water; 6 Detection + pursuit capstone (folds in dodge;
-full graduated-detection model lives here). Glass unblocks #2 and #6 (watch the guard safely).
+## Phase 10: enemy/detection correctness (DONE, all in enemy_sphere.gd)
+- **N2**: vision cone decoupled from movement facing. New `_aim_dir` + `_update_aim`
+  (called at the top of `_process`): locks onto the last-seen cell in any alert state,
+  follows body forward in patrol (drifting toward a rising suspect as a telegraph). BOTH
+  the detection test (`_is_seeing_player`, footprint cone) and the visual cone
+  (`_update_cone_uniforms`) read it, so visible == detectable. Killed the corner-reroute
+  oscillation. Side effect (intended): once alerted, circling behind a guard no longer
+  drops detection; only breaking LoS or leaving range does. Dev confirmed fixed.
+- **N8**: `_visible_footprint_pos` skips any print on a cell the player currently occupies
+  (`_player.footprint_covers`), so the fresh print under a hidden cube stops pinning the
+  search onto the exact hiding spot and re-triggering alerts. Trail behind still followed.
+  Dev confirmed fixed.
+- **N3**: pursuit-speed floor. In `_pursue`, `pmult = maxf(PURSUIT_SPEED_MULT, PURSUIT_SPEED
+  / speed)`, so pursuit is at least PURSUIT_SPEED (4.5 u/s) whatever the patrol speed; a
+  fast guard keeps `speed * mult`. Walk is 3.33 u/s (1/TUMBLE_DURATION), sprint 6.67.
+  Measured pursuit 4.39 u/s (was 2.70, slower than walk). FEEL-CHECK PENDING; tune
+  PURSUIT_SPEED if a chase feels too sticky or too easy.
 
-## Promotion pipeline (memory: project_tutorial_pipeline)
-Dev builds + names + saves in the editor -> file lands at
-`~/.local/share/godot/app_userdata/Cube/levels/<slug>.json`. Dev says "level X is tutorial N".
-I copy it into `res://levels/data/tut_0N_<slug>.json`, set `meta.name`, register it in the
-`TUTORIALS` array. Shipped = read-only in the editor.
+## Tutorials (still the level-set spine)
+- Tutorials 1-5 AUTHORED by the dev (Movement, Sphere, Extension, Blend, Ink), but the
+  .json files are NOT on this machine. user:// does not sync across the dev's two machines.
+  To promote: bring the 5 files from ~/.local/share/godot/app_userdata/Cube/levels/ into
+  the cube repo (then git carries them), or paste the JSON. Then copy into
+  res://levels/data/tut_0N_*.json + register in tutorials_menu.gd TUTORIALS.
+- Tutorial 6 (Detection + pursuit capstone) should be built AFTER promotion, now that the
+  enemy behaves correctly.
 
-## NEXT (parking list; pick ONE as the next spine)
-1. **add-obj skill** (the agreed follow-on). Now that glass is a worked vision-interacting
-   example alongside enemy/zone/gate, codify the add-an-object path: registry entry, scene,
-   loader builder case, editor palette/preview, PLUS a cross-cutting checklist (nav `Wall*`
-   naming, vision mask/RID-exclude, noise, shader occlusion, the .name / .tres gotchas).
-2. **Author the tutorial levels** -- dev builds them in the editor (start with 1 Movement,
-   which needs nothing new), I promote via the pipeline. TUTORIALS is empty until then.
-3. **Broader save vision** (still deferred until a level set exists): unlock chain, cosmetics.
-4. **Right-stick extend drift** (carried) -- needs the dev's hands to dial deadzone.
+## NEXT (pick ONE; Phase 10 is closed)
+1. **Promote tutorials 1-5** once the files reach this machine (quick, finishes the spine).
+2. **Backlog spine: editor QoL** (N4 + N6 + N7) to smooth authoring. N4 cause is known
+   (editor sets god_mode true; dodge gate blocks on it).
+3. **Backlog spine: presentation** (N10 ghost -> scan line, N9a blend colour, N1 audio).
+4. **Tutorial 6 capstone** (after promotion).
+5. **N5 guide-line pathfinding** (PLAY-time BFS falls back to a straight line across a gap).
 
-## Open / loose (carried from prior sessions)
-- safety_edge still blocks enemy LoS (it is a `Wall*` body); design wants "see over". Untouched.
-- DEBUG_DETECTION still true in enemy_sphere.gd. One global extend-lock per level (link layer pending).
-- Editor previews for gate + lock zone still draw OLD ghosts (preview != play).
-- Results panel covers the cube on level complete (start/end-of-level screen pass still pending).
-
-## Verify recipe (`~/.local/bin/godot` v4.6; exit 0 even on errors, so grep). RUN FROM cube DIR.
+## Verify recipe (`~/.local/bin/godot` v4.6; exit 0 even on errors, so grep). FROM cube DIR.
 - Parse: `godot --headless --editor --quit 2>&1 | grep -E "SCRIPT ERROR|Parse Error|SHADER ERROR"`
 - Scene smoke: `godot --headless --quit-after 30 res://painted_level.tscn 2>&1 | grep -i "SHADER ERROR"`.
 - Logic: throwaway `extends SceneTree` with `-s`; add a LevelLoader, set
-  `LevelLoader.requested_file`, await ~8 frames (loader builds via call_deferred), inspect via
-  `find_child`. Clean user://*.json between/after; delete the script + `.uid` when done.
+  LevelLoader.requested_file, await ~10 frames (build is call_deferred), find_child the
+  nodes. The template's Level pauses the tree on _ready, so to test a node's per-frame
+  logic call its method directly (e.g. enemy.call("_pursue", dt)) rather than relying on
+  _process. Clean user://*.json after; delete the script + .uid when done.
 
-## Memory
-- Added `project_tutorial_pipeline` (the promotion workflow + agreed tutorial set).
-- glass_wall details live in SPEC_object_anatomy.md + code (not memory, to avoid duplication).
+## Memory updated this session
+- Added feedback_notes_intake (the triage protocol) and project_tutorial_pipeline (promotion).
+- Standing cube/save/glass memories unchanged.

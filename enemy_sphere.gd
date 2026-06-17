@@ -15,6 +15,7 @@ const SEARCH_DWELL := 0.6            # seconds paused at each checked tile so th
 const SEARCH_MAX_CELLS := 5         # cap of tiles checked around a source
 const SEARCH_ARRIVE := 0.35         # distance that counts as "at" a search tile
 const PURSUIT_SPEED_MULT := 1.5
+const PURSUIT_SPEED := 4.5  # absolute floor on pursuit speed (units/sec). Walking is 1/TUMBLE_DURATION (about 3.3 u/s), so pursuit has to beat it or the player just strolls away; sprint (about 6.7 u/s) still outruns it. A fast guard keeps speed * PURSUIT_SPEED_MULT when that is higher.
 const SUSPICIOUS_SPEED_MULT := 0.5
 const INVESTIGATE_SPEED_MULT := 1.0
 const VIEW_RADIUS := 8.0
@@ -24,6 +25,7 @@ const FOOTPRINT_VIEW_CONE_COS := 0.866  # cos(30°), so a 60° total cone
 const FOOTPRINT_RETARGET_DIST := 0.3
 const TURN_RATE := 5.0  # rad/s — 180° in ~0.6s
 const TURN_CRAWL_FRACTION := 0.5  # min fraction of speed kept through sharp turns (no dead stop)
+const AIM_TURN_RATE := 6.0  # rad/s the vision cone eases toward its look target, kept separate from body turning (N2: nav must not steer vision)
 const CORRIDOR_HYSTERESIS := 0.2  # corridor must stay clear this long before off-grid pursuit engages
 const SQRT2 := 1.4142135623730951  # diagonal step cost for 8-connected A*
 
@@ -110,6 +112,8 @@ var _debug_reveal: bool = false
 var _ghost: MeshInstance3D
 var _alert_glyph: Label3D
 var _investigate_sweep_angle: float = 0.0
+var _aim_dir: Vector2 = Vector2(0.0, 1.0)  # vision-cone direction (xz); decoupled from body facing so nav can't steer the cone
+var _aim_initialized: bool = false
 var _glyph_pop: float = 0.0
 var _sting_player: AudioStreamPlayer3D
 var _sting_alert: AudioStreamWAV
@@ -148,6 +152,7 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	_advance_pending_sounds(delta)
 	_trail_alpha = maxf(_trail_alpha - delta / Player.FOOTPRINT_FADE_TIME, 0.0)
+	_update_aim(delta)
 	var seeing := _is_seeing_player()
 	if seeing:
 		# Use the actually-visible cell, not the player's centre, so investigating
@@ -224,6 +229,34 @@ func _process(delta: float) -> void:
 	_update_ghost(seeing)
 
 
+func _update_aim(delta: float) -> void:
+	# The vision cone's direction, kept SEPARATE from the body's movement facing (N2).
+	# Welding the cone to travel direction caused an oscillation: a nav reroute around a
+	# corner swung the cone off the suspect -> sight lost -> de-escalate -> reroute back
+	# -> re-spot, forever. Now any alert state locks the cone onto the last-seen cell
+	# while the body moves along its nav path; PATROL looks where it walks, drifting
+	# toward a rising suspect (detection-weighted) as a telegraph. Uses last frame's
+	# _last_seen_pos to avoid a circular dependency with _is_seeing_player.
+	var body_fwd := -global_transform.basis.z
+	body_fwd.y = 0.0
+	var base := Vector2(body_fwd.x, body_fwd.z)
+	base = base.normalized() if base.length() > 0.0001 else _aim_dir
+	var look_target := base
+	var to_suspect := Vector2(_last_seen_pos.x - position.x, _last_seen_pos.z - position.z)
+	if _state != State.PATROL and to_suspect.length() > 0.05:
+		look_target = to_suspect.normalized()
+	elif _detection > 0.001 and to_suspect.length() > 0.05:
+		var blended := base.lerp(to_suspect.normalized(), _detection)
+		if blended.length() > 0.01:
+			look_target = blended.normalized()
+	if not _aim_initialized:
+		_aim_dir = look_target
+		_aim_initialized = true
+		return
+	var eased := _aim_dir.lerp(look_target, minf(delta * AIM_TURN_RATE, 1.0))
+	_aim_dir = eased.normalized() if eased.length() > 0.001 else look_target
+
+
 func _update_detection(delta: float, seeing: bool) -> void:
 	# Graduated visual certainty. Fills while the player is seen, scaled by how
 	# close and how large they are (and faster when already alert); drains
@@ -267,6 +300,10 @@ func _pursue(delta: float) -> void:
 	# extended bar that is the exposed end currently in view, so the sphere closes on
 	# what it can actually see instead of pathing toward the hidden base cell.
 	var target := _last_seen_pos
+	# Pursuit speed has an absolute floor (PURSUIT_SPEED) so a walking player can't
+	# stroll away from any guard, whatever its patrol speed; a fast guard keeps the
+	# higher speed * PURSUIT_SPEED_MULT. Expressed as the mult _move_toward expects.
+	var pmult := maxf(PURSUIT_SPEED_MULT, PURSUIT_SPEED / maxf(speed, 0.01))
 	if _has_pursuit_corridor(target):
 		_corridor_open_timer += delta
 	else:
@@ -275,13 +312,13 @@ func _pursue(delta: float) -> void:
 		_path = []
 		_path_idx = 0
 		_pursuit_repath_timer = 0.0
-		_move_toward(target, delta, PURSUIT_SPEED_MULT)
+		_move_toward(target, delta, pmult)
 		return
 	_pursuit_repath_timer -= delta
 	if _pursuit_repath_timer <= 0.0:
 		_set_path_to(target)
 		_pursuit_repath_timer = PURSUIT_REPATH_INTERVAL
-	_follow_path(delta, PURSUIT_SPEED_MULT, target)
+	_follow_path(delta, pmult, target)
 
 
 func _has_pursuit_corridor(target: Vector3) -> bool:
@@ -553,12 +590,9 @@ func _is_seeing_player() -> bool:
 	var cone_active := _state != State.INVESTIGATE
 	var forward := Vector3.ZERO
 	if cone_active:
-		forward = -global_transform.basis.z
-		forward.y = 0.0
-		var fl := forward.length()
-		if fl < 0.0001:
-			return false
-		forward /= fl
+		# Cone direction is _aim_dir (decoupled from body facing, see _update_aim), so a
+		# nav reroute does not pull the detection cone off the suspect.
+		forward = Vector3(_aim_dir.x, 0.0, _aim_dir.y)
 	var space := get_world_3d().direct_space_state
 	# During a dodge the cube is a 1x1 sliding between cells; track its VISUAL
 	# position, not grid_pos (which snapped to the landing cell when the dodge
@@ -606,12 +640,7 @@ func _visible_footprint_pos() -> Vector3:
 	var skip_cone := _state == State.INVESTIGATE
 	var forward := Vector3.ZERO
 	if not skip_cone:
-		forward = -global_transform.basis.z
-		forward.y = 0.0
-		var fl := forward.length()
-		if fl < 0.0001:
-			return Vector3.INF
-		forward /= fl
+		forward = Vector3(_aim_dir.x, 0.0, _aim_dir.y)   # same decoupled aim as the body cone
 	var origin := global_position
 	var space := get_world_3d().direct_space_state
 	for i in range(positions.size() - 1, -1, -1):
@@ -619,6 +648,11 @@ func _visible_footprint_pos() -> Vector3:
 		# investigated. _trail_alpha decays in lockstep with print fade, so the
 		# cleared trail stays cleared while later prints still qualify.
 		if alphas[i] <= _trail_alpha:
+			continue
+		# N8: never react to a print on a cell the player currently occupies. A fresh
+		# print under a hidden cube otherwise pins the search onto the exact hiding spot
+		# and re-triggers alerts until it fades; the trail just behind them still leads here.
+		if _player.footprint_covers(Vector2i(roundi(positions[i].x), roundi(positions[i].y))):
 			continue
 		var p := positions[i]
 		var fp_world := Vector3(p.x, 0.05, p.y)
@@ -694,33 +728,21 @@ func _cell_to_world(cell: Vector2i) -> Vector3:
 
 
 func _update_cone_uniforms(delta: float) -> void:
-	var forward := -global_transform.basis.z
-	forward.y = 0.0
-	var fl := forward.length()
-	var dir_2d := Vector2(1.0, 0.0)
-	if fl > 0.0001:
-		dir_2d = Vector2(forward.x / fl, forward.z / fl)
 	var origin := Vector2(position.x, position.z)
-
 	if _state == State.INVESTIGATE:
 		_update_search_cone(delta, origin)
 		return
 
-	# Visual ladder: the cone is the detection fill. As _detection rises it
-	# narrows toward a tight beam, ramps grey -> yellow -> red, and aims at the
-	# suspect so the narrowing beam keeps the target lit (and marks last-known).
-	var aim := dir_2d
-	var to_suspect := Vector2(_last_seen_pos.x - position.x, _last_seen_pos.z - position.z)
-	if _detection > 0.001 and to_suspect.length() > 0.05:
-		var blended := dir_2d.lerp(to_suspect.normalized(), _detection)
-		if blended.length() > 0.01:
-			aim = blended.normalized()
+	# Visual ladder: the cone is the detection fill. As _detection rises it narrows
+	# toward a tight beam and ramps grey -> yellow -> red. It points along _aim_dir, the
+	# SAME direction the detection test uses (see _update_aim), so what you see is what it
+	# can detect, and the cone tracks the suspect during alert instead of the body's path.
 	var half_cos := lerpf(VIEW_CONE_COS, CONE_FOCUS_COS, _detection)
 	var col := _detection_color(_detection)
 	var alpha := lerpf(CONE_PATROL_ALPHA, CONE_LOCKED_ALPHA, _detection)
 	# Independent of _visibility_alpha: the floor cone stays readable when the enemy
 	# body is occluded. The shader's per-pixel LoS still hides cone on unseen ground.
-	_write_cone(origin, aim, VIEW_RADIUS, half_cos, _color_to_vec3(col), alpha)
+	_write_cone(origin, _aim_dir, VIEW_RADIUS, half_cos, _color_to_vec3(col), alpha)
 
 
 func _update_search_cone(delta: float, origin: Vector2) -> void:
