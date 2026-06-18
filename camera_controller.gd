@@ -22,9 +22,16 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
-	var tilt := Input.get_axis("camera_tilt_down", "camera_tilt_up")
-	_elevation = clampf(_elevation + tilt * TILT_SPEED * delta, ELEV_MIN, ELEV_MAX)
-	saved_elevation = _elevation
+	# Don't let the camera tilt keys (R/F) bleed through the UI: while a menu or text
+	# field holds keyboard focus, R/F belong to it (typing a level name, moving through
+	# a menu), not the camera. A focused-but-hidden control (a just-closed panel) does
+	# not count, so camera control resumes the instant the UI goes away. (N13)
+	var focus_owner := get_viewport().gui_get_focus_owner()
+	var ui_active := focus_owner != null and focus_owner.is_visible_in_tree()
+	if not ui_active:
+		var tilt := Input.get_axis("camera_tilt_down", "camera_tilt_up")
+		_elevation = clampf(_elevation + tilt * TILT_SPEED * delta, ELEV_MIN, ELEV_MAX)
+		saved_elevation = _elevation
 
 	var h := DISTANCE * cos(_elevation)
 	var v := DISTANCE * sin(_elevation)
