@@ -7,7 +7,11 @@ extends Control
 # "Old Tutorials" opens the pre-pipeline .tscn tutorials, kept for reference only.
 
 const TUTORIALS := [
-	# {"name": "Movement", "path": "res://levels/data/tut_01_movement.json"},
+	{"name": "Movement", "path": "res://levels/data/tut_01_movement.json"},
+	{"name": "Sphere", "path": "res://levels/data/tut_02_sphere.json"},
+	{"name": "Extension", "path": "res://levels/data/tut_03_extension.json"},
+	{"name": "Blend", "path": "res://levels/data/tut_04_blend.json"},
+	{"name": "Ink", "path": "res://levels/data/tut_05_ink.json"},
 ]
 
 @onready var _rows: VBoxContainer = $VBox/Scroll/Rows
