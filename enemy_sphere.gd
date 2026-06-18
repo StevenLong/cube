@@ -112,7 +112,7 @@ var _visibility_alpha: float = 1.0
 var _visibility_initialized: bool = false
 var _debug_label: Label
 var _debug_reveal: bool = false
-var _ghost: MeshInstance3D
+var _scan_line: MeshInstance3D
 var _alert_glyph: Label3D
 var _investigate_sweep_angle: float = 0.0
 var _aim_dir: Vector2 = Vector2(0.0, 1.0)  # vision-cone direction (xz); decoupled from body facing so nav can't steer the cone
@@ -139,7 +139,7 @@ func _ready() -> void:
 	_hum_player.play()
 	_setup_stings()
 	_setup_alert_glyph()
-	_setup_ghost()
+	_setup_scan_line()
 	_build_nav_grid()
 	# Glass walls are solid to bodies but transparent to vision: collect their RIDs
 	# so the LoS rays below see straight through them (see _make_glass_rect, group "glass").
@@ -229,7 +229,7 @@ func _process(delta: float) -> void:
 	_update_hum(delta)
 	_update_debug_label()
 	_update_debug_reveal()
-	_update_ghost(seeing)
+	_update_scan_line(seeing, footprint_pos)
 
 
 func _update_aim(delta: float) -> void:
@@ -482,24 +482,27 @@ func _unhandled_input(event: InputEvent) -> void:
 		_debug_reveal = not _debug_reveal
 
 
-func _setup_ghost() -> void:
-	# Last-known-position readout: a translucent cube parked where the enemy last knew
-	# the player to be. A gameplay cue (not debug), shown only while alerted and unable
-	# to see the player right now — a live target needs no marker, so it reads as "the
-	# search is happening here." top_level keeps it in world space; no_depth_test keeps
-	# it readable when the spot is behind a wall, like the floor cone.
-	_ghost = MeshInstance3D.new()
-	_ghost.top_level = true
-	var mesh := BoxMesh.new()
-	mesh.size = Vector3.ONE
-	_ghost.mesh = mesh
+func _setup_scan_line() -> void:
+	# Active line-of-sight readout (N10): a thin emissive beam the enemy draws to
+	# whatever it directly sees right now (the player, or a footprint it has eyes on).
+	# Replaces the last-known ghost marker: instead of "the search is here" it shows
+	# "I can see you THERE, right now." Tinted by alert state so it carries the threat
+	# level. top_level keeps it in world space so both endpoints are set directly.
+	_scan_line = MeshInstance3D.new()
+	_scan_line.top_level = true
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = 0.02
+	mesh.bottom_radius = 0.02
+	mesh.height = 1.0
+	mesh.radial_segments = 6
+	mesh.rings = 0
+	_scan_line.mesh = mesh
 	var mat := StandardMaterial3D.new()
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.no_depth_test = true
-	mat.albedo_color = Color(1, 1, 1, 0.25)
-	_ghost.material_override = mat
-	_ghost.visible = false
-	add_child(_ghost)
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.emission_enabled = true
+	_scan_line.material_override = mat
+	_scan_line.visible = false
+	add_child(_scan_line)
 
 
 func _update_debug_reveal() -> void:
@@ -509,19 +512,35 @@ func _update_debug_reveal() -> void:
 		_alert_glyph.no_depth_test = _debug_reveal
 
 
-func _update_ghost(seeing: bool) -> void:
-	# Show the last-known marker only once the enemy has lost sight: alerted (not
-	# patrol) and not currently seeing the player. Tint it by alert state so the cue
-	# carries the threat level (yellow / orange / red).
-	if _ghost == null:
+func _update_scan_line(seeing: bool, footprint_pos: Vector3) -> void:
+	# Draw the beam only while the enemy has direct sight of its focus: the player
+	# when seen, otherwise a footprint currently in view. No sight -> no line (the
+	# search cone carries the lost-sight case now that the ghost is gone).
+	if _scan_line == null:
 		return
-	var show_ghost := _state != State.PATROL and not seeing
-	_ghost.visible = show_ghost
-	if show_ghost:
-		_ghost.position = Vector3(_last_seen_pos.x, 0.5, _last_seen_pos.z)
-		var col := _state_color()
-		col.a = 0.3
-		(_ghost.material_override as StandardMaterial3D).albedo_color = col
+	var target := Vector3.INF
+	if seeing:
+		target = _last_visible_sample
+	elif footprint_pos != Vector3.INF:
+		target = Vector3(footprint_pos.x, 0.5, footprint_pos.z)
+	if target == Vector3.INF:
+		_scan_line.visible = false
+		return
+	var a := global_position
+	var dir := target - a
+	var length := dir.length()
+	if length < 0.01:
+		_scan_line.visible = false
+		return
+	_scan_line.visible = true
+	# Orient the unit cylinder (its local Y is its length) along the sightline and
+	# scale that axis to the distance, so the beam spans enemy -> target exactly.
+	var basis := Basis(Quaternion(Vector3.UP, dir / length)) * Basis.from_scale(Vector3(1.0, length, 1.0))
+	_scan_line.global_transform = Transform3D(basis, a + dir * 0.5)
+	var col := _state_color()
+	var mat := _scan_line.material_override as StandardMaterial3D
+	mat.albedo_color = col
+	mat.emission = col
 
 
 func _on_player_noise(origin: Vector2, max_radius: float, duration: float) -> void:

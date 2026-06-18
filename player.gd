@@ -49,6 +49,7 @@ const BLEND_ENTER_TIME := 0.4  # seconds in cover + still before is_blending eng
 const BLEND_EXIT_TIME := 0.15  # faster fade-out so peeking out is visible to enemies sooner than re-blending
 const COLOR_NORMAL := Color(0.9, 0.9, 0.9)
 const COLOR_BLENDING := Color(0.4, 0.4, 0.45)  # fallback when no wall material can be sampled
+const COLOR_WALL_SIDE := Color(0.04, 0.04, 0.08)  # the wall shader's side_color (shaders/wall.gdshader). Walls share one ShaderMaterial, so blend adopts this single colour instead of sampling per wall (N9a); true per-wall sampling deferred.
 const COLOR_MARKED := Color(0.25, 0.35, 0.55)
 const COLOR_LOCKED := Color(0.85, 0.5, 0.15)  # extend-locked: committed to a forced shape
 
@@ -374,6 +375,17 @@ func _cell_wall_color(cell: Vector2i) -> Color:
 				mat = mi.mesh.surface_get_material(0)
 			if mat is StandardMaterial3D:
 				return (mat as StandardMaterial3D).albedo_color
+			if mat is ShaderMaterial:
+				# Walls share the wall shader (a ShaderMaterial), so there is no per-wall
+				# albedo to read yet. Adopt the single wall side colour so blend matches
+				# the wall instead of going grey (N9a); per-wall sampling is deferred.
+				# Honour an overridden side_color if the material happens to set one.
+				var sc: Variant = (mat as ShaderMaterial).get_shader_parameter("side_color")
+				if sc is Color:
+					return sc
+				if sc is Vector3:
+					return Color((sc as Vector3).x, (sc as Vector3).y, (sc as Vector3).z)
+				return COLOR_WALL_SIDE
 	return Color(0, 0, 0, 0)
 
 
@@ -1628,24 +1640,35 @@ static func _make_step_sound() -> AudioStreamWAV:
 
 
 static func _make_ready_sound() -> AudioStreamWAV:
-	# Soft, short, rising blip: a gentle "dodge ready" confirmation. Quiet (low
-	# amplitude), pitch glides up a fifth, with a soft attack and gentle release.
+	# Bright two-note bell pluck for "dodge ready". Timbre is deliberately unlike the
+	# enemy stings (those are pure gliding sines): this is struck and harmonically rich,
+	# at two FIXED pitches a rising fifth apart (A5 then E6), so it reads as a positive
+	# musical confirmation, never an alert "?" (N1).
 	var rate := 44100
-	var samples := int(rate * 0.16)
+	var dur := 0.22
+	var samples := int(rate * dur)
 	var stream := AudioStreamWAV.new()
 	stream.format = AudioStreamWAV.FORMAT_16_BITS
 	stream.mix_rate = rate
 	stream.stereo = false
 	var data := PackedByteArray()
 	data.resize(samples * 2)
-	var phase := 0.0
 	for i in samples:
-		var u := float(i) / float(samples)
-		var freq := lerpf(680.0, 1020.0, u)
-		phase += TAU * freq / float(rate)
-		var env := minf(u / 0.05, 1.0) * (1.0 - smoothstep(0.6, 1.0, u))
-		var val := int(sin(phase) * env * 0.22 * 32767.0)
+		var t := float(i) / float(rate)
+		var s := _bell_partials(880.0, t) + _bell_partials(1318.5, t - dur * 0.5)
+		var val := int(clampf(s * 0.12, -1.0, 1.0) * 32767.0)
 		data[i * 2] = val & 0xFF
 		data[i * 2 + 1] = (val >> 8) & 0xFF
 	stream.data = data
 	return stream
+
+
+static func _bell_partials(freq: float, lt: float) -> float:
+	# One struck bell voice: fundamental plus two quieter, faster-decaying partials.
+	# Silent before its onset (lt < 0) so notes can be staggered into a small arpeggio.
+	if lt < 0.0:
+		return 0.0
+	var s := sin(TAU * freq * lt) * exp(-6.0 * lt)
+	s += 0.5 * sin(TAU * freq * 2.0 * lt) * exp(-9.0 * lt)
+	s += 0.25 * sin(TAU * freq * 3.01 * lt) * exp(-12.0 * lt)
+	return s
