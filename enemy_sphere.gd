@@ -25,6 +25,7 @@ const FOOTPRINT_VIEW_CONE_COS := 0.866  # cos(30°), so a 60° total cone
 const FOOTPRINT_RETARGET_DIST := 0.3
 const TURN_RATE := 5.0  # rad/s — 180° in ~0.6s
 const TURN_CRAWL_FRACTION := 0.5  # min fraction of speed kept through sharp turns (no dead stop)
+const SPEED_RAMP := 4.0  # u/s^2 the sphere accelerates toward its commanded speed, so a jump to pursuit speed builds up over ~0.6s instead of snapping on. Higher = snappier. TUNABLE.
 const AIM_TURN_RATE := 6.0  # rad/s the vision cone eases toward its look target, kept separate from body turning (N2: nav must not steer vision)
 const CORRIDOR_HYSTERESIS := 0.2  # corridor must stay clear this long before off-grid pursuit engages
 const SQRT2 := 1.4142135623730951  # diagonal step cost for 8-connected A*
@@ -45,9 +46,10 @@ const PURSUIT_LOS_PADDING := 0.45
 # enemy's visual certainty; thresholds drive the PATROL/SUSPICIOUS/PURSUIT ladder.
 const DETECT_FILL_RATE := 2.0        # per second at full exposure factors
 const DETECT_DRAIN_RATE := 0.4       # per second when not seeing
+const DETECT_PURSUIT_DRAIN_RATE := 0.2  # slower bleed while already in PURSUIT: a brief LoS break mid-chase (a corner, a pillar) should not de-escalate the guard. Lower = stickier pursuit. TUNABLE.
 const DETECT_SUSPICIOUS := 0.25      # PATROL -> SUSPICIOUS
 const DETECT_PURSUIT := 1.0          # -> PURSUIT (full bar)
-const DETECT_PURSUIT_KEEP := 0.5     # stay in PURSUIT until drained below this
+const DETECT_PURSUIT_KEEP := 0.35    # stay in PURSUIT until drained below this. With the slow pursuit drain above, ~3.3s of fully lost sight before dropping to INVESTIGATE (was ~1.25s). TUNABLE.
 const DETECT_MIN_PROXIMITY := 0.15   # fill floor at cone edge
 const DETECT_SIZE_WEIGHT := 0.15     # per extension unit
 const DETECT_ALERT_FILL_MULT := 1.5  # faster fill when already alert
@@ -105,6 +107,7 @@ var _search_cells: Array[Vector2i] = []
 var _search_dwell: float = 0.0
 var _pursuit_repath_timer: float = 0.0
 var _corridor_open_timer: float = 0.0
+var _speed_mult: float = 1.0  # eased toward the commanded speed mult (see _move_toward / SPEED_RAMP) so speed changes accelerate in instead of snapping
 var _visibility_alpha: float = 1.0
 var _visibility_initialized: bool = false
 var _debug_label: Label
@@ -271,7 +274,10 @@ func _update_detection(delta: float, seeing: bool) -> void:
 		var alert := DETECT_ALERT_FILL_MULT if _state != State.PATROL else 1.0
 		_detection += DETECT_FILL_RATE * proximity * size * alert * delta
 	else:
-		_detection -= DETECT_DRAIN_RATE * delta
+		# Pursuit holds on harder: drain slower while chasing so a momentary LoS break
+		# (rounding a corner, a pillar) doesn't immediately bleed off the lock.
+		var drain := DETECT_PURSUIT_DRAIN_RATE if _state == State.PURSUIT else DETECT_DRAIN_RATE
+		_detection -= drain * delta
 	_detection = clampf(_detection, 0.0, 1.0)
 
 
@@ -362,7 +368,11 @@ func _move_toward(target_pos: Vector3, delta: float, speed_mult: float) -> void:
 	# in place at corners.
 	var align := clampf(cos(angle_off), 0.0, 1.0)
 	var speed_factor := lerpf(TURN_CRAWL_FRACTION, 1.0, align)
-	var step := minf(speed * speed_mult * speed_factor * delta, distance)
+	# Ease the commanded multiplier toward its target at a fixed acceleration so the
+	# jump to pursuit speed builds up instead of snapping on. Ramp in velocity space
+	# (divide by speed) so the build-up time is consistent whatever the base speed.
+	_speed_mult = move_toward(_speed_mult, speed_mult, SPEED_RAMP / maxf(speed, 0.01) * delta)
+	var step := minf(speed * _speed_mult * speed_factor * delta, distance)
 	# Backstop for every locomotion path: never step onto a non-floor cell. The
 	# corridor/clear-walk checks gate the big moves; this catches the rest (and
 	# stalls the sphere at a gap edge instead of letting it float across).
@@ -585,7 +595,12 @@ func _is_seeing_player() -> bool:
 	# the cuboid: column gates (range, cone) run once per column, then a ray per
 	# height. INVESTIGATE drops the cone filter (active 360° scan). First sample
 	# that passes all gates wins.
-	if _player.is_blending:
+	# Blending normally defeats vision outright. The exception: a guard already in
+	# PURSUIT watched the cube drop into cover, so blending right in front of an active
+	# pursuer is not an escape. We fall through to the cone + LoS test below, which still
+	# returns false if the cube is actually out of sight (occluded, or outside the cone /
+	# range) — so blending behind cover mid-pursuit, or in any lower alert state, still works.
+	if _player.is_blending and _state != State.PURSUIT:
 		return false
 	var cone_active := _state != State.INVESTIGATE
 	var forward := Vector3.ZERO
