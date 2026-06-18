@@ -44,6 +44,7 @@ var _enemies: Array[Node] = []
 @onready var _result_moves: Label = get_node("../UI/ResultsPanel/VBox/Moves")
 @onready var _result_time: Label = get_node("../UI/ResultsPanel/VBox/Time")
 @onready var _result_spotted: Label = get_node("../UI/ResultsPanel/VBox/Spotted")
+@onready var _result_next: Button = get_node_or_null("../UI/ResultsPanel/VBox/NextButton")
 @onready var _result_restart: Button = get_node_or_null("../UI/ResultsPanel/VBox/RestartButton")
 @onready var _result_back_button: Button = get_node_or_null("../UI/ResultsPanel/VBox/BackToEditorButton")
 @onready var _result_quit: Button = get_node_or_null("../UI/ResultsPanel/VBox/QuitButton")
@@ -102,6 +103,8 @@ func _ready() -> void:
 		_result_quit.pressed.connect(_exit_to_menu)
 		_result_back_button.pressed.connect(_back_to_editor)
 		_result_back_button.visible = in_playtest
+	if _result_next != null:
+		_result_next.pressed.connect(_next_level)
 	_enter_ready()
 
 
@@ -130,6 +133,25 @@ func _toggle_pause() -> void:
 
 func _restart() -> void:
 	get_tree().paused = false
+	get_tree().reload_current_scene()
+
+
+func _has_next_level() -> bool:
+	# True when this real play belongs to a launcher's set and isn't its last entry.
+	if LevelLoader.return_to_editor:
+		return false
+	var idx := LevelLoader.sequence.find(LevelLoader.requested_file)
+	return idx >= 0 and idx + 1 < LevelLoader.sequence.size()
+
+
+func _next_level() -> void:
+	# Advance to the next file in the set, then reload painted_level (the loader
+	# reads the new requested_file on reload, exactly as restart replays the same one).
+	if not _has_next_level():
+		return
+	var idx := LevelLoader.sequence.find(LevelLoader.requested_file)
+	get_tree().paused = false
+	LevelLoader.requested_file = LevelLoader.sequence[idx + 1]
 	get_tree().reload_current_scene()
 
 
@@ -189,7 +211,10 @@ func _build_end_beacon() -> void:
 
 func _show_results() -> void:
 	_results_panel.show()
-	if _result_restart != null:
+	# Default focus to Next when it's offered (success + more in the set), else Restart.
+	if _result_next != null and _result_next.visible:
+		_result_next.grab_focus()
+	elif _result_restart != null:
 		_result_restart.grab_focus()
 
 
@@ -230,6 +255,12 @@ func _enter_complete() -> void:
 	_result_spotted.text = "Spotted: %s" % ("Yes" if spotted else "No")
 	if not _enemies.is_empty():
 		_result_spotted.show()
+	# Offer "Next" only on a real clear (not a playtest) when the launching menu's
+	# set has another level after this one; hidden on the last entry and otherwise.
+	if _result_next != null:
+		_result_next.visible = _has_next_level()
+		if _result_next.visible:
+			_result_next.text = "Next %s" % LevelLoader.sequence_noun
 	_show_results()
 
 

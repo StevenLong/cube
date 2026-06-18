@@ -56,6 +56,11 @@ func _build_list() -> void:
 
 func _play(level_file: String) -> void:
 	LevelLoader.requested_file = level_file
+	var paths: Array[String] = []
+	for t in TUTORIALS:
+		paths.append(t["path"])
+	LevelLoader.sequence = paths
+	LevelLoader.sequence_noun = "Tutorial"
 	_load("res://painted_level.tscn")
 
 

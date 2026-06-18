@@ -110,6 +110,15 @@ func _level_name_of(path: String) -> String:
 
 func _play(level_file: String) -> void:
 	LevelLoader.requested_file = level_file
+	# Sequence in the same order the rows are built (builtins, then user files):
+	# the complete screen's "Next" steps through this list.
+	var paths: Array[String] = []
+	for b in BUILTINS:
+		paths.append(b["path"])
+	for p in _user_level_files():
+		paths.append(p)
+	LevelLoader.sequence = paths
+	LevelLoader.sequence_noun = "Level"
 	_load("res://painted_level.tscn")
 
 

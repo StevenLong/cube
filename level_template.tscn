@@ -154,6 +154,12 @@ theme_override_font_sizes/font_size = 24
 [node name="Spacer2" type="Control" parent="UI/ResultsPanel/VBox"]
 custom_minimum_size = Vector2(0, 16)
 
+[node name="NextButton" type="Button" parent="UI/ResultsPanel/VBox"]
+visible = false
+custom_minimum_size = Vector2(0, 48)
+text = "Next Level"
+theme_override_font_sizes/font_size = 22
+
 [node name="RestartButton" type="Button" parent="UI/ResultsPanel/VBox"]
 custom_minimum_size = Vector2(0, 48)
 text = "Restart"

@@ -39,6 +39,8 @@ const DIRS_4: Array[Vector2i] = [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0
 @export var level_file: String = "res://levels/data/level_01.json"
 static var requested_file: String = ""   # the active level's file. A launcher sets it; the loader keeps it (does NOT clear) so reload_current_scene (restart) replays the same file. Every painted_level launcher must set it, or a stale value leaks in.
 static var return_to_editor: bool = false   # set by the editor's playtest; level.gd then returns to the editor on exit instead of the main menu
+static var sequence: Array[String] = []   # ordered file paths of the set the active level belongs to; a menu launcher sets it so the complete screen can offer "Next". Empty (or last entry) = no Next button. Persists across reloads like requested_file.
+static var sequence_noun: String = "Level"   # the button reads "Next <noun>"; the tutorials menu sets "Tutorial"
 
 var _edge_mat: StandardMaterial3D
 var _glass_mat: StandardMaterial3D
