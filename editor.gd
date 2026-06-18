@@ -50,6 +50,8 @@ var _path_cell := Vector2i.ZERO  # spawn cell of the path being authored (its _o
 var _menu_open := false
 var _dragging := false           # place held: painting a rectangle (paint tools)
 var _erase_dragging := false     # erase held: clearing a rectangle (any tool)
+var _place_buffered := false     # a place press that landed mid-tumble, applied on settle (N7)
+var _erase_buffered := false     # an erase press that landed mid-tumble, applied on settle (N7)
 var _drag_min := Vector2i.ZERO   # footprint min/max snapshot at the press corner
 var _drag_max := Vector2i.ZERO
 var _preview: MeshInstance3D = null
@@ -69,6 +71,7 @@ var _status_t := 0.0
 
 func _ready() -> void:
 	_player.god_mode = true
+	_player.allow_dodge_in_god_mode = true   # N4: keep dodge live in the editor (under the None tool) so the dev can judge dodge distance and move faster
 	_build_tool_menu()
 	_save_button.pressed.connect(_do_save)
 	_cancel_button.pressed.connect(_close_finish)
@@ -171,12 +174,23 @@ func _handle_place_drag() -> void:
 	if _menu_open or _finishing or _command_open or _overwrite_confirm.visible or _tool == "none":
 		if _dragging:
 			_cancel_drag()
+		_place_buffered = false
 		return
-	# Begin only while the cube is settled, so a single tap can't place at the
-	# tumble's destination cell before the cube visually lands there. A rect drag
-	# begins settled then grows as you tumble (release commits), so this is fine.
-	if Input.is_action_just_pressed("place") and not _erase_dragging and not _player.is_moving():
+	# A press that arrives mid-tumble is buffered, not dropped, then fires on landing
+	# at the cell the cube settles on (N7). A press while settled fires immediately.
+	# Beginning only on settle still means a single tap can't place at the tumble's
+	# destination before the cube lands there; it just no longer needs a re-tap.
+	if Input.is_action_just_pressed("place") and not _erase_dragging and _player.is_moving():
+		_place_buffered = true
+	var fire_fresh: bool = Input.is_action_just_pressed("place") and not _player.is_moving()
+	var fire_buffered: bool = _place_buffered and not _player.is_moving() and not _dragging
+	if (fire_fresh or fire_buffered) and not _erase_dragging:
+		_place_buffered = false
 		_begin_place()
+		# A buffered press whose button was already released mid-tumble is a tap:
+		# commit it now at the landed cell. If still held, it grows a drag as usual.
+		if fire_buffered and not Input.is_action_pressed("place"):
+			_end_place()
 	if Input.is_action_just_released("place"):
 		_end_place()
 	elif _dragging:
@@ -192,23 +206,42 @@ func _handle_erase_drag() -> void:
 		if _erase_dragging:
 			_erase_dragging = false
 			_free_preview()
+		_erase_buffered = false
 		return
-	if Input.is_action_just_pressed("erase") and not _dragging and not _erase_dragging and (_path_active or not _player.is_moving()):
+	# Authoring a path: erase undoes the newest node and is always immediate, even
+	# while moving. Otherwise a press is buffered if it lands mid-tumble (N7).
+	if Input.is_action_just_pressed("erase") and not _dragging and not _erase_dragging:
 		if _path_active:
 			_pop_path_node()
 			_refresh()
 			return
-		_erase_dragging = true
-		var d: Vector3i = _player.get_dimensions()
-		_drag_min = _player.get_footprint_min()
-		_drag_max = _drag_min + Vector2i(d.x - 1, d.z - 1)
-		_create_preview(Color(1.0, 0.25, 0.2, 0.3))
+		if _player.is_moving():
+			_erase_buffered = true
+		else:
+			_begin_erase()
+	# Drain a buffered press on landing: begin the erase, and if the button was let
+	# go mid-tumble (a tap) commit it now at the cell the cube settled on.
+	if _erase_buffered and not _player.is_moving() and not _dragging and not _erase_dragging:
+		_erase_buffered = false
+		_begin_erase()
+		if not Input.is_action_pressed("erase"):
+			_erase_dragging = false
+			_commit_erase_rect()
+			_free_preview()
 	if Input.is_action_just_released("erase") and _erase_dragging:
 		_erase_dragging = false
 		_commit_erase_rect()
 		_free_preview()
 	elif _erase_dragging:
 		_update_place_preview()
+
+
+func _begin_erase() -> void:
+	_erase_dragging = true
+	var d: Vector3i = _player.get_dimensions()
+	_drag_min = _player.get_footprint_min()
+	_drag_max = _drag_min + Vector2i(d.x - 1, d.z - 1)
+	_create_preview(Color(1.0, 0.25, 0.2, 0.3))
 
 
 func _commit_erase_rect() -> void:
@@ -313,6 +346,11 @@ func _stamp_tile_cell(model: Dictionary, layer: String, id: String, cell: Vector
 	if node != null:
 		add_child(node)
 		_vis[key] = node
+	# N6: ink/water needs ground under it or it floats over the void. Painting an
+	# overlay on a cell with no base lays a floor there too. Existing base tiles
+	# (including start/end and walls) are left alone.
+	if layer == "overlay" and not _base.has(cell):
+		_stamp_tile_cell(_base, "base", "floor", cell)
 
 
 func _footprint_cells() -> Array:

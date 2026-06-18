@@ -139,6 +139,7 @@ var _orient: Basis = Basis.IDENTITY
 @onready var _detection_area: Area3D = $DetectionArea
 @onready var _level: Level = get_node_or_null("../Level")  # absent when standalone (editor)
 var god_mode := false  # editor cursor: no fall, no-clip. The game leaves this false.
+var allow_dodge_in_god_mode := false  # editor only: let dodge fire even though god_mode is on, so the dev can judge dodge distance and cross the canvas faster. Still gated by suppress_dodge, so dodge is live only under the free-control "None" tool, not while placing. The game leaves this false.
 var suppress_dodge := false  # editor placement mode: A is "place", not dodge. The game leaves this false.
 
 
@@ -528,7 +529,7 @@ func get_dodge_cooldown_ratio() -> float:
 
 
 func is_dodge_available() -> bool:
-	return _dodge_cooldown_t <= 0.0 and not _is_extended() and not suppress_dodge and not god_mode
+	return _dodge_cooldown_t <= 0.0 and not _is_extended() and not suppress_dodge and (allow_dodge_in_god_mode or not god_mode)
 
 
 func _reset_ground_overlays() -> void:
@@ -1295,10 +1296,10 @@ func _process(delta: float) -> void:
 
 	# Holding dodge primes it AND locks out tumbling, so you can line up a dodge
 	# without stepping. A ready dodge fires on a direction; a cooling one just
-	# holds still (the HUD bar shows why). Extension and god_mode (editor cursor)
-	# disable dodge entirely.
+	# holds still (the HUD bar shows why). Extension disables dodge entirely; so does
+	# god_mode (editor cursor) unless the editor opts in via allow_dodge_in_god_mode.
 	var dodge_held := (Input.is_action_pressed("dodge")
-		and not _is_extended() and not suppress_dodge and not god_mode)
+		and not _is_extended() and not suppress_dodge and (allow_dodge_in_god_mode or not god_mode))
 	var dodge_ready := dodge_held and _dodge_cooldown_t <= 0.0
 
 	if dodge_ready and move.length() > 0.5:

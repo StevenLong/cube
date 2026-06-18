@@ -167,6 +167,15 @@ func _populate(world: Node3D, data: Dictionary) -> void:
 	for cell in data["glass"]:
 		data["floor"][cell] = true
 
+	# N6 safety net: an overlay (ink/water) implies a floor beneath it, so old data
+	# (saved before the editor auto-stamped floor) can't leave a surface tile floating
+	# over the void. New saves already carry the floor; this just backstops the rest.
+	var overlay: Dictionary = data.get("overlay", {})
+	for cell in overlay.get("ink", []):
+		data["floor"][cell] = true
+	for cell in overlay.get("water", []):
+		data["floor"][cell] = true
+
 	var floor_scene: PackedScene = ObjectRegistry.scene_for("floor")
 	for cell in data["floor"]:
 		var tile: Node3D = floor_scene.instantiate()
