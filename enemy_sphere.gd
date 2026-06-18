@@ -19,14 +19,14 @@ const PURSUIT_SPEED := 4.5  # absolute floor on pursuit speed (units/sec). Walki
 const SUSPICIOUS_SPEED_MULT := 0.5
 const INVESTIGATE_SPEED_MULT := 1.0
 const VIEW_RADIUS := 8.0
-const VIEW_CONE_COS := 0.766  # cos(40°), so an 80° total cone
+const VIEW_CONE_COS := 0.643  # cos(50°), so a 100° total cone. Widened from 40° (N12) so a fast pass across a guard's front spends longer in view and can't be blown straight through; a true behind/side pass is still out of cone.
 const FOOTPRINT_VIEW_RADIUS := 5.0
 const FOOTPRINT_VIEW_CONE_COS := 0.866  # cos(30°), so a 60° total cone
 const FOOTPRINT_RETARGET_DIST := 0.3
 const TURN_RATE := 5.0  # rad/s — 180° in ~0.6s
 const TURN_CRAWL_FRACTION := 0.5  # min fraction of speed kept through sharp turns (no dead stop)
 const SPEED_RAMP := 4.0  # u/s^2 the sphere accelerates toward its commanded speed, so a jump to pursuit speed builds up over ~0.6s instead of snapping on. Higher = snappier. TUNABLE.
-const AIM_TURN_RATE := 6.0  # rad/s the vision cone eases toward its look target, kept separate from body turning (N2: nav must not steer vision)
+const AIM_TURN_RATE := 11.0  # rad/s the vision cone eases toward its look target, kept separate from body turning (N2: nav must not steer vision). Raised from 6 (N12) so the cone tracks a fast, close mover instead of lagging onto their old position while they cross in clear sight.
 const CORRIDOR_HYSTERESIS := 0.2  # corridor must stay clear this long before off-grid pursuit engages
 const SQRT2 := 1.4142135623730951  # diagonal step cost for 8-connected A*
 
@@ -44,7 +44,7 @@ const PURSUIT_LOS_PADDING := 0.45
 
 # Graduated detection (SPEC_graduated_detection.md). _detection in [0,1] is the
 # enemy's visual certainty; thresholds drive the PATROL/SUSPICIOUS/PURSUIT ladder.
-const DETECT_FILL_RATE := 2.0        # per second at full exposure factors
+const DETECT_FILL_RATE := 2.5        # per second at full exposure factors. Raised from 2.0 (N12) so a brief but clear look across the front escalates toward PURSUIT instead of stalling at SUSPICIOUS while the target slips past.
 const DETECT_DRAIN_RATE := 0.4       # per second when not seeing
 const DETECT_PURSUIT_DRAIN_RATE := 0.2  # slower bleed while already in PURSUIT: a brief LoS break mid-chase (a corner, a pillar) should not de-escalate the guard. Lower = stickier pursuit. TUNABLE.
 const DETECT_SUSPICIOUS := 0.25      # PATROL -> SUSPICIOUS
