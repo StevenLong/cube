@@ -253,15 +253,23 @@ func _build_objects(world: Node3D, data: Dictionary) -> void:
 				gate_idx += 1
 			_:
 				push_warning("level_loader: unknown object type '%s', skipped" % spec.get("type", ""))
-	# Softlock guard: a locked shape can tumble into any PERMUTATION of the lock's
-	# dims, but never into other dims. An unlock requiring a non-permutation is
-	# unsatisfiable stale data, so rewrite it to the lock's dims; a deliberate
-	# different-orientation unlock (a valid permutation) is left alone. One global
-	# lock per level until the link layer exists, so the first lock decides.
+	# Softlock guard: a locked shape can tumble into any PERMUTATION of a lock's dims,
+	# but never into other dims, so an unlock requiring a shape no lock can produce is
+	# unsatisfiable stale data and gets rewritten to a real lock shape. Crucially this
+	# checks EVERY lock, not just the first: a level can chain several lock/unlock pairs
+	# of different shapes (locked into A, unlock A, then lock into B, unlock B, ...) on
+	# the single global lock state, and each unlock keeps its own shape as long as some
+	# lock can produce it. Pairing a specific unlock to a specific lock (and catching a
+	# mis-sequenced softlock) still needs the link layer (N5/N14).
 	if not lock_zones.is_empty():
 		for u in unlock_zones:
-			if not _same_dims_set(u.required_dims, lock_zones[0].required_dims):
-				push_warning("level_loader: unlock dims %s unreachable from lock %s, synced" % [u.required_dims, lock_zones[0].required_dims])
+			var reachable := false
+			for l in lock_zones:
+				if _same_dims_set(u.required_dims, l.required_dims):
+					reachable = true
+					break
+			if not reachable:
+				push_warning("level_loader: unlock dims %s match no lock, synced to %s" % [u.required_dims, lock_zones[0].required_dims])
 				u.required_dims = lock_zones[0].required_dims
 	_build_lock_links(world, lock_zones, unlock_zones, gates, _walkable_cells(data))
 
