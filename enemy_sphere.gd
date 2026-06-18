@@ -665,16 +665,26 @@ func _is_seeing_player() -> bool:
 func _visible_footprint_pos() -> Vector3:
 	# Returns the freshest in-view footprint with unobstructed LoS, so the search
 	# heads up the trail toward the player instead of back down it. get_footprint_
-	# positions is oldest -> newest, so we walk it newest-first and take the first
-	# hit. INVESTIGATE scans 360° around the sphere; other states use the cone.
+	# positions is oldest -> newest, so we walk it newest-first and take the first hit.
+	# Pickup is cone-gated in EVERY state (N16): the guard must be LOOKING toward a print
+	# to notice it, so it follows the trail by sweeping its gaze onto prints instead of
+	# snapping to the freshest one anywhere in range. PATROL/SUSPICIOUS use the forward
+	# detection aim with the narrow footprint cone; INVESTIGATE uses its rotating search
+	# beam (the same beam the floor beacon shows, via _search_beam_dir) with the wider
+	# search cone, so the beam visibly crossing the trail is what triggers the pickup.
 	var positions: PackedVector2Array = _player.get_footprint_positions()
 	if positions.is_empty():
 		return Vector3.INF
 	var alphas: PackedFloat32Array = _player.get_footprint_alphas()
-	var skip_cone := _state == State.INVESTIGATE
-	var forward := Vector3.ZERO
-	if not skip_cone:
+	var forward: Vector3
+	var cone_cos: float
+	if _state == State.INVESTIGATE:
+		var beam := _search_beam_dir()
+		forward = Vector3(beam.x, 0.0, beam.y)
+		cone_cos = CONE_SEARCH_HALF_COS
+	else:
 		forward = Vector3(_aim_dir.x, 0.0, _aim_dir.y)   # same decoupled aim as the body cone
+		cone_cos = FOOTPRINT_VIEW_CONE_COS
 	var origin := global_position
 	var space := get_world_3d().direct_space_state
 	for i in range(positions.size() - 1, -1, -1):
@@ -694,10 +704,9 @@ func _visible_footprint_pos() -> Vector3:
 		var dist := delta_xz.length()
 		if dist < 0.01 or dist > FOOTPRINT_VIEW_RADIUS:
 			continue
-		if not skip_cone:
-			var dir := delta_xz / dist
-			if dir.dot(forward) < FOOTPRINT_VIEW_CONE_COS:
-				continue
+		var dir := delta_xz / dist
+		if dir.dot(forward) < cone_cos:
+			continue
 		var query := PhysicsRayQueryParameters3D.create(origin, fp_world)
 		query.collide_with_areas = false
 		query.exclude = _vision_exclude   # glass is see-through
@@ -787,19 +796,29 @@ func _update_search_cone(delta: float, origin: Vector2) -> void:
 	# is a continuous focus rather than a snap.
 	var lock := clampf((_detection - DETECT_SUSPICIOUS) / (DETECT_PURSUIT - DETECT_SUSPICIOUS), 0.0, 1.0)
 	_investigate_sweep_angle += CONE_SEARCH_SWEEP_RATE * (1.0 - lock) * delta
-	var sweep_dir := Vector2(cos(_investigate_sweep_angle), sin(_investigate_sweep_angle))
-	var aim := sweep_dir
-	var to_suspect := Vector2(_last_seen_pos.x - position.x, _last_seen_pos.z - position.z)
-	if to_suspect.length() > 0.05:
-		var blended := sweep_dir.lerp(to_suspect.normalized(), lock)
-		if blended.length() > 0.01:
-			aim = blended.normalized()
+	var aim := _search_beam_dir()
 	var half_cos := lerpf(CONE_SEARCH_HALF_COS, CONE_FOCUS_COS, lock)
 	var col := COLOR_INVESTIGATE.lerp(COLOR_PURSUIT, lock)
 	var alpha := lerpf(CONE_SEARCH_ALPHA, CONE_LOCKED_ALPHA, lock)
 	# Independent of _visibility_alpha (see _update_cone_uniforms): the search cone
 	# stays visible on seen ground even when the enemy itself is behind a wall.
 	_write_cone(origin, aim, VIEW_RADIUS, half_cos, _color_to_vec3(col), alpha)
+
+
+func _search_beam_dir() -> Vector2:
+	# Direction of the INVESTIGATE rotating search beam: the swept angle, homing toward
+	# the suspect as lock (re-acquisition certainty) rises. Shared by the visible floor
+	# cone (_update_search_cone) and footprint pickup (_visible_footprint_pos) so the beam
+	# you SEE is exactly what can notice a print (N16). Reads the current sweep angle;
+	# _update_search_cone owns advancing it.
+	var sweep := Vector2(cos(_investigate_sweep_angle), sin(_investigate_sweep_angle))
+	var lock := clampf((_detection - DETECT_SUSPICIOUS) / (DETECT_PURSUIT - DETECT_SUSPICIOUS), 0.0, 1.0)
+	var to_suspect := Vector2(_last_seen_pos.x - position.x, _last_seen_pos.z - position.z)
+	if to_suspect.length() > 0.05:
+		var blended := sweep.lerp(to_suspect.normalized(), lock)
+		if blended.length() > 0.01:
+			return blended.normalized()
+	return sweep
 
 
 func _write_cone(origin: Vector2, dir: Vector2, radius: float, half_cos: float, col: Vector3, alpha: float) -> void:
@@ -965,7 +984,12 @@ func _cell_blocked(cell: Vector2i) -> bool:
 	# fade completes; the 0.4s ramp window would otherwise let the enemy walk in.
 	# _find_path already snaps a blocked goal to the nearest open neighbour, so
 	# investigating a noise at the player's cell ends at the cell next to them.
-	if _player.is_hiding and _player.footprint_covers(cell):
+	# EXCEPT in PURSUIT: an active pursuer watched the cube dive into cover (the same
+	# reason vision sees through blend mid-pursuit, _is_seeing_player), so it must be
+	# able to path onto the hide cell and make contact instead of parking next to it
+	# forever (N15). Drop out of PURSUIT and the block re-engages, so the hide spot
+	# protects again the instant the guard loses the lock.
+	if _state != State.PURSUIT and _player.is_hiding and _player.footprint_covers(cell):
 		return true
 	return false
 
