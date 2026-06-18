@@ -47,6 +47,8 @@ const EXTEND_PROBE_Y := 0.2  # below the 0.4u safety-edge top: extension is bloc
 const FOCUS_SMOOTH_RATE := 25.0
 const BLEND_ENTER_TIME := 0.4  # seconds in cover + still before is_blending engages (and visual fully fades)
 const BLEND_EXIT_TIME := 0.15  # faster fade-out so peeking out is visible to enemies sooner than re-blending
+const BLEND_PULSE_RATE := 0.4  # Hz of the idle "breathing" edge glow while fully blended (~2.5s per breath)
+const BLEND_PULSE_AMOUNT := 0.3  # peak emission of the blend breathing pulse (kept subtle)
 const COLOR_NORMAL := Color(0.9, 0.9, 0.9)
 const COLOR_BLENDING := Color(0.4, 0.4, 0.45)  # fallback when no wall material can be sampled
 const COLOR_WALL_SIDE := Color(0.04, 0.04, 0.08)  # the wall shader's side_color (shaders/wall.gdshader). Walls share one ShaderMaterial, so blend adopts this single colour instead of sampling per wall (N9a); true per-wall sampling deferred.
@@ -120,6 +122,7 @@ var is_blending := false  # gameplay state (enemy invisibility); true only at fu
 var is_hiding := false  # at-rest + in cover + not animating; enemy nav treats hiding cells as walls so investigations don't barge through
 var _blend_phase: float = 0.0  # 0 exposed -> 1 hidden; rises over BLEND_ENTER_TIME, falls over BLEND_EXIT_TIME
 var _cover_color: Color = COLOR_BLENDING  # sampled from a covering wall on blend entry, else fallback
+var _blend_pulse_start_ms: int = -1  # wall-clock anchor for the blend breathing cycle (N9b); -1 when not blended, so the pulse always starts at the bottom of a breath
 var _was_wanting_blend := false  # for one-shot cover-color sampling at the transition
 var _ground_material: ShaderMaterial
 var _player_material: ShaderMaterial
@@ -1587,6 +1590,18 @@ func _push_cube_material() -> void:
 	_player_material.set_shader_parameter("dodge_heat", heat)
 	_player_material.set_shader_parameter("dodge_flash", _dodge_flash / DODGE_FLASH_TIME)
 	_player_material.set_shader_parameter("expression", _expression)
+	# Idle breathing edge glow while fully blended and still (N9b): a slow 0 -> 1 -> 0
+	# pulse, anchored on blend entry so it always starts at the bottom of the breath
+	# (no pop). Zero (and the anchor resets) the moment blend drops or the cube moves.
+	var blend_pulse := 0.0
+	if is_blending and not is_moving():
+		if _blend_pulse_start_ms < 0:
+			_blend_pulse_start_ms = Time.get_ticks_msec()
+		var lt := float(Time.get_ticks_msec() - _blend_pulse_start_ms) / 1000.0
+		blend_pulse = (0.5 - 0.5 * cos(lt * TAU * BLEND_PULSE_RATE)) * BLEND_PULSE_AMOUNT
+	else:
+		_blend_pulse_start_ms = -1
+	_player_material.set_shader_parameter("blend_pulse", blend_pulse)
 
 
 func _compute_face_ink() -> PackedFloat32Array:

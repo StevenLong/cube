@@ -26,6 +26,12 @@ uniform float edge_band = 0.16;        // how thick the glowing edge strip is (n
 uniform float glow_strength = 1.0;
 uniform float edge_darken = 0.1;       // how dark the glowing edge groove goes (so the colour reads on a white cube too)
 
+// Idle "breathing" edge glow while fully blended and still: a slow, low-amplitude
+// pulse so a hidden, motionless cube reads as alive but quiet (N9b). Reuses the
+// same edge factor as the dodge heat; blend_pulse is driven (0..~0.3) by the player.
+uniform float blend_pulse = 0.0;
+uniform vec3 blend_edge_color : source_color = vec3(0.3, 0.6, 0.7);
+
 // Fail-state "broken screen" expression: when >= 0, the faces show this pattern
 // (a fail readout) instead of the normal cube. The player picks one at random on
 // a fail and pushes the index. Add patterns in expr_color and bump EXPRESSION_COUNT.
@@ -157,5 +163,7 @@ void fragment() {
 		// otherwise looks faintly pink). Then add the emission: a hot channel.
 		ALBEDO = mix(ALBEDO, ALBEDO * edge_darken, glow_amt);
 		EMISSION = (heat_color * red_amt + ready_color * green_amt) * glow_strength;
+		// N9b: gentle breathing glow on the edges while blended + idle (blend_pulse > 0).
+		EMISSION += blend_edge_color * edge * blend_pulse;
 	}
 }
