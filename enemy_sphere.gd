@@ -535,8 +535,8 @@ func _update_scan_line(seeing: bool, footprint_pos: Vector3) -> void:
 	_scan_line.visible = true
 	# Orient the unit cylinder (its local Y is its length) along the sightline and
 	# scale that axis to the distance, so the beam spans enemy -> target exactly.
-	var basis := Basis(Quaternion(Vector3.UP, dir / length)) * Basis.from_scale(Vector3(1.0, length, 1.0))
-	_scan_line.global_transform = Transform3D(basis, a + dir * 0.5)
+	var beam_basis := Basis(Quaternion(Vector3.UP, dir / length)) * Basis.from_scale(Vector3(1.0, length, 1.0))
+	_scan_line.global_transform = Transform3D(beam_basis, a + dir * 0.5)
 	var col := _state_color()
 	var mat := _scan_line.material_override as StandardMaterial3D
 	mat.albedo_color = col
