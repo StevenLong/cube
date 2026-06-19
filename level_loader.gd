@@ -34,6 +34,8 @@ const SAFE_EDGE_Y := 0.02       # red line height above floor top
 const SAFE_EDGE_PERP := 0.04    # thickness across the edge
 const SAFE_EDGE_VERT := 0.02    # vertical thickness (reads as paint, not a bar)
 const SAFE_EDGE_ENERGY := 0.6
+const LINK_ALPHA := 0.5       # guide-line opacity: understated, reads as a hint not a bar
+const LINK_EMISSION := 0.55   # guide-line glow strength (dimmed from the old full 1.0)
 const DIRS_4: Array[Vector2i] = [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
 
 @export var level_file: String = "res://levels/data/level_01.json"
@@ -375,30 +377,64 @@ func _new_link_holder(visible_when_locked: bool) -> Node3D:
 
 
 func _draw_grid_path(holder: Node3D, start: Vector2i, goal: Vector2i, walkable: Dictionary, color: Color, y: float) -> void:
-	var path := _grid_path(start, goal, walkable)
-	if path.size() < 2:
-		# No grid route (e.g. the target is off-floor): fall back to a straight line
-		# so the relationship is still shown.
-		holder.add_child(_make_link_segment(Vector2(start.x, start.y), Vector2(goal.x, goal.y), color, y))
-		return
+	# Snap each end to the nearest floor cell first: a zone footprint centre or a gate's
+	# bounding-box centre can land on a void (e.g. an L-gate's inner corner), which used
+	# to make the BFS bail and beeline. Then route SOLID along floor as far as it can,
+	# and DASH across any remaining gap the floor can't cross (you dodge/bridge it). A
+	# dash trailing toward an isolated target also reads as "unreachable" -- a level bug,
+	# surfaced rather than hidden, since such a gate/unlock can't block or be used anyway.
+	var s := _nearest_walkable(start, walkable)
+	var g := _nearest_walkable(goal, walkable)
+	var route := _route(s, g, walkable)
+	var path: Array = route["path"]
 	for i in range(path.size() - 1):
-		holder.add_child(_make_link_segment(Vector2(path[i].x, path[i].y), Vector2(path[i + 1].x, path[i + 1].y), color, y))
+		var a: Vector2i = path[i]
+		var b: Vector2i = path[i + 1]
+		holder.add_child(_make_link_segment(Vector2(a.x, a.y), Vector2(b.x, b.y), color, y))
+	if not bool(route["connected"]):
+		var from: Vector2i = path.back() if not path.is_empty() else s
+		_draw_dashed(holder, Vector2(from.x, from.y), Vector2(g.x, g.y), color, y)
 
 
-func _grid_path(start: Vector2i, goal: Vector2i, walkable: Dictionary) -> Array[Vector2i]:
-	# 4-connected BFS over walkable cells. Returns start..goal inclusive, or [] if
-	# either endpoint is off-floor or no orthogonal route exists.
-	if not walkable.has(start) or not walkable.has(goal):
-		return []
+func _nearest_walkable(cell: Vector2i, walkable: Dictionary) -> Vector2i:
+	# Closest floor cell to `cell` (itself if already floor), searched in widening rings.
+	if walkable.has(cell):
+		return cell
+	for radius in range(1, 8):
+		var best := cell
+		var best_d := 1 << 30
+		var found := false
+		for dx in range(-radius, radius + 1):
+			for dz in range(-radius, radius + 1):
+				var c := cell + Vector2i(dx, dz)
+				if walkable.has(c):
+					var dd: int = absi(dx) + absi(dz)
+					if dd < best_d:
+						best_d = dd
+						best = c
+						found = true
+		if found:
+			return best
+	return cell
+
+
+func _route(start: Vector2i, goal: Vector2i, walkable: Dictionary) -> Dictionary:
+	# 4-connected BFS over walkable floor. Returns {path, connected}: the full route to
+	# goal when one exists, else the path to the reachable cell CLOSEST to goal, so the
+	# solid line stops at the gap edge nearest the target instead of an arbitrary cell.
+	if not walkable.has(start):
+		return {"path": [], "connected": false}
 	if start == goal:
-		return [start]
+		return {"path": [start] as Array[Vector2i], "connected": true}
 	var came: Dictionary = {}
 	var visited: Dictionary = {start: true}
 	var frontier: Array[Vector2i] = [start]
 	var dirs: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+	var found := false
 	while not frontier.is_empty():
 		var cur: Vector2i = frontier.pop_front()
 		if cur == goal:
+			found = true
 			break
 		for d in dirs:
 			var n: Vector2i = cur + d
@@ -406,14 +442,37 @@ func _grid_path(start: Vector2i, goal: Vector2i, walkable: Dictionary) -> Array[
 				visited[n] = true
 				came[n] = cur
 				frontier.append(n)
-	if not came.has(goal):
-		return []
-	var path: Array[Vector2i] = [goal]
-	var c := goal
-	while c != start:
-		c = came[c]
-		path.push_front(c)
-	return path
+	var target := goal
+	if not found:
+		var best := start
+		var best_d: int = absi(start.x - goal.x) + absi(start.y - goal.y)
+		for c in visited:
+			var cc: Vector2i = c
+			var dd: int = absi(cc.x - goal.x) + absi(cc.y - goal.y)
+			if dd < best_d:
+				best_d = dd
+				best = cc
+		target = best
+	var path: Array[Vector2i] = [target]
+	var c2 := target
+	while c2 != start:
+		c2 = came[c2]
+		path.push_front(c2)
+	return {"path": path, "connected": found}
+
+
+func _draw_dashed(holder: Node3D, a: Vector2, b: Vector2, color: Color, y: float) -> void:
+	# Dashed version of a link for a gap crossing: short on/off pieces so it reads as a
+	# discontinuity (cross by dodge/bridge), not a walkable run.
+	var total := a.distance_to(b)
+	if total < 0.01:
+		return
+	var dir := (b - a) / total
+	var t := 0.0
+	while t < total:
+		var seg_end: float = minf(t + 0.35, total)
+		holder.add_child(_make_link_segment(a + dir * t, a + dir * seg_end, color, y))
+		t = seg_end + 0.25
 
 
 func _make_link_segment(a: Vector2, b: Vector2, color: Color, y: float) -> MeshInstance3D:
@@ -423,10 +482,14 @@ func _make_link_segment(a: Vector2, b: Vector2, color: Color, y: float) -> MeshI
 	var box := BoxMesh.new()
 	box.size = Vector3(0.08, 0.02, maxf(a.distance_to(b), 0.01))
 	mi.mesh = box
+	# Understated: half-translucent and a dimmed glow so the guides read as quiet hints,
+	# not bright bars competing with the level. LINK_ALPHA/LINK_EMISSION tune the feel.
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(color.r, color.g, color.b, LINK_ALPHA)
 	mat.emission_enabled = true
 	mat.emission = color
+	mat.emission_energy_multiplier = LINK_EMISSION
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mi.material_override = mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
