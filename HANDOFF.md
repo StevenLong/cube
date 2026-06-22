@@ -1,3 +1,21 @@
+# Handoff
+
+## Session 9 (2026-06-22): OFF-PROJECT tooling, NO cube code changed
+Side/tooling work only:
+- Built the user-level `/idea` capture skill (`~/.claude/skills/idea/SKILL.md`): near-frictionless
+  game-idea capture into the game-dev vault.
+- Fixed the status-line script (`~/.claude/statusline.py`): it read the wrong rate-limit fields
+  (`utilization`, ISO reset) vs the real schema (`used_percentage`, epoch `resets_at`). Now correct,
+  shows percent-remaining plus a live countdown; `settings.json` got `refreshInterval: 60`.
+- Dogfooded `/idea` by capturing a new game idea, "Quiet Town" (music-first owl game), into game-dev
+  (committed + pushed). USER HAS NOT YET REVIEWED that capture or the skill's output quality.
+- Skill 2 (idea EXPANSION, grill+teach style) is DESIGNED in conversation but NOT built. Details in
+  auto-memory: project_idea_pipeline.
+
+The cube link-layer state below is UNCHANGED and remains the cube NEXT (slice 4 wizard, etc.).
+
+---
+
 # Handoff, 2026-06-22 (session 8)
 
 ## Headline
