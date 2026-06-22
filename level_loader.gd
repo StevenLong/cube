@@ -36,6 +36,13 @@ const SAFE_EDGE_VERT := 0.02    # vertical thickness (reads as paint, not a bar)
 const SAFE_EDGE_ENERGY := 0.6
 const LINK_ALPHA := 0.5       # guide-line opacity: understated, reads as a hint not a bar
 const LINK_EMISSION := 0.55   # guide-line glow strength (dimmed from the old full 1.0)
+const JUMP_MAX := 5           # mirrors player.gd DODGE_DISTANCE: the cube can cross a straight
+							  # cardinal gap of up to JUMP_MAX-1 void cells (dodge/bridge), so the
+							  # guide router treats such a gap as a traversable edge, not a wall.
+const JUMP_PENALTY := 100000  # extra cost a jump pays on top of its cells. Larger than any all-floor
+							  # detour a real level can hold, so the guide stays on tiles wherever a
+							  # floor path exists and only jumps when it must. Lower it to let a short
+							  # jump win over a sufficiently long walk-around.
 const DIRS_4: Array[Vector2i] = [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
 
 @export var level_file: String = "res://levels/data/level_01.json"
@@ -47,6 +54,7 @@ static var sequence_noun: String = "Level"   # the button reads "Next <noun>"; t
 var _edge_mat: StandardMaterial3D
 var _glass_mat: StandardMaterial3D
 var _wall_idx := 0          # running Wall* counter; nav keys off unique Wall names
+var _arrow_mesh_res: ArrayMesh   # shared flat arrowhead for jump markers, built once on first use
 
 
 func _ready() -> void:
@@ -275,7 +283,7 @@ func _build_objects(world: Node3D, data: Dictionary) -> void:
 			if not reachable:
 				push_warning("level_loader: unlock dims %s match no lock, synced to %s" % [u.required_dims, lock_zones[0].required_dims])
 				u.required_dims = lock_zones[0].required_dims
-	_build_lock_links(world, lock_zones, unlock_zones, gates, _walkable_cells(data))
+	_build_lock_links(world, lock_zones, unlock_zones, gates, _walkable_cells(data), _blocked_cells(data))
 
 
 func _add_object_floor(data: Dictionary) -> void:
@@ -322,7 +330,21 @@ func _walkable_cells(data: Dictionary) -> Dictionary:
 	return out
 
 
-func _build_lock_links(world: Node3D, locks: Array, unlocks: Array, gates: Array, walkable: Dictionary) -> void:
+func _blocked_cells(data: Dictionary) -> Dictionary:
+	# Cells a jump cannot cross: full-height walls, glass panes, and safety edges are all
+	# physical bodies that stop a dodge/bridge. The jump router treats a gap as crossable
+	# only when every cell in the span is pure void (neither floor nor one of these).
+	var out: Dictionary = {}
+	for cell in data.get("tall", []):
+		out[cell] = true
+	for cell in data.get("glass", []):
+		out[cell] = true
+	for cell in data.get("edges", []):
+		out[cell] = true
+	return out
+
+
+func _build_lock_links(world: Node3D, locks: Array, unlocks: Array, gates: Array, walkable: Dictionary, blocked: Dictionary) -> void:
 	# Guide lines so the lock puzzle reads at a glance, routed ALONG THE GRID (not
 	# crow-flies): an orange path from the lock to the gate it opens (always shown),
 	# and a green path from the lock to its unlock zone (shown only once the gate is
@@ -334,12 +356,12 @@ func _build_lock_links(world: Node3D, locks: Array, unlocks: Array, gates: Array
 	for gate in gates:
 		# lock->gate: shown while the gate is shut, hidden once it opens.
 		var holder := _new_link_holder(false)
-		_draw_grid_path(holder, lock_cell, _gate_center_cell(gate), walkable, Color(0.9, 0.55, 0.15), 0.07)
+		_draw_grid_path(holder, lock_cell, _gate_center_cell(gate), walkable, blocked, Color(0.9, 0.55, 0.15), 0.07)
 		world.add_child(holder)
 	for u in unlocks:
 		# lock->unlock: hidden until the gate opens (player locked), then shown.
 		var holder := _new_link_holder(true)
-		_draw_grid_path(holder, lock_cell, _zone_center_cell(u), walkable, Color(0.25, 0.85, 0.4), 0.04)
+		_draw_grid_path(holder, lock_cell, _zone_center_cell(u), walkable, blocked, Color(0.25, 0.85, 0.4), 0.04)
 		world.add_child(holder)
 
 
@@ -376,24 +398,25 @@ func _new_link_holder(visible_when_locked: bool) -> Node3D:
 	return h
 
 
-func _draw_grid_path(holder: Node3D, start: Vector2i, goal: Vector2i, walkable: Dictionary, color: Color, y: float) -> void:
+func _draw_grid_path(holder: Node3D, start: Vector2i, goal: Vector2i, walkable: Dictionary, blocked: Dictionary, color: Color, y: float) -> void:
 	# Snap each end to the nearest floor cell first: a zone footprint centre or a gate's
-	# bounding-box centre can land on a void (e.g. an L-gate's inner corner), which used
-	# to make the BFS bail and beeline. Then route SOLID along floor as far as it can,
-	# and DASH across any remaining gap the floor can't cross (you dodge/bridge it). A
-	# dash trailing toward an isolated target also reads as "unreachable" -- a level bug,
-	# surfaced rather than hidden, since such a gate/unlock can't block or be used anyway.
+	# bounding-box centre can land on a void (e.g. an L-gate's inner corner), which would
+	# otherwise make the BFS bail and beeline. Then route along the cube's REAL traversal:
+	# a solid line for each floor STEP, and at each JUMP (a dodge/bridge across void) no
+	# line over the gap -- just an arrow on the take-off cell pointing to where the line
+	# resumes. If the goal stays unreachable even with jumps, the line simply stops at the
+	# nearest reachable cell (a level bug, surfaced by the gap, never marked over the void).
 	var s := _nearest_walkable(start, walkable)
 	var g := _nearest_walkable(goal, walkable)
-	var route := _route(s, g, walkable)
+	var route := _route(s, g, walkable, blocked)
 	var path: Array = route["path"]
 	for i in range(path.size() - 1):
 		var a: Vector2i = path[i]
 		var b: Vector2i = path[i + 1]
-		holder.add_child(_make_link_segment(Vector2(a.x, a.y), Vector2(b.x, b.y), color, y))
-	if not bool(route["connected"]):
-		var from: Vector2i = path.back() if not path.is_empty() else s
-		_draw_dashed(holder, Vector2(from.x, from.y), Vector2(g.x, g.y), color, y)
+		if absi(a.x - b.x) + absi(a.y - b.y) == 1:
+			holder.add_child(_make_link_segment(Vector2(a.x, a.y), Vector2(b.x, b.y), color, y))
+		else:
+			holder.add_child(_make_link_arrow(a, b, color, y))
 
 
 func _nearest_walkable(cell: Vector2i, walkable: Dictionary) -> Vector2i:
@@ -418,35 +441,49 @@ func _nearest_walkable(cell: Vector2i, walkable: Dictionary) -> Vector2i:
 	return cell
 
 
-func _route(start: Vector2i, goal: Vector2i, walkable: Dictionary) -> Dictionary:
-	# 4-connected BFS over walkable floor. Returns {path, connected}: the full route to
-	# goal when one exists, else the path to the reachable cell CLOSEST to goal, so the
-	# solid line stops at the gap edge nearest the target instead of an arbitrary cell.
+func _route(start: Vector2i, goal: Vector2i, walkable: Dictionary, blocked: Dictionary) -> Dictionary:
+	# Weighted shortest path over the cube's traversal graph: 4-connected floor steps PLUS
+	# jump edges (see _neighbors). A walk step costs its 1 cell; a jump ALSO pays JUMP_PENALTY,
+	# so a floor route always beats a jump when one exists and gaps are crossed with the fewest,
+	# shortest jumps otherwise. Returns {path, connected}: the full route to goal when reachable,
+	# else the path to the reachable cell CLOSEST to goal, so the line stops at the gap nearest
+	# the target. Consecutive path cells more than 1 apart are a jump, drawn as an arrow.
 	if not walkable.has(start):
 		return {"path": [], "connected": false}
 	if start == goal:
 		return {"path": [start] as Array[Vector2i], "connected": true}
 	var came: Dictionary = {}
-	var visited: Dictionary = {start: true}
+	var cost: Dictionary = {start: 0}
+	var done: Dictionary = {}
 	var frontier: Array[Vector2i] = [start]
-	var dirs: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 	var found := false
 	while not frontier.is_empty():
-		var cur: Vector2i = frontier.pop_front()
+		# Pop the lowest-cost frontier cell (levels are small, so a linear scan is plenty).
+		var bi := 0
+		for i in range(1, frontier.size()):
+			if int(cost[frontier[i]]) < int(cost[frontier[bi]]):
+				bi = i
+		var cur: Vector2i = frontier[bi]
+		frontier.remove_at(bi)
 		if cur == goal:
 			found = true
 			break
-		for d in dirs:
-			var n: Vector2i = cur + d
-			if walkable.has(n) and not visited.has(n):
-				visited[n] = true
+		done[cur] = true
+		for n in _neighbors(cur, walkable, blocked):
+			if done.has(n):
+				continue
+			var step: int = absi(n.x - cur.x) + absi(n.y - cur.y)   # cells moved (1 = walk, >1 = jump)
+			var nc: int = int(cost[cur]) + step + (JUMP_PENALTY if step > 1 else 0)
+			if not cost.has(n) or nc < int(cost[n]):
+				cost[n] = nc
 				came[n] = cur
-				frontier.append(n)
+				if not frontier.has(n):
+					frontier.append(n)
 	var target := goal
 	if not found:
 		var best := start
 		var best_d: int = absi(start.x - goal.x) + absi(start.y - goal.y)
-		for c in visited:
+		for c in cost:
 			var cc: Vector2i = c
 			var dd: int = absi(cc.x - goal.x) + absi(cc.y - goal.y)
 			if dd < best_d:
@@ -461,18 +498,25 @@ func _route(start: Vector2i, goal: Vector2i, walkable: Dictionary) -> Dictionary
 	return {"path": path, "connected": found}
 
 
-func _draw_dashed(holder: Node3D, a: Vector2, b: Vector2, color: Color, y: float) -> void:
-	# Dashed version of a link for a gap crossing: short on/off pieces so it reads as a
-	# discontinuity (cross by dodge/bridge), not a walkable run.
-	var total := a.distance_to(b)
-	if total < 0.01:
-		return
-	var dir := (b - a) / total
-	var t := 0.0
-	while t < total:
-		var seg_end: float = minf(t + 0.35, total)
-		holder.add_child(_make_link_segment(a + dir * t, a + dir * seg_end, color, y))
-		t = seg_end + 0.25
+func _neighbors(cur: Vector2i, walkable: Dictionary, blocked: Dictionary) -> Array[Vector2i]:
+	# Traversal edges out of `cur` for the guide BFS: each adjacent floor cell (an ordinary
+	# walk step), plus jump edges -- a straight cardinal hop of 2..JUMP_MAX cells that clears
+	# a run of PURE VOID (every span cell neither floor nor a blocker) and lands on floor.
+	# This mirrors a dodge/bridge: void is passable, but a wall or safety edge in the span
+	# stops the crossing, and the landing must be solid ground.
+	var out: Array[Vector2i] = []
+	for d in DIRS_4:
+		if walkable.has(cur + d):
+			out.append(cur + d)   # contiguous floor: walk (a jump would only overshoot it)
+			continue
+		for k in range(2, JUMP_MAX + 1):
+			var inter := cur + d * (k - 1)   # cell just short of this jump's landing
+			if walkable.has(inter) or blocked.has(inter):
+				break                        # span broken by floor or a blocker: stop scanning
+			var land := cur + d * k
+			if walkable.has(land):
+				out.append(land)             # pure-void span cleared, lands on floor
+	return out
 
 
 func _make_link_segment(a: Vector2, b: Vector2, color: Color, y: float) -> MeshInstance3D:
@@ -482,8 +526,52 @@ func _make_link_segment(a: Vector2, b: Vector2, color: Color, y: float) -> MeshI
 	var box := BoxMesh.new()
 	box.size = Vector3(0.08, 0.02, maxf(a.distance_to(b), 0.01))
 	mi.mesh = box
-	# Understated: half-translucent and a dimmed glow so the guides read as quiet hints,
-	# not bright bars competing with the level. LINK_ALPHA/LINK_EMISSION tune the feel.
+	mi.material_override = _link_material(color)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var mid := (a + b) * 0.5
+	mi.position = Vector3(mid.x, y, mid.y)
+	mi.rotation.y = atan2(b.x - a.x, b.y - a.y)
+	return mi
+
+
+func _make_link_arrow(from_cell: Vector2i, to_cell: Vector2i, color: Color, y: float) -> MeshInstance3D:
+	# Marks a JUMP across void: the guide line breaks at the gap and resumes on the far
+	# side, with this flat arrowhead on the take-off cell (just shy of the void) pointing
+	# the way. Shows the crossing without ever drawing a mark over the void itself.
+	var dir := Vector2(to_cell.x - from_cell.x, to_cell.y - from_cell.y).normalized()
+	var mi := MeshInstance3D.new()
+	mi.mesh = _arrow_mesh()
+	var mat := _link_material(color)
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED   # flat single-sided tri stays visible from above
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# Offset 0.30 + tip length 0.18 keeps the whole head inside the cell edge (0.5): the
+	# arrow sits near the gap but never paints over the void it points across.
+	mi.position = Vector3(from_cell.x + dir.x * 0.30, y, from_cell.y + dir.y * 0.30)
+	mi.rotation.y = atan2(dir.x, dir.y)
+	return mi
+
+
+func _arrow_mesh() -> ArrayMesh:
+	# A small flat triangle in local XZ pointing +Z (forward), shared by every jump arrow.
+	if _arrow_mesh_res != null:
+		return _arrow_mesh_res
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array([
+		Vector3(0.0, 0.0, 0.18),     # tip
+		Vector3(-0.13, 0.0, -0.10),  # back-left
+		Vector3(0.13, 0.0, -0.10),   # back-right
+	])
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	_arrow_mesh_res = mesh
+	return mesh
+
+
+func _link_material(color: Color) -> StandardMaterial3D:
+	# Shared guide-line look: half-translucent with a dimmed glow so guides read as quiet
+	# hints, not bright bars competing with the level. LINK_ALPHA/LINK_EMISSION tune it.
 	var mat := StandardMaterial3D.new()
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.albedo_color = Color(color.r, color.g, color.b, LINK_ALPHA)
@@ -491,12 +579,7 @@ func _make_link_segment(a: Vector2, b: Vector2, color: Color, y: float) -> MeshI
 	mat.emission = color
 	mat.emission_energy_multiplier = LINK_EMISSION
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mi.material_override = mat
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	var mid := (a + b) * 0.5
-	mi.position = Vector3(mid.x, y, mid.y)
-	mi.rotation.y = atan2(b.x - a.x, b.y - a.y)
-	return mi
+	return mat
 
 
 func _same_dims_set(a: Vector3i, b: Vector3i) -> bool:

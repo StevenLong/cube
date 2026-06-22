@@ -24,6 +24,9 @@ const WAVE_DURATION := 0.4
 const KNOCK_RADIUS := 10.0  # wall-knock noise radius (knock is a cube-only ability)
 const KNOCK_COOLDOWN := 0.4  # min seconds between wall knocks
 const BUMP_DURATION := 0.25  # won't-fit lean-and-rock-back for a blocked extended move
+const EXTEND_ANIM_RATE := 22.0  # exponential smoothing rate for the extend/collapse mesh grow/shrink (~0.15s settle); higher = snappier
+const SPAWN_DURATION := 0.45  # seconds for the level-start rise out of the floor
+const SPAWN_RISE_HEIGHT := 1.1  # how far below the start cell the cube begins the spawn rise (fully tucked under the floor)
 const BUMP_ANGLE := PI / 10.0  # peak lean (~18 deg) before rocking back, scaled down near a wall
 const BUMP_CLEARANCE := 0.15  # air gap kept between the lean's leading corner and the wall
 const FALL_GRAVITY := 25.0  # units/s^2; accelerates the cube straight down after settling on void
@@ -99,6 +102,12 @@ var _dodge_duration := DODGE_DURATION
 var _slide_last_cell: Vector2i = Vector2i.ZERO
 var _ext := [0, 0, 0, 0, 0]
 var _pending_ext := [0, 0, 0, 0, 0]
+var _disp_size := Vector3.ONE     # displayed mesh size; eases toward the _ext target so extend/collapse animate instead of popping
+var _disp_offset := Vector3.ZERO  # displayed mesh local offset, eased in lockstep with _disp_size
+var _spawning := false            # true during the level-start rise out of the floor; locks input
+var _spawn_t := 0.0
+var _spawn_from_y := 0.5          # cube's y at the start of the rise (below the floor)
+var _spawn_rest_y := 0.5          # cube's resting y (the authored start cell), captured in _ready
 var _tumble_distance := 1
 var _bumping := false
 var _bump_t := 0.0
@@ -165,6 +174,10 @@ func _ready() -> void:
 	_reset_ground_overlays()
 	_box_mesh = _mesh_instance.mesh.duplicate() as BoxMesh
 	_mesh_instance.mesh = _box_mesh
+	# Seed the eased display state from the actual starting mesh so there is no pop on
+	# the first extend/collapse.
+	_disp_size = _box_mesh.size
+	_disp_offset = _mesh_instance.position
 	# Per-face cube shader (the cube's faces are info "screens"; first use is ink).
 	_player_material = ShaderMaterial.new()
 	_player_material.shader = preload("res://shaders/cube.gdshader")
@@ -179,6 +192,14 @@ func _ready() -> void:
 	for puddle in get_tree().get_nodes_in_group("ink_puddles"):
 		puddle.area_entered.connect(_on_puddle_entered)
 	_build_puddle_cells()
+	# Spawn-rise: in real play, start tucked below the floor and ease up into the start
+	# cell. position.y is purely visual here (grid logic reads grid_pos and x/z), so
+	# dropping it is safe. Skipped for the editor cursor (no Level sibling) and god_mode.
+	if _level != null and not god_mode:
+		_spawn_rest_y = position.y
+		position.y = _spawn_rest_y - SPAWN_RISE_HEIGHT
+		_spawn_from_y = position.y
+		_spawning = true
 
 
 func _build_puddle_cells() -> void:
@@ -477,9 +498,13 @@ func _reset_extensions() -> void:
 	var shift_z: int = roundi((_ext[EXT_BACK] - _ext[EXT_FWD]) / 2.0)
 	grid_pos += Vector2i(shift_x, shift_z)
 	position = Vector3(grid_pos.x, 0.5, grid_pos.y)
+	# Keep the displayed mesh world-continuous across the grid_pos shift so it SHRINKS
+	# in place instead of jumping to the new centre: the local origin just moved by
+	# +shift, so the displayed local offset moves by -shift to hold its world position.
+	_disp_offset -= Vector3(shift_x, 0.0, shift_z)
 	_ext = [0, 0, 0, 0, 0]
-	# Sync mesh immediately — _reset is called from _input, which runs before
-	# camera _process. Without this the camera would read a stale mesh offset.
+	# Ease toward the collapsed cube (snap=false). Runs this frame too, so the camera,
+	# which reads the mesh position, still sees an up-to-date (continuous) offset.
 	_update_mesh()
 
 
@@ -595,32 +620,58 @@ func truncate_dodge_to(cell: Vector2i) -> void:
 	grid_pos = cell
 
 
-func _update_mesh() -> void:
+func _advance_spawn(delta: float) -> void:
+	# Ease the cube up out of the floor into its start cell (cubic ease-out), then hand
+	# control back. Pure visual: only position.y moves; grid_pos is already correct.
+	_spawn_t = minf(_spawn_t + delta / SPAWN_DURATION, 1.0)
+	position.y = lerpf(_spawn_from_y, _spawn_rest_y, 1.0 - pow(1.0 - _spawn_t, 3.0))
+	if _spawn_t >= 1.0:
+		position.y = _spawn_rest_y
+		_spawning = false
+
+
+func _update_mesh(snap: bool = false) -> void:
 	# Mesh always lives in the parent's local frame with identity basis.
 	# At rest, parent.basis == IDENTITY so the mesh is world-aligned.
 	# During a tumble, parent.basis rotates so the mesh visibly tumbles with it.
 	# DetectionArea's shape is resized and re-posed to match, so an enemy touching
 	# any cell of the extended footprint triggers caught (the 1x1 shape used to
 	# miss the extended portion).
-	var size := Vector3(
+	#
+	# The TARGET shape comes straight from _ext (gameplay-exact). The DISPLAYED mesh
+	# eases toward it so extend/collapse grow/shrink instead of popping, and the
+	# detection box tracks the displayed shape so visible == catchable throughout.
+	# snap=true (tumble/dodge/bump) bypasses the ease: a roll must stay rigid and a
+	# post-tumble reorientation is instant, not a morph.
+	var tgt_size := Vector3(
 		1.0 + _ext[EXT_LEFT] + _ext[EXT_RIGHT],
 		1.0 + _ext[EXT_UP],
 		1.0 + _ext[EXT_FWD] + _ext[EXT_BACK]
 	)
-	var offset := Vector3(
+	var tgt_offset := Vector3(
 		(_ext[EXT_RIGHT] - _ext[EXT_LEFT]) * 0.5,
 		_ext[EXT_UP] * 0.5,
 		(_ext[EXT_BACK] - _ext[EXT_FWD]) * 0.5
 	)
-	# Only rebuild when the shape actually changes. Assigning BoxMesh.size rebuilds
-	# the mesh every call (even to the same value), and this runs every frame; the
-	# per-frame rebuild flickered now that faces carry distinct ink colours.
-	if size == _box_mesh.size and offset == _mesh_instance.position:
+	if snap:
+		_disp_size = tgt_size
+		_disp_offset = tgt_offset
+	else:
+		var k := 1.0 - exp(-get_process_delta_time() * EXTEND_ANIM_RATE)
+		_disp_size = _disp_size.lerp(tgt_size, k)
+		_disp_offset = _disp_offset.lerp(tgt_offset, k)
+		if _disp_size.distance_to(tgt_size) < 0.002 and _disp_offset.distance_to(tgt_offset) < 0.002:
+			_disp_size = tgt_size       # settle exactly so the early-out below can re-engage
+			_disp_offset = tgt_offset
+	# Only rebuild when the displayed shape actually changes. Assigning BoxMesh.size
+	# rebuilds the mesh every call (even to the same value), and this runs every frame;
+	# the per-frame rebuild flickered now that faces carry distinct ink colours.
+	if _disp_size == _box_mesh.size and _disp_offset == _mesh_instance.position:
 		return
-	_box_mesh.size = size
-	_mesh_instance.transform = Transform3D(Basis.IDENTITY, offset)
-	_detection_shape.size = size
-	_detection_collider.transform = Transform3D(Basis.IDENTITY, offset)
+	_box_mesh.size = _disp_size
+	_mesh_instance.transform = Transform3D(Basis.IDENTITY, _disp_offset)
+	_detection_shape.size = _disp_size
+	_detection_collider.transform = Transform3D(Basis.IDENTITY, _disp_offset)
 
 
 func _begin_tumble(dir: Vector2i) -> void:
@@ -1096,6 +1147,9 @@ func _has_tall_wall(cell: Vector2i) -> bool:
 
 
 func _process(delta: float) -> void:
+	if _spawning:
+		_advance_spawn(delta)
+		return
 	_decay_footprints(delta)
 	# Input buffer: a discrete shape press (collapse/extend) made mid-animation is
 	# held so it fires when the move settles instead of being eaten by the early
@@ -1237,7 +1291,7 @@ func _process(delta: float) -> void:
 				_check_ink_contact()
 				_check_water_contact()
 				move_settled.emit()
-		_update_mesh()
+		_update_mesh(true)
 		return
 
 	if _tumbling:
@@ -1266,7 +1320,7 @@ func _process(delta: float) -> void:
 			# this the cube shows pre-tumble colours for one frame (the blink as ink
 			# crosses top/bottom).
 			_push_cube_material()
-		_update_mesh()
+		_update_mesh(true)
 		return
 
 	if _bumping:
@@ -1278,7 +1332,7 @@ func _process(delta: float) -> void:
 			_bumping = false
 			position = Vector3(grid_pos.x, 0.5, grid_pos.y)
 			basis = Basis.IDENTITY
-		_update_mesh()
+		_update_mesh(true)
 		return
 
 	# Extend / collapse are discrete shape changes, read through the input buffer
