@@ -24,6 +24,12 @@ const RED_SIDE := Color(0.12, 0.03, 0.04)
 @export var nodes: Array[Vector2i] = []   # absolute cells; first = this node's cell
 @export var height: int = 3               # kept for format compat; tiles raise to RAISED_TOP
 
+# Link layer (injected by the loader from the level's `links`). This gate is open while
+# the player's active lock is one of `opener_ids`. Empty = unlinked: it never opens from
+# a lock (it still holds open while the cube stands on it, see _process).
+var link_id := ""
+var opener_ids: Array[String] = []
+
 var _player: Player
 var _material: ShaderMaterial
 var _open := false
@@ -88,7 +94,7 @@ func _add_tile(local_pos: Vector3) -> void:
 
 
 func _process(delta: float) -> void:
-	var want_open: bool = _player.is_extend_locked()
+	var want_open: bool = opener_ids.has(_player.active_lock_id())
 	# Never rise on the player: the unlock zone can release the lock while the cube
 	# still overlaps the doorway. Hold open while the footprint covers any gate cell
 	# and only rise once it has moved clear.

@@ -126,7 +126,7 @@ var _tip_start_basis := Basis.IDENTITY
 var _wedged := false  # tip hit a wedge; holding the jammed pose before fell.emit
 var _wedge_hold_t := 0.0
 var _smoothed_focus := Vector3.ZERO
-var _extend_locked := false
+var _active_lock_id := ""  # id of the lock currently armed ("" = not locked); one at a time, since the cube holds one shape
 var is_blending := false  # gameplay state (enemy invisibility); true only at full phase
 var is_hiding := false  # at-rest + in cover + not animating; enemy nav treats hiding cells as walls so investigations don't barge through
 var _blend_phase: float = 0.0  # 0 exposed -> 1 hidden; rises over BLEND_ENTER_TIME, falls over BLEND_EXIT_TIME
@@ -532,12 +532,25 @@ func get_dimensions() -> Vector3i:
 	)
 
 
-func set_extend_locked(value: bool) -> void:
-	_extend_locked = value
+func set_active_lock(id: String) -> void:
+	# Arm the given lock. A lock zone passes its own id; that id is the token gates and
+	# unlock zones match against (see the link layer). One lock active at a time.
+	_active_lock_id = id
+
+
+func clear_active_lock() -> void:
+	_active_lock_id = ""
+
+
+func active_lock_id() -> String:
+	return _active_lock_id
 
 
 func is_extend_locked() -> bool:
-	return _extend_locked
+	# Locked into SOME shape (any active lock). Stays the right query for the global
+	# concerns: extend/collapse are barred, the body wears the locked colour. WHICH lock
+	# (which gate opens, which unlock releases) is read per-id via active_lock_id().
+	return _active_lock_id != ""
 
 
 func is_moving() -> bool:
@@ -1338,7 +1351,7 @@ func _process(delta: float) -> void:
 	# Extend / collapse are discrete shape changes, read through the input buffer
 	# (_take_action) so a press made mid-tumble applies on settle instead of being
 	# dropped. Arrows grow width/depth, E grows up; collapse resets to a cube.
-	if not _extend_locked:
+	if not is_extend_locked():
 		var ext := -1
 		if _take_action("extend_left"):
 			ext = EXT_LEFT
@@ -1355,7 +1368,7 @@ func _process(delta: float) -> void:
 			_update_mesh()
 			return
 
-	if _is_extended() and not _extend_locked and _take_action("collapse"):
+	if _is_extended() and not is_extend_locked() and _take_action("collapse"):
 		_reset_extensions()
 		_update_mesh()
 		# Collapse shifts grid_pos to the cuboid centre; if that lands on void
@@ -1621,7 +1634,7 @@ func _base_color() -> Color:
 	# Body colour ignoring blend and ink. Ink is now shown PER FACE by the cube
 	# shader (not a whole-cube tint), so this is just the locked/normal body state;
 	# the blend fade lerps it toward _cover_color by _blend_phase.
-	if _extend_locked:
+	if is_extend_locked():
 		return COLOR_LOCKED
 	return COLOR_NORMAL
 

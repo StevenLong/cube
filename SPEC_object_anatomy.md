@@ -95,6 +95,16 @@ as gizmos, not modes.
 
 ## Links (the relationship layer, summarized)
 
+**Settled 2026-06 (via grill; see memory `project_link_layer_design`).** The
+implemented edge is `{from, to, kind}` where `kind` is an opaque string (current
+kinds: `opens` for lock->gate, `released_by` for lock->unlock). Coupling is
+EXPLICIT-LINKS-ONLY: nothing reacts unless an edge says so, and optionality is
+simply "not linked" (no flag). The richer constraint model below (declared
+cardinality, aggregation policy) is deferred until a second linkable type needs
+it. The loader parses + validates edges (slice 1, done: structure + endpoints,
+dropping malformed/dangling with a warning); the runtime resolves them
+decentrally (slice 2).
+
 `link` is a relational tool that runs on already-placed instances; it authors
 the relationship layer, not the object registry.
 

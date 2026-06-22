@@ -42,6 +42,13 @@ const GHOST_ALPHA_MAX := 0.4
 ## width (x), height (y), depth (z), in cells. The exact cuboid required at this cell.
 @export var required_dims: Vector3i = Vector3i(1, 1, 3)
 
+# Link layer (injected by the loader from the level's `links`). A LOCK arms the player
+# with its own `link_id`; an UNLOCK releases only when the active lock is one of the
+# `release_lock_ids` it is paired to. Empty = unlinked (the default): a lone LOCK is a
+# commit-to-a-shape puzzle, a lone UNLOCK simply never fires.
+var link_id := ""
+var release_lock_ids: Array[String] = []
+
 var _player: Player
 var _color: Color
 var _marker: MeshInstance3D
@@ -82,9 +89,9 @@ func _process(delta: float) -> void:
 		and _player.get_footprint_min() == _cell())
 	if mode == Mode.LOCK:
 		if seated and not _player.is_extend_locked():
-			_player.set_extend_locked(true)
-	elif seated and _player.is_extend_locked():
-		_player.set_extend_locked(false)
+			_player.set_active_lock(link_id)
+	elif seated and release_lock_ids.has(_player.active_lock_id()):
+		_player.clear_active_lock()
 
 
 # --- LOCK telegraph: marked tile + padlock icon, swapped for an expand ghost on land ---
@@ -234,8 +241,9 @@ func _build_blueprint() -> void:
 
 
 func _update_unlock_blueprint(delta: float) -> void:
-	# Shown only once the gate is open (== player extend-locked); blinks as a target.
-	var show_bp := _player.is_extend_locked()
+	# Shown only while the lock THIS zone releases is the active one, so in a multi-lock
+	# level an unlock blinks for its own puzzle, not whenever any lock is armed.
+	var show_bp := release_lock_ids.has(_player.active_lock_id())
 	_ghost.visible = show_bp
 	_marker.visible = show_bp
 	if show_bp:

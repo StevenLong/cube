@@ -16,7 +16,11 @@
   "config": {
 
   },
-  "links": [],
+  "links": [
+    { "from": "lock1", "to": "gate1", "kind": "opens" },
+    { "from": "lock1", "to": "gate2", "kind": "opens" },
+    { "from": "lock1", "to": "unlock1", "kind": "released_by" }
+  ],
   "meta": {
     "name": "Extension",
     "size": [
@@ -37,6 +41,7 @@
           6
         ]
       ],
+      "id": "gate1",
       "type": "extend_lock_gate"
     },
     {
@@ -55,6 +60,7 @@
           6
         ]
       ],
+      "id": "gate2",
       "type": "extend_lock_gate"
     },
     {
@@ -68,6 +74,7 @@
         3.0,
         1.0
       ],
+      "id": "lock1",
       "type": "extend_lock_zone"
     },
     {
@@ -81,6 +88,7 @@
         1.0,
         3.0
       ],
+      "id": "unlock1",
       "type": "extend_lock_zone"
     }
   ],

@@ -40,7 +40,12 @@
   "config": {
 
   },
-  "links": [],
+  "links": [
+    { "from": "lock_a", "to": "gate_a", "kind": "opens" },
+    { "from": "lock_a", "to": "unlock_a", "kind": "released_by" },
+    { "from": "lock_b", "to": "gate_b", "kind": "opens" },
+    { "from": "lock_b", "to": "unlock_b", "kind": "released_by" }
+  ],
   "meta": {
     "name": "Convergence",
     "size": [
@@ -120,6 +125,7 @@
         8,
         27
       ],
+      "id": "lock_a",
       "mode": "lock",
       "required_dims": [
         3.0,
@@ -133,6 +139,7 @@
         13,
         27
       ],
+      "id": "gate_a",
       "height": 1.0,
       "nodes": [
         [
@@ -151,6 +158,7 @@
         35,
         27
       ],
+      "id": "unlock_a",
       "mode": "unlock",
       "required_dims": [
         3.0,
@@ -232,6 +240,7 @@
         30,
         11
       ],
+      "id": "gate_b",
       "height": 1.0,
       "nodes": [
         [
@@ -250,6 +259,7 @@
         27,
         9
       ],
+      "id": "lock_b",
       "mode": "lock",
       "required_dims": [
         1.0,
@@ -263,6 +273,7 @@
         36,
         17
       ],
+      "id": "unlock_b",
       "mode": "unlock",
       "required_dims": [
         1.0,

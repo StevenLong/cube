@@ -2,29 +2,32 @@
   "version": 1,
   "meta": { "name": "Crossing", "size": [12, 7] },
   "base": [
-    "============",
-    "=S.........=",
-    "=..####....=",
-    "=..........=",
-    "=..####....=",
-    "=........E.=",
+	"============",
+	"=S.........=",
+	"=..####....=",
+	"=..........=",
+	"=..####....=",
+	"=........E.=",
     "============"
   ],
   "overlay": [
-    "            ",
-    "            ",
-    "            ",
-    "            ",
-    "            ",
-    "  iii w     ",
+	"            ",
+	"            ",
+	"            ",
+	"            ",
+	"            ",
+	"  iii w     ",
     "            "
   ],
   "objects": [
-    { "type": "enemy_sphere", "cell": [8, 1], "waypoints": [[8, 1], [8, 5]], "speed": 1.8 },
-    { "type": "extend_lock_zone", "cell": [3, 3], "mode": "lock", "required_dims": [1, 3, 1] },
-    { "type": "extend_lock_gate", "cell": [5, 2], "nodes": [[5, 2], [5, 4]], "height": 3 },
-    { "type": "extend_lock_zone", "cell": [7, 3], "mode": "unlock", "required_dims": [1, 3, 1] }
+	{ "type": "enemy_sphere", "cell": [8, 1], "waypoints": [[8, 1], [8, 5]], "speed": 1.8 },
+	{ "type": "extend_lock_zone", "id": "lock1", "cell": [3, 3], "mode": "lock", "required_dims": [1, 3, 1] },
+	{ "type": "extend_lock_gate", "id": "gate1", "cell": [5, 2], "nodes": [[5, 2], [5, 4]], "height": 3 },
+	{ "type": "extend_lock_zone", "id": "unlock1", "cell": [7, 3], "mode": "unlock", "required_dims": [1, 3, 1] }
   ],
-  "links": [],
+  "links": [
+	{ "from": "lock1", "to": "gate1", "kind": "opens" },
+	{ "from": "lock1", "to": "unlock1", "kind": "released_by" }
+  ],
   "config": {}
 }
