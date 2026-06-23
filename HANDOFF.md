@@ -1,7 +1,21 @@
 # Handoff
 
-## Session 10 (2026-06-23): Link layer SLICE 4 (editor lock-puzzle wizard) BUILT
+## Session 10 (2026-06-23): Link layer SLICE 4 (wizard) BUILT + SLICE 5 (dogfood) DONE
 Built the wizard end to end in `editor.gd`. The big remaining link-layer piece is now in.
+
+SLICE 5 DOGFOOD + PROMOTE (2026-06-23): user drove the actual wizard on a stripped tut_07 base I
+dropped in their user:// (full level minus the 6 lock components), authored both puzzles, playtested,
+and tweaked unlock2 to (36,14)[1,1,3] (a permutation of lock2's [1,3,1], reachable, no softlock).
+Wizard emitted byte-correct independent links (loader keeps 4/4; lock1 wired to gate1+unlock1 only,
+no cross-talk). PROMOTED to res://levels/data/tut_07_convergence.json (name restored to "Convergence";
+parse-clean). The wizard now authors SHIPPED content. NOTE: user runs NATIVE WINDOWS Godot, so user://
+is at /mnt/c/Users/steve/AppData/Roaming/Godot/app_userdata/Cube/ -- NOT the WSL path (see auto-memory
+project_windows_userdata_path). The dogfood file tut07_wizard_dogfood.json is still in their user://.
+
+BACKFILL RETIREMENT -- NEXT DECISION, NOT DONE: all 3 shipped lock levels now carry real links, but
+`_backfill_global_coupling` (level_loader) + guide_line lock_id=="" still protect the user's pre-wizard
+user:// lock levels (manual locks, no links, e.g. double_gate_one). Retiring breaks those until
+re-authored via the wizard. ASK the user before retiring.
 
 POST-PLAYTEST FIXES (2026-06-23, user drove the wizard; "it passes for now")
 - Wizard back rebound off pad-X (clashed with sprint) to **L3** (button 7, free). Keyboard Shift+Tab
@@ -60,13 +74,14 @@ NOT VERIFIED (needs the user, can't drive the editor GUI headless)
   Drive it on a real playtest. Controls are explicitly "tunable on feel-check".
 
 OPEN / NEXT (pick ONE)
-1. **Dogfood the wizard on tut_07** (slice 5 proper): re-author its two puzzles via the wizard, then
-   **retire `_backfill_global_coupling`** (level_loader) + guide_line.gd's `lock_id==""` global mode,
-   since every shipped lock level will then carry real links. (Backfill still protects any user-made
-   lock level with no links -- only retire once nothing relies on it.)
+1. **Backfill retirement DECISION** (slices 4+5 done): retiring `_backfill_global_coupling` +
+   guide_line.gd's `lock_id==""` global mode is now unblocked for shipped levels, but it breaks the
+   user's pre-wizard user:// lock levels (manual locks, no links). ASK first; if yes, the user
+   re-authors those via the wizard (or accepts they break).
 2. **Slice 6** editor warnings panel (gate with no opener, unlock with no lock, missing start/end,
    end unreachable, unlock dims not a permutation, floating overlay).
 3. **N5c then N5d** guide-line polish (jump cost scales with void width; line origin at tile edge).
+4. **Closing/airlock gate** candidate (new `closes` link kind) -- see task list Link layer Candidates.
 
 ---
 
