@@ -52,6 +52,7 @@ var release_lock_ids: Array[String] = []
 var _player: Player
 var _color: Color
 var _marker: MeshInstance3D
+var _marker_mat: StandardMaterial3D
 var _icon: Node3D
 var _ghost: MeshInstance3D
 var _ghost_mat: StandardMaterial3D
@@ -109,6 +110,7 @@ func _build_marker() -> void:
 	mat.emission_enabled = true
 	mat.emission = _color
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_marker_mat = mat   # kept so the disabled state can dim it (see _set_marker_dim)
 	_marker = MeshInstance3D.new()
 	_marker.mesh = plane
 	_marker.material_override = mat
@@ -167,10 +169,23 @@ func _build_expand_ghost() -> void:
 
 
 func _update_lock_telegraph(delta: float) -> void:
-	var relevant := not _player.is_extend_locked()
-	var on_tile: bool = relevant and not _player.is_moving() and _player_on_footprint()
-	_marker.visible = relevant
-	_icon.visible = relevant and not on_tile
+	# A lock is actionable only while NO lock is engaged (the player holds one active lock
+	# at a time). Once any lock is armed, every lock drops to a quiet DISABLED state -- dim
+	# tile, no padlock icon, no expand ghost -- so attention is free for the live unlock and
+	# its guide line. (Previously this HID every lock outright, which erased the cue for the
+	# shape you'd just formed and blanked the other puzzles' locks too.)
+	var available := not _player.is_extend_locked()
+	if not available:
+		_marker.visible = true
+		_set_marker_dim(true)
+		_icon.visible = false
+		_ghost.visible = false
+		_ghost_phase = 0.0
+		return
+	_set_marker_dim(false)
+	var on_tile: bool = not _player.is_moving() and _player_on_footprint()
+	_marker.visible = true
+	_icon.visible = not on_tile
 	_ghost.visible = on_tile
 	if _icon.visible:
 		_icon.rotate_y(ICON_SPIN * delta)
@@ -178,6 +193,17 @@ func _update_lock_telegraph(delta: float) -> void:
 		_advance_expand_ghost(delta)
 	else:
 		_ghost_phase = 0.0
+
+
+func _set_marker_dim(dim: bool) -> void:
+	# Disabled look: a quiet grey, unlit tile so an engaged/idle lock still reads spatially
+	# without competing for attention. Active look: the lock's colour, emissive.
+	if dim:
+		_marker_mat.albedo_color = Color(0.55, 0.55, 0.6, 0.12)
+		_marker_mat.emission_enabled = false
+	else:
+		_marker_mat.albedo_color = Color(_color.r, _color.g, _color.b, 0.4)
+		_marker_mat.emission_enabled = true
 
 
 func _player_on_footprint() -> bool:

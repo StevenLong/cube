@@ -1,5 +1,75 @@
 # Handoff
 
+## Session 10 (2026-06-23): Link layer SLICE 4 (editor lock-puzzle wizard) BUILT
+Built the wizard end to end in `editor.gd`. The big remaining link-layer piece is now in.
+
+POST-PLAYTEST FIXES (2026-06-23, user drove the wizard; "it passes for now")
+- Wizard back rebound off pad-X (clashed with sprint) to **L3** (button 7, free). Keyboard Shift+Tab
+  unchanged. project.godot + editor.gd labels updated.
+- LOCK attention fix (extend_lock_zone.gd + guide_line.gd), a GAMEPLAY bug surfaced while testing:
+  arming a lock used to HIDE every lock's telegraph (its own shape-ghost, the floor tile, and all
+  OTHER locks) because the telegraph keyed off the global `is_extend_locked()`. Now while any lock is
+  engaged, every lock drops to a quiet DISABLED state (dim grey unlit tile, no icon, no expand ghost)
+  instead of vanishing; the live unlock + its guide line keep attention. Guide-line cross-puzzle bleed
+  also fixed: a lock->gate line shows only while NOTHING is engaged (was visible for a different
+  puzzle while you were committed elsewhere). Single-lock shipped levels unchanged (truth-table
+  verified). User picked "dim ALL locks" (not just the active one). See task list N15. NEEDS a visual
+  feel-check on a multi-lock level (e.g. tut_07 or a 2-puzzle wizard playtest).
+- Deferred (task list): holistic control-scheme rebind + more readable editor on-screen control hints.
+
+WHAT IT DOES
+- New tool-menu entry "Lock Puzzle (wizard)". Grouped-sequence flow: place lock(s) -> gate(s) ->
+  unlock(s) -> finish; finishing loops to a fresh independent puzzle.
+- CONTROLS (tunable on feel-check), keyboard / controller:
+  - next stage: **Tab / Y** -- past the unlock stage this finishes the puzzle and starts the next one.
+  - previous stage: **Shift+Tab / L3** (`editor_wizard_back`, NEW action in project.godot) -- steps
+    back within the SAME puzzle to add more of an earlier role; stops at lock, never crosses into the
+    prior puzzle. Safe because wiring is all-to-all / order-independent. Checked BEFORE editor_menu in
+    `_unhandled_input` (and guarded by `_wizard_active`) because Shift+Tab also matches plain-Tab
+    editor_menu; handling back first + returning shadows that. Verified by an InputMap-match test.
+    (Originally pad-X, but X=sprint in gameplay; moved to L3/button 7, free. A holistic control-scheme
+    rebind is deferred -- see task list Deferred.)
+  - finish & exit: **` / View(Back) button**.
+  - erase a placed object (drops it + its group): **X-key or Backspace / B**.
+  Placement itself is the EXISTING zone (BE-the-shape) / gate (node-path) tooling, untouched.
+- Each placed lock/gate/unlock gets an in-memory `group` tag (sibling to id/params in `_objects`,
+  NOT serialized). On save, `_serialize` -> `_build_links`:
+  - `_mint_link_ids` gives every grouped object a scan-unique id (lock1/gate1/unlock1...), written
+    into `params` so it's stable + idempotent (re-saving never renames).
+  - `_emit_group_links` emits all-to-all OR within a group (every lock `opens` every gate, every
+    lock `released_by` every unlock). Separate groups = independent puzzles.
+  - Unions those with the level's LOADED links (now stashed in `_load_data` as `_loaded_links`),
+    pruning edges whose endpoints were deleted. This fixes a latent bug: serialize used to hardcode
+    `"links": []`, so editing+saving ANY linked level silently dropped its relationships. Now links
+    round-trip (object ids already rode in params).
+- Readout shows the active puzzle number, stage, and L/G/U counts.
+
+VERIFIED (headless, ~/.local/bin/godot v4.6)
+- Parse clean (no SCRIPT/SHADER errors).
+- 19 link-logic checks pass: single all-to-all puzzle, two-puzzle independence (no cross-talk),
+  lock-only commit-to-shape (id minted, no edges), round-trip + dangling-edge prune, mint-uniqueness
+  vs loaded ids, idempotent re-build.
+- Serialize->loader e2e: a wizard puzzle's emitted edges parse via `LevelLoader._parse_links` with
+  zero dropped, and all objects carry ids. Emitted format is byte-identical to the migrated levels
+  (level_01/tut_03/tut_07) the user already confirmed behaviorally.
+- InputMap match: plain Tab matches editor_menu but NOT editor_wizard_back; Shift+Tab matches the
+  back action. So forward/back never collide.
+
+NOT VERIFIED (needs the user, can't drive the editor GUI headless)
+- The interactive feel: Tab/stage flow, per-stage placement, the readout, the wizard controls.
+  Drive it on a real playtest. Controls are explicitly "tunable on feel-check".
+
+OPEN / NEXT (pick ONE)
+1. **Dogfood the wizard on tut_07** (slice 5 proper): re-author its two puzzles via the wizard, then
+   **retire `_backfill_global_coupling`** (level_loader) + guide_line.gd's `lock_id==""` global mode,
+   since every shipped lock level will then carry real links. (Backfill still protects any user-made
+   lock level with no links -- only retire once nothing relies on it.)
+2. **Slice 6** editor warnings panel (gate with no opener, unlock with no lock, missing start/end,
+   end unreachable, unlock dims not a permutation, floating overlay).
+3. **N5c then N5d** guide-line polish (jump cost scales with void width; line origin at tile edge).
+
+---
+
 ## Session 9 (2026-06-22): OFF-PROJECT tooling, NO cube code changed
 Side/tooling work only:
 - Built the user-level `/idea` capture skill (`~/.claude/skills/idea/SKILL.md`): near-frictionless

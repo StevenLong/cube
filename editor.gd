@@ -45,6 +45,10 @@ static func has_session() -> bool:
 var _tool := "none"              # active tool: "none" (free control) or an ObjectRegistry type id
 var _command_open := false       # the Start/Esc command menu (resume/playtest/save/quit) is up
 var _tool_mode := "lock"         # extend_lock_zone variant chosen in the menu (lock | unlock)
+var _wizard_active := false      # the lock-puzzle wizard is guiding placement (slice 4)
+var _wizard_stage := "lock"      # current wizard stage: lock -> gate -> unlock
+var _wizard_group := 0           # group id stamped onto objects placed in the current puzzle
+var _next_group := 0             # monotonic source of fresh group ids (session-local; not serialized)
 var _path_active := false        # a patrol path is being authored (A extends it)
 var _path_cell := Vector2i.ZERO  # spawn cell of the path being authored (its _objects key)
 var _menu_open := false
@@ -63,7 +67,8 @@ var _pending_save_name := ""
 var _pending_save_path := ""
 var _base: Dictionary = {}       # Vector2i -> id
 var _overlay: Dictionary = {}    # Vector2i -> id
-var _objects: Dictionary = {}    # Vector2i -> { "id": String, "params": Dictionary }
+var _objects: Dictionary = {}    # Vector2i -> { "id": String, "params": Dictionary, "group"?: int }
+var _loaded_links: Array = []    # links from the opened file; re-emitted on save (round-trip) so loaded relationships survive an edit
 var _vis: Dictionary = {}        # "layer:x,z" -> Node3D
 var _status := ""                # transient one-line message (saved, playtest hints)
 var _status_t := 0.0
@@ -137,11 +142,22 @@ func _unhandled_input(event: InputEvent) -> void:
 		# of those work on a controller, not just keyboard F5/P.
 		_open_command()
 		return
+	if _wizard_active and event.is_action_pressed("editor_wizard_back"):
+		# Checked before editor_menu: Shift+Tab also matches plain-Tab editor_menu, so
+		# handling back here first (and returning) shadows that. L3 on the controller.
+		_wizard_back()
+		return
 	if event.is_action_pressed("editor_menu"):
-		_open_menu()
+		if _wizard_active:
+			_wizard_advance()   # in the wizard the menu button is "next stage", not the palette
+		else:
+			_open_menu()
 		return
 	if event.is_action_pressed("editor_none"):
-		_select_tool("none")
+		if _wizard_active:
+			_wizard_exit()      # finish the puzzle and drop back to free control
+		else:
+			_select_tool("none")
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
@@ -476,7 +492,15 @@ func _refresh_object_visual(cell: Vector2i) -> void:
 func _stamp_object_at(id: String, cell: Vector2i, params: Dictionary) -> void:
 	var key := "object:%d,%d" % [cell.x, cell.y]
 	_clear_vis(key)
-	_objects[cell] = {"id": id, "params": params}
+	var entry: Dictionary = {"id": id, "params": params}
+	# Group tag (slice 4): preserve it across path re-stamps (gate node add/pop);
+	# otherwise a fresh lock/gate/unlock placed while the wizard guides placement
+	# joins the active puzzle, so _serialize can mint ids + emit its links.
+	if _objects.has(cell) and (_objects[cell] as Dictionary).has("group"):
+		entry["group"] = _objects[cell]["group"]
+	elif _wizard_active and (id == "extend_lock_zone" or id == "extend_lock_gate"):
+		entry["group"] = _wizard_group
+	_objects[cell] = entry
 	var node := _make_object_visual(id, params)
 	node.position = Vector3(cell.x, _obj_y(id), cell.y)
 	add_child(node)
@@ -696,8 +720,16 @@ func _refresh() -> void:
 	var tag := "  (built-in copy: saving makes a new custom level)" if _current_readonly else ""
 	var status_line := ("\n" + _status) if _status != "" else ""
 	var path_line := "\nPATH: A = add node, A on last node = finish, X/B = undo" if _path_active else ""
-	_info.text = "Editing: %s%s\nCell (%d, %d)   Cube %dx%dx%d   Tool: %s\nWASD move, arrows/E/Q shape; Tab menu; Enter place (hold = fill); X/B erase (hold = fill); ` none; F5 finish; P playtest\n%d tiles   %d overlay   %d objects%s%s" % [
-		_level_name, tag, c.x, c.y, shape.x, shape.y, shape.z, _tool_label(_tool), _base.size(), _overlay.size(), _objects.size(), path_line, status_line
+	var wizard_line := ""
+	if _wizard_active:
+		wizard_line = "\nLOCK PUZZLE %d  [%s stage]  %dL %dG %dU   Tab next, Shift+Tab back, ` done; X/B erase" % [
+			_wizard_group, _wizard_stage,
+			_wizard_role_cells(_wizard_group, "lock").size(),
+			_wizard_role_cells(_wizard_group, "gate").size(),
+			_wizard_role_cells(_wizard_group, "unlock").size(),
+		]
+	_info.text = "Editing: %s%s\nCell (%d, %d)   Cube %dx%dx%d   Tool: %s\nWASD move, arrows/E/Q shape; Tab menu; Enter place (hold = fill); X/B erase (hold = fill); ` none; F5 finish; P playtest\n%d tiles   %d overlay   %d objects%s%s%s" % [
+		_level_name, tag, c.x, c.y, shape.x, shape.y, shape.z, _tool_label(_tool), _base.size(), _overlay.size(), _objects.size(), wizard_line, path_line, status_line
 	]
 
 
@@ -705,6 +737,7 @@ func _refresh() -> void:
 
 func _build_tool_menu() -> void:
 	_add_tool_button("none", "None (free control)")
+	_add_wizard_button()
 	for id in ObjectRegistry.TYPES:
 		if id == "extend_lock_zone":
 			# One type, two placement variants: mode is a param, not a separate type
@@ -731,6 +764,17 @@ func _add_tool_button(id: String, label: String, variant: String = "lock") -> vo
 	b.add_theme_font_size_override("font_size", 18)
 	b.text = label
 	b.pressed.connect(_select_tool.bind(id, variant))
+	_tool_list.add_child(b)
+
+
+func _add_wizard_button() -> void:
+	# The lock-puzzle wizard is not a registry type; it drives placement across the
+	# lock/gate/unlock stages and auto-wires the links (slice 4).
+	var b := Button.new()
+	b.custom_minimum_size = Vector2(0, 34)
+	b.add_theme_font_size_override("font_size", 18)
+	b.text = "Lock Puzzle (wizard)"
+	b.pressed.connect(_start_wizard)
 	_tool_list.add_child(b)
 
 
@@ -796,6 +840,98 @@ func _tool_label(id: String) -> String:
 	if id == "extend_lock_zone" and _tool_mode == "unlock":
 		return "Unlock Zone"
 	return String(ObjectRegistry.TYPES[id]["name"])
+
+
+# --- Lock-puzzle wizard (slice 4): a grouped-sequence flow that places a puzzle's
+# lock(s) -> gate(s) -> unlock(s), tags each object with the puzzle's group, and lets
+# _serialize mint ids + emit all-to-all links within the group (every lock opens every
+# gate, every lock is released_by every unlock). Tab = next stage (and, past unlock,
+# finish this puzzle and start the next one); ` (editor_none) = finish and exit.
+# Placement itself is the existing zone/gate tooling, untouched. ---
+
+func _start_wizard() -> void:
+	_close_menu()
+	_wizard_active = true
+	_wizard_group = _next_group
+	_next_group += 1
+	_wizard_set_stage("lock")
+	_flash("Lock Puzzle %d: place lock zone(s).  Tab = next stage,  ` = done" % _wizard_group)
+
+
+func _wizard_set_stage(stage: String) -> void:
+	_end_path()   # commit any in-progress gate fence before changing tools
+	_wizard_stage = stage
+	match stage:
+		"lock":
+			_tool = "extend_lock_zone"
+			_tool_mode = "lock"
+		"gate":
+			_tool = "extend_lock_gate"
+			_tool_mode = "lock"   # mode is irrelevant for gates (path tool)
+		"unlock":
+			_tool = "extend_lock_zone"
+			_tool_mode = "unlock"
+	_player.suppress_dodge = true   # placement mode: A places, not dodge
+
+
+func _wizard_advance() -> void:
+	match _wizard_stage:
+		"lock":
+			if _wizard_role_cells(_wizard_group, "lock").is_empty():
+				_flash("Place at least one lock zone before advancing")
+				return
+			_wizard_set_stage("gate")
+			_flash("Lock Puzzle %d: place gate(s).  Tab = next stage,  ` = done" % _wizard_group)
+		"gate":
+			_wizard_set_stage("unlock")
+			_flash("Lock Puzzle %d: place unlock zone(s).  Tab = finish & next puzzle,  ` = done" % _wizard_group)
+		"unlock":
+			# Past the last stage: close this puzzle and open a fresh one.
+			_wizard_group = _next_group
+			_next_group += 1
+			_wizard_set_stage("lock")
+			_flash("Lock Puzzle %d: place lock zone(s).  Tab = next stage,  ` = done" % _wizard_group)
+
+
+func _wizard_back() -> void:
+	# Step back a stage within the SAME puzzle to add more of an earlier role. Safe
+	# because wiring is all-to-all per group and order-independent. Stops at lock
+	# (no crossing into the previous puzzle).
+	match _wizard_stage:
+		"unlock":
+			_wizard_set_stage("gate")
+			_flash("Lock Puzzle %d: back to gate(s).  Tab = next, Shift+Tab/L3 = back" % _wizard_group)
+		"gate":
+			_wizard_set_stage("lock")
+			_flash("Lock Puzzle %d: back to lock(s).  Tab = next, Shift+Tab/L3 = back" % _wizard_group)
+		"lock":
+			_flash("Already at the first stage (lock)")
+
+
+func _wizard_exit() -> void:
+	_wizard_active = false
+	_select_tool("none")   # ends any path, restores dodge, drops to free control
+	_flash("Lock puzzle wizard finished")
+
+
+func _wizard_role_cells(group: int, role: String) -> Array:
+	# Cells of _objects in this group filling the given lock role (lock | gate | unlock).
+	var out: Array = []
+	for c in _objects:
+		var e: Dictionary = _objects[c]
+		if int(e.get("group", -1)) == group and _lock_role(e) == role:
+			out.append(c)
+	return out
+
+
+func _lock_role(entry: Dictionary) -> String:
+	# The lock-puzzle role of an object entry, or "" if it is not a lock component.
+	var id := String(entry["id"])
+	if id == "extend_lock_gate":
+		return "gate"
+	if id == "extend_lock_zone":
+		return "unlock" if String((entry["params"] as Dictionary).get("mode", "lock")) == "unlock" else "lock"
+	return ""
 
 
 # --- Finish / name panel: freeze the cube, name the level, write user://levels/<slug>.json ---
@@ -940,6 +1076,7 @@ func _serialize() -> Dictionary:
 	var cells: Array = _base.keys() + _overlay.keys() + _objects.keys()
 	if cells.is_empty():
 		return {"version": 1, "base": [], "overlay": [], "objects": []}
+	var links := _build_links()   # mints ids onto grouped objects (writes into params) BEFORE the object loop reads them
 	var minx := 1 << 30
 	var minz := 1 << 30
 	var maxx := -(1 << 30)
@@ -973,9 +1110,105 @@ func _serialize() -> Dictionary:
 		"base": _grid_rows(_base, minx, minz, maxx, maxz),
 		"overlay": _grid_rows(_overlay, minx, minz, maxx, maxz),
 		"objects": objs,
-		"links": [],
+		"links": links,
 		"config": {},
 	}
+
+
+# --- Link layer (slice 4): turn wizard group tags into the serialized `links` edge
+# list, and round-trip the links the file was loaded with. ---
+
+func _build_links() -> Array:
+	# Final link list = loaded links whose endpoints still exist (pruning edges to
+	# deleted objects), UNION the all-to-all links emitted from each wizard group.
+	_mint_link_ids()
+	var current_ids: Dictionary = {}
+	for c in _objects:
+		var oid := String((_objects[c]["params"] as Dictionary).get("id", ""))
+		if oid != "":
+			current_ids[oid] = true
+	var out: Array = []
+	var seen: Dictionary = {}
+	for raw in _loaded_links:
+		if typeof(raw) != TYPE_DICTIONARY:
+			continue
+		var e: Dictionary = raw
+		var from := String(e.get("from", ""))
+		var to := String(e.get("to", ""))
+		var kind := String(e.get("kind", ""))
+		if from.is_empty() or to.is_empty() or kind.is_empty():
+			continue
+		if not current_ids.has(from) or not current_ids.has(to):
+			continue   # endpoint deleted: prune the dangling edge
+		var key := "%s|%s|%s" % [from, to, kind]
+		if seen.has(key):
+			continue
+		seen[key] = true
+		out.append({"from": from, "to": to, "kind": kind})
+	for e in _emit_group_links():
+		var key := "%s|%s|%s" % [e["from"], e["to"], e["kind"]]
+		if seen.has(key):
+			continue
+		seen[key] = true
+		out.append(e)
+	return out
+
+
+func _mint_link_ids() -> void:
+	# Give every grouped (wizard-authored) lock/gate/unlock a stable, unique id, scanned
+	# against all ids already present (loaded ids + earlier mints). Idempotent: an object
+	# that already has an id keeps it, so re-saving never renames.
+	var used: Dictionary = {}
+	for c in _objects:
+		var oid := String((_objects[c]["params"] as Dictionary).get("id", ""))
+		if oid != "":
+			used[oid] = true
+	var counters: Dictionary = {"lock": 0, "gate": 0, "unlock": 0}
+	for c in _objects:
+		var e: Dictionary = _objects[c]
+		if not e.has("group"):
+			continue
+		var params: Dictionary = e["params"]
+		if String(params.get("id", "")) != "":
+			continue
+		var role := _lock_role(e)
+		if role == "":
+			continue
+		var nid := ""
+		while true:
+			counters[role] += 1
+			nid = "%s%d" % [role, counters[role]]
+			if not used.has(nid):
+				break
+		used[nid] = true
+		params["id"] = nid
+
+
+func _emit_group_links() -> Array:
+	# All-to-all OR within each group: every lock opens every gate, every lock is
+	# released_by every unlock. Groups are independent puzzles.
+	var groups: Dictionary = {}   # group -> { "lock": [ids], "gate": [ids], "unlock": [ids] }
+	for c in _objects:
+		var e: Dictionary = _objects[c]
+		if not e.has("group"):
+			continue
+		var role := _lock_role(e)
+		var oid := String((e["params"] as Dictionary).get("id", ""))
+		if role == "" or oid == "":
+			continue
+		var g := int(e["group"])
+		if not groups.has(g):
+			groups[g] = {"lock": [], "gate": [], "unlock": []}
+		(groups[g][role] as Array).append(oid)
+	var out: Array = []
+	for g in groups:
+		var rec: Dictionary = groups[g]
+		for lk in rec["lock"]:
+			for gt in rec["gate"]:
+				out.append({"from": lk, "to": gt, "kind": "opens"})
+			for ul in rec["unlock"]:
+				out.append({"from": lk, "to": ul, "kind": "released_by"})
+	return out
 
 
 func _grid_rows(model: Dictionary, minx: int, minz: int, maxx: int, maxz: int) -> Array:
@@ -1008,6 +1241,9 @@ func _load_level(path: String, readonly: bool) -> void:
 
 func _load_data(data: Dictionary) -> void:
 	_clear_all()
+	# Stash the file's links so a save re-emits them (object ids already round-trip via
+	# params); without this, re-saving a linked level would silently drop its relationships.
+	_loaded_links = (data.get("links", []) as Array).duplicate(true)
 	_load_grid(data.get("base", []), ObjectRegistry.glyph_to_id(ObjectRegistry.Kind.BASE_TILE), _base, "base")
 	_load_grid(data.get("overlay", []), ObjectRegistry.glyph_to_id(ObjectRegistry.Kind.OVERLAY_TILE), _overlay, "overlay")
 	for o in data.get("objects", []):
@@ -1031,6 +1267,8 @@ func _load_grid(rows: Array, glyphs: Dictionary, model: Dictionary, layer: Strin
 
 func _clear_all() -> void:
 	_path_active = false
+	_wizard_active = false
+	_loaded_links = []
 	for key in _vis:
 		_vis[key].queue_free()
 	_vis.clear()

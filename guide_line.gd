@@ -2,10 +2,11 @@ extends Node3D
 
 # Holder for a lock-puzzle guide line (segments are child meshes). Its visibility
 # tracks the lock state so each line shows only while it is useful:
-#   visible_when_locked = false -> lock->gate line: shown while the gate is SHUT
-#       (that lock not armed); hidden once you commit and the gate opens.
-#   visible_when_locked = true  -> lock->unlock line: hidden until the gate is OPEN
-#       (that lock armed), then shows the route to the release.
+#   visible_when_locked = false -> lock->gate line: shown only while NOTHING is engaged
+#       (any puzzle is startable); hidden the moment you commit to any lock, so a
+#       different puzzle's line does not beckon while you are locked elsewhere.
+#   visible_when_locked = true  -> lock->unlock line: shown only while THIS puzzle's lock
+#       is the active one, pointing the way to its release.
 # lock_id pins the line to ONE lock so a multi-lock level shows each puzzle on its own.
 # lock_id == "" is the legacy/backfill mode (track the global "any lock armed" flag);
 # it goes away once every level carries real links (after slice 5).
@@ -28,5 +29,14 @@ func _process(_delta: float) -> void:
 func _update() -> void:
 	if _player == null:
 		return
-	var armed: bool = _player.is_extend_locked() if lock_id == "" else _player.active_lock_id() == lock_id
-	visible = armed == visible_when_locked
+	if lock_id == "":
+		# Legacy/backfill global mode: track the single "any lock armed" flag.
+		visible = _player.is_extend_locked() == visible_when_locked
+		return
+	if visible_when_locked:
+		# lock->unlock route: only while THIS puzzle is the engaged one.
+		visible = _player.active_lock_id() == lock_id
+	else:
+		# lock->gate route: only while nothing is engaged (one active lock at a time), so a
+		# different puzzle's line does not draw attention while the player is committed.
+		visible = not _player.is_extend_locked()
