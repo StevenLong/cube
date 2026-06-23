@@ -12,10 +12,13 @@ parse-clean). The wizard now authors SHIPPED content. NOTE: user runs NATIVE WIN
 is at /mnt/c/Users/steve/AppData/Roaming/Godot/app_userdata/Cube/ -- NOT the WSL path (see auto-memory
 project_windows_userdata_path). The dogfood file tut07_wizard_dogfood.json is still in their user://.
 
-BACKFILL RETIREMENT -- NEXT DECISION, NOT DONE: all 3 shipped lock levels now carry real links, but
-`_backfill_global_coupling` (level_loader) + guide_line lock_id=="" still protect the user's pre-wizard
-user:// lock levels (manual locks, no links, e.g. double_gate_one). Retiring breaks those until
-re-authored via the wizard. ASK the user before retiring.
+BACKFILL RETIRED (2026-06-23, user approved): removed `_backfill_global_coupling` + `_has_lock_edges`
+(level_loader) and the `lock_id==""` legacy mode (guide_line); `_wire_lock_links`/`_build_lock_links`
+run the explicit path unconditionally. A no-edge lock level now wires nothing + draws no guide lines
+(+ warns per id-less lock). Verified: parse clean, no shipped level affected (all 3 carry links), and
+_wire_lock_links on real tut_07 nodes injects each gate/unlock to its own lock, no cross-talk. The
+runtime is purely explicit-links-only now. COLLATERAL (accepted): 4 pre-wizard user:// scratch levels
+went inert (convergence, extension, fun_game_1, my_level_2) -- re-author via the wizard if wanted.
 
 POST-PLAYTEST FIXES (2026-06-23, user drove the wizard; "it passes for now")
 - Wizard back rebound off pad-X (clashed with sprint) to **L3** (button 7, free). Keyboard Shift+Tab
@@ -73,15 +76,14 @@ NOT VERIFIED (needs the user, can't drive the editor GUI headless)
 - The interactive feel: Tab/stage flow, per-stage placement, the readout, the wizard controls.
   Drive it on a real playtest. Controls are explicitly "tunable on feel-check".
 
-OPEN / NEXT (pick ONE)
-1. **Backfill retirement DECISION** (slices 4+5 done): retiring `_backfill_global_coupling` +
-   guide_line.gd's `lock_id==""` global mode is now unblocked for shipped levels, but it breaks the
-   user's pre-wizard user:// lock levels (manual locks, no links). ASK first; if yes, the user
-   re-authors those via the wizard (or accepts they break).
-2. **Slice 6** editor warnings panel (gate with no opener, unlock with no lock, missing start/end,
-   end unreachable, unlock dims not a permutation, floating overlay).
+OPEN / NEXT (pick ONE) -- link layer is now COMPLETE (slices 1-5 done + backfill retired)
+1. **Slice 6** editor warnings panel (gate with no opener, unlock with no lock, missing start/end,
+   end unreachable, unlock dims not a permutation, floating overlay). Now that the runtime is
+   explicit-links-only, "id-less lock / unlinked gate" are real authoring mistakes worth surfacing.
+2. **Closing/airlock gate** candidate (new `closes` link kind) -- see task list Link layer Candidates.
 3. **N5c then N5d** guide-line polish (jump cost scales with void width; line origin at tile edge).
-4. **Closing/airlock gate** candidate (new `closes` link kind) -- see task list Link layer Candidates.
+4. Optional: re-author the 4 now-inert user:// scratch levels (convergence, extension, fun_game_1,
+   my_level_2) via the wizard, or delete them.
 
 ---
 

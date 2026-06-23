@@ -7,9 +7,8 @@ extends Node3D
 #       different puzzle's line does not beckon while you are locked elsewhere.
 #   visible_when_locked = true  -> lock->unlock line: shown only while THIS puzzle's lock
 #       is the active one, pointing the way to its release.
-# lock_id pins the line to ONE lock so a multi-lock level shows each puzzle on its own.
-# lock_id == "" is the legacy/backfill mode (track the global "any lock armed" flag);
-# it goes away once every level carries real links (after slice 5).
+# lock_id pins the line to ONE lock so a multi-lock level shows each puzzle on its own
+# (always set: the loader only draws a line per authored edge).
 
 @export var visible_when_locked := false
 var lock_id := ""
@@ -28,10 +27,6 @@ func _process(_delta: float) -> void:
 
 func _update() -> void:
 	if _player == null:
-		return
-	if lock_id == "":
-		# Legacy/backfill global mode: track the single "any lock armed" flag.
-		visible = _player.is_extend_locked() == visible_when_locked
 		return
 	if visible_when_locked:
 		# lock->unlock route: only while THIS puzzle is the engaged one.

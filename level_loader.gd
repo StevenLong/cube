@@ -352,56 +352,29 @@ func _wire_lock_links(locks: Array, unlocks: Array, gates: Array, links: Array) 
 	# react to, then the objects self-update against the player's single active lock id
 	# (a gate opens while its opener is active; an unlock releases its paired lock). The
 	# coupling is EXPLICIT-LINKS-ONLY: an object with nothing injected reacts to nothing.
+	# A level with no lock edges wires nothing (a lone lock is a commit-to-a-shape puzzle).
 	if locks.is_empty():
 		return
-	if _has_lock_edges(links):
-		var gate_by_id := _by_link_id(gates)
-		var unlock_by_id := _by_link_id(unlocks)
-		for edge in links:
-			var e: Dictionary = edge
-			match String(e["kind"]):
-				"opens":
-					if gate_by_id.has(e["to"]):
-						gate_by_id[e["to"]].opener_ids.append(String(e["from"]))
-					else:
-						push_warning("level_loader: 'opens' target '%s' is not a gate, skipped" % e["to"])
-				"released_by":
-					if unlock_by_id.has(e["to"]):
-						unlock_by_id[e["to"]].release_lock_ids.append(String(e["from"]))
-					else:
-						push_warning("level_loader: 'released_by' target '%s' is not an unlock zone, skipped" % e["to"])
-				_:
-					pass   # no handler for this kind yet; the plumbing stays generic
-		for l in locks:
-			if l.link_id == "":
-				push_warning("level_loader: a lock has no id, so it cannot arm under explicit links")
-	else:
-		_backfill_global_coupling(locks, unlocks, gates)
-
-
-func _backfill_global_coupling(locks: Array, unlocks: Array, gates: Array) -> void:
-	# TRANSITIONAL (remove once slices 3 + 5 author real links into every shipped level):
-	# legacy levels carry links:[] and relied on the old single GLOBAL lock flag. Reproduce
-	# that exactly through the new explicit machinery -- every lock opens every gate and is
-	# released by every unlock -- so those levels behave bit-for-bit while the runtime stays
-	# purely explicit. Mint an id for any lock that lacks one (the id is the armed-state token).
-	var lock_ids: Array[String] = []
-	for i in locks.size():
-		if locks[i].link_id == "":
-			locks[i].link_id = "__lock%d" % i
-		lock_ids.append(locks[i].link_id)
-	for g in gates:
-		g.opener_ids = lock_ids.duplicate()
-	for u in unlocks:
-		u.release_lock_ids = lock_ids.duplicate()
-
-
-func _has_lock_edges(links: Array) -> bool:
+	var gate_by_id := _by_link_id(gates)
+	var unlock_by_id := _by_link_id(unlocks)
 	for edge in links:
-		var k := String((edge as Dictionary).get("kind", ""))
-		if k == "opens" or k == "released_by":
-			return true
-	return false
+		var e: Dictionary = edge
+		match String(e["kind"]):
+			"opens":
+				if gate_by_id.has(e["to"]):
+					gate_by_id[e["to"]].opener_ids.append(String(e["from"]))
+				else:
+					push_warning("level_loader: 'opens' target '%s' is not a gate, skipped" % e["to"])
+			"released_by":
+				if unlock_by_id.has(e["to"]):
+					unlock_by_id[e["to"]].release_lock_ids.append(String(e["from"]))
+				else:
+					push_warning("level_loader: 'released_by' target '%s' is not an unlock zone, skipped" % e["to"])
+			_:
+				pass   # no handler for this kind yet; the plumbing stays generic
+	for l in locks:
+		if l.link_id == "":
+			push_warning("level_loader: a lock has no id, so it cannot arm (no link references it)")
 
 
 func _add_object_floor(data: Dictionary) -> void:
@@ -465,49 +438,36 @@ func _blocked_cells(data: Dictionary) -> Dictionary:
 func _build_lock_links(world: Node3D, locks: Array, unlocks: Array, gates: Array, links: Array, walkable: Dictionary, blocked: Dictionary) -> void:
 	# Guide lines so the lock puzzle reads at a glance, routed ALONG THE GRID (not
 	# crow-flies): an orange path lock->gate (shown while the gate is shut) and a green
-	# path lock->unlock (shown once that lock is armed). With real `links` each line is
-	# drawn per edge and tagged with its lock id, so a multi-lock level reads each puzzle
-	# on its own. A level still on the transitional backfill keeps the old single-anchor
-	# drawing (locks[0], global visibility) until its links are authored.
+	# path lock->unlock (shown once that lock is armed). Each line is drawn per edge and
+	# tagged with its lock id, so a multi-lock level reads each puzzle on its own. A level
+	# with no lock edges draws no guide lines.
 	if locks.is_empty():
 		return
-	if _has_lock_edges(links):
-		var lock_by_id := _by_link_id(locks)
-		var gate_by_id := _by_link_id(gates)
-		var unlock_by_id := _by_link_id(unlocks)
-		for edge in links:
-			var e: Dictionary = edge
-			var lock_id := String(e["from"])
-			var lock = lock_by_id.get(lock_id)
-			if lock == null:
-				continue   # 'from' is not a lock: nothing to anchor a line on (already warned at parse)
-			var lock_cell := _zone_center_cell(lock)
-			match String(e["kind"]):
-				"opens":
-					var g = gate_by_id.get(String(e["to"]))
-					if g != null:
-						var holder := _new_link_holder(false, lock_id)
-						_draw_grid_path(holder, lock_cell, _gate_center_cell(g), walkable, blocked, Color(0.9, 0.55, 0.15), 0.07)
-						world.add_child(holder)
-				"released_by":
-					var u = unlock_by_id.get(String(e["to"]))
-					if u != null:
-						var holder := _new_link_holder(true, lock_id)
-						_draw_grid_path(holder, lock_cell, _zone_center_cell(u), walkable, blocked, Color(0.25, 0.85, 0.4), 0.04)
-						world.add_child(holder)
-				_:
-					pass   # no guide line for unknown kinds yet
-		return
-	# Backfill (no authored edges): the legacy single-anchor drawing on locks[0], global visibility.
-	var anchor := _zone_center_cell(locks[0])
-	for gate in gates:
-		var holder := _new_link_holder(false, "")
-		_draw_grid_path(holder, anchor, _gate_center_cell(gate), walkable, blocked, Color(0.9, 0.55, 0.15), 0.07)
-		world.add_child(holder)
-	for u in unlocks:
-		var holder := _new_link_holder(true, "")
-		_draw_grid_path(holder, anchor, _zone_center_cell(u), walkable, blocked, Color(0.25, 0.85, 0.4), 0.04)
-		world.add_child(holder)
+	var lock_by_id := _by_link_id(locks)
+	var gate_by_id := _by_link_id(gates)
+	var unlock_by_id := _by_link_id(unlocks)
+	for edge in links:
+		var e: Dictionary = edge
+		var lock_id := String(e["from"])
+		var lock = lock_by_id.get(lock_id)
+		if lock == null:
+			continue   # 'from' is not a lock: nothing to anchor a line on (already warned at parse)
+		var lock_cell := _zone_center_cell(lock)
+		match String(e["kind"]):
+			"opens":
+				var g = gate_by_id.get(String(e["to"]))
+				if g != null:
+					var holder := _new_link_holder(false, lock_id)
+					_draw_grid_path(holder, lock_cell, _gate_center_cell(g), walkable, blocked, Color(0.9, 0.55, 0.15), 0.07)
+					world.add_child(holder)
+			"released_by":
+				var u = unlock_by_id.get(String(e["to"]))
+				if u != null:
+					var holder := _new_link_holder(true, lock_id)
+					_draw_grid_path(holder, lock_cell, _zone_center_cell(u), walkable, blocked, Color(0.25, 0.85, 0.4), 0.04)
+					world.add_child(holder)
+			_:
+				pass   # no guide line for unknown kinds yet
 
 
 func _zone_center_cell(zone: Node3D) -> Vector2i:
