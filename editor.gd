@@ -761,7 +761,7 @@ func _update_warnings() -> void:
 	if w.is_empty():
 		_warn.text = ""
 		return
-	_warn.text = "! %d issue%s\n%s" % [w.size(), "" if w.size() == 1 else "s", "\n".join(w)]
+	_warn.text = "⚠ %d issue%s\n%s" % [w.size(), "" if w.size() == 1 else "s", "\n".join(w)]
 
 
 func _compute_warnings() -> Array:
