@@ -72,6 +72,8 @@ var _loaded_links: Array = []    # links from the opened file; re-emitted on sav
 var _vis: Dictionary = {}        # "layer:x,z" -> Node3D
 var _status := ""                # transient one-line message (saved, playtest hints)
 var _status_t := 0.0
+var _warn: Label = null          # Slice 6 lint panel: level-integrity warnings, top-right corner
+var _warn_t := 0.0               # recompute throttle (the readout refreshes per frame; lint must not)
 
 
 func _ready() -> void:
@@ -89,6 +91,17 @@ func _ready() -> void:
 	_finish_panel.hide()
 	_command_menu.hide()
 	_tool_menu.hide()
+	_warn = Label.new()
+	_warn.name = "Warnings"
+	_warn.anchor_left = 1.0
+	_warn.anchor_right = 1.0
+	_warn.offset_left = -520.0
+	_warn.offset_top = 12.0
+	_warn.offset_right = -16.0
+	_warn.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_warn.add_theme_color_override("font_color", Color(1.0, 0.5, 0.1))
+	_warn.add_theme_font_size_override("font_size", 16)
+	$UI.add_child(_warn)
 	if open_session:
 		open_session = false
 		_load_session()
@@ -114,6 +127,12 @@ func _process(delta: float) -> void:
 	_grid_ref.position.x = float(roundi(_player.position.x))
 	_grid_ref.position.z = float(roundi(_player.position.z))
 	_refresh()  # keep the readout live as the cube moves
+	_warn_t -= delta
+	if _warn_t <= 0.0:
+		# ponytail: editor lint on a 0.5s timer, not on every edit; a 0.5s lag on a
+		# warning is fine, and it dodges per-frame serialize/BFS. Dirty flag if it lags.
+		_warn_t = 0.5
+		_update_warnings()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -731,6 +750,80 @@ func _refresh() -> void:
 	_info.text = "Editing: %s%s\nCell (%d, %d)   Cube %dx%dx%d   Tool: %s\nWASD move, arrows/E/Q shape; Tab menu; Enter place (hold = fill); X/B erase (hold = fill); ` none; F5 finish; P playtest\n%d tiles   %d overlay   %d objects%s%s%s" % [
 		_level_name, tag, c.x, c.y, shape.x, shape.y, shape.z, _tool_label(_tool), _base.size(), _overlay.size(), _objects.size(), wizard_line, path_line, status_line
 	]
+
+
+# --- Slice 6: editor lint panel. Surfaces level-integrity problems the explicit-links
+# runtime would otherwise let ship silently (orphan gate/unlock, dead start/end, an
+# unlock whose shape the lock can't tumble into, an end you can't reach). ---
+
+func _update_warnings() -> void:
+	var w := _compute_warnings()
+	if w.is_empty():
+		_warn.text = ""
+		return
+	_warn.text = "! %d issue%s\n%s" % [w.size(), "" if w.size() == 1 else "s", "\n".join(w)]
+
+
+func _compute_warnings() -> Array:
+	var w: Array = []
+	var has_start := "start" in _base.values()
+	var has_end := "end" in _base.values()
+	if not has_start:
+		w.append("No start tile")
+	if not has_end:
+		w.append("No end tile")
+
+	# Link orphans + dims mismatch off the SAME serialized links the save would emit
+	# (this also mints ids onto grouped objects, idempotently, exactly as save does).
+	var data := _serialize()
+	var opened: Dictionary = {}     # gate id -> has an opener lock
+	var released: Dictionary = {}   # unlock id -> has a releasing lock
+	var lock_of: Dictionary = {}    # unlock id -> its lock id (for the shape check)
+	for raw in data.get("links", []):
+		var e: Dictionary = raw
+		match String(e.get("kind", "")):
+			"opens":
+				opened[String(e.get("to", ""))] = true
+			"released_by":
+				released[String(e.get("to", ""))] = true
+				lock_of[String(e.get("to", ""))] = String(e.get("from", ""))
+
+	var by_id: Dictionary = {}      # link id -> object entry (for the lock-dims lookup)
+	for c in _objects:
+		var oid := String((_objects[c]["params"] as Dictionary).get("id", ""))
+		if oid != "":
+			by_id[oid] = _objects[c]
+
+	for c in _objects:
+		var ent: Dictionary = _objects[c]
+		var oid := String((ent["params"] as Dictionary).get("id", ""))
+		var who: String = oid if oid != "" else "at (%d,%d)" % [c.x, c.y]
+		if ent["id"] == "extend_lock_gate":
+			if oid == "" or not opened.has(oid):
+				w.append("Gate %s has no lock" % who)
+		elif ent["id"] == "extend_lock_zone" and String(ent["params"].get("mode", "lock")) == "unlock":
+			if oid == "" or not released.has(oid):
+				w.append("Unlock %s has no lock" % who)
+			elif by_id.has(lock_of.get(oid, "")):
+				var ud := _required_dims(ent)
+				var ld := _required_dims(by_id[lock_of[oid]])
+				if ud != Vector3i.ZERO and ld != Vector3i.ZERO and not _dims_permutation(ud, ld):
+					w.append("Unlock %s shape %s not reachable from lock %s" % [oid, ud, ld])
+
+	# End reachable from start, via the real traversal router (floor steps + void jumps).
+	if has_start and has_end:
+		var ll := LevelLoader.new()
+		var parsed: Dictionary = ll._parse_base(data["base"])
+		var route: Dictionary = ll._route(parsed["start"], parsed["end"], ll._walkable_cells(parsed), ll._blocked_cells(parsed))
+		ll.free()
+		if not route["connected"]:
+			w.append("End unreachable from start")
+	return w
+
+
+func _required_dims(ent: Dictionary) -> Vector3i:
+	var rd: Array = (ent["params"] as Dictionary).get("required_dims", [])
+	return Vector3i(int(rd[0]), int(rd[1]), int(rd[2])) if rd.size() >= 3 else Vector3i.ZERO
 
 
 # --- Tool menu (Tab): pick the active placement tool, or "None" for free control ---
