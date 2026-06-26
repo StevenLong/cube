@@ -1,5 +1,49 @@
 # Handoff
 
+## Session 11 (2026-06-26): Link layer SLICE 6 (editor lint) DONE + endgame REPLANNED
+Link layer is now COMPLETE end to end (all 6 slices + backfill retired).
+
+SLICE 6 -- EDITOR LINT PANEL (committed 3cf82ca, marker tweak b0e0c07). Top-right ⚠ warnings Label in
+editor.gd (`_compute_warnings`/`_update_warnings`, recomputed on a 0.5s timer so it never serializes/
+BFSs on the per-frame readout path). Findings: no start, no end, orphan gate (no `opens`), orphan unlock
+(no `released_by`), unlock shape not a permutation of its lock's, and end unreachable from start.
+Reachability REUSES the loader's real router (LevelLoader._parse_base -> _walkable_cells/_blocked_cells
+-> _route), so floor steps + void jumps + wall/edge blocking all count (no false "unreachable"). Orphan
+checks iterate `_objects`, so a manually-placed id-less gate/unlock is flagged too. Verified headless
+(4-case reachability test + parse-clean). USER feel-checked the panel: reads well; only change was the
+warn marker `!` -> `⚠`. NOT in v1 (cheap to add): "floating overlay" (ink/water over void) -- loader
+auto-floors overlay cells so it's harmless. Slice 6 marked done in the task list.
+
+GODOT 4.7 BUMP (committed f4cbb1e). User opened the project in Godot 4.7 (was 4.6). One-line conversion:
+config/features "4.6"->"4.7"; config_version stays 5, no scenes touched. NOTE: the WSL headless binary
+`~/.local/bin/godot` is still 4.6 -- it opens the 4.7 project fine for parse/headless checks but prints a
+version warning. Bump it to 4.7 only if a clean headless run is wanted.
+
+ENDGAME REPLANNED (grill 2026-06-26) -- full plan is in the task list under "## Stage 1 - Alpha demo"
+(CURRENT WORKSTREAM). Summary: engine/editor/link-layer/save/tutorials are all DONE, so the remaining
+work is a 2-stage CONTENT plan, not a systems gap. STAGE 1 = expand the toolkit (2 enemy candidates
+pyramid+cylinder, design-spec-then-build; 3+ props -- floor button, closing/airlock gate, remote-noise
+button, laser/tripwire, PITFALL TILES) + a gizmo tutorial each, then ship an EXPORTED Windows build to an
+alpha squad with a level-making + best-capstone-time contest (sharing/voting low-tech/external via the
+existing user://levels menu + Discord; NO export_presets.cfg yet -- de-risk with a throwaway export EARLY).
+STAGE 2 = fold in alpha feedback, amass content, polish to a price tag (this is the priced-release goal;
+the 15-20 level grind + composites + cosmetics + new enemies all live here). An editor-usability pass
+(readable control hints + sane bindings) gates the demo since strangers will author levels.
+
+PITFALL TILES decided this session (collapsing floor; full SPEC in the task list): new BASE_TILE, breaks
+when the cube's WHOLE footprint vacates it -> becomes ordinary void (impassable gap, not a death-fall).
+PLAYER-only trigger (broken void blocks enemies for free via enemy_sphere's live is_floor check). Visibly
+fragile from the start, breaks INSTANTLY on vacate. OPEN EDGE CASE flagged by the dev: does an extend-then-
+collapse (shape-change) vacate count, or only a tumble? -> resolve in the pitfall spec pass.
+
+PARKED THREADS: (1) dev's new MOVEMENT TECH from their notes, unexplored -- dev to surface it, review
+implications + whether it earns a tutorial. (2) Per-object design grills owed before building each enemy/
+prop (pyramid, cylinder, floor button, closing gate, remote-noise, laser/tripwire, pitfall).
+
+NEXT (obvious first move): the throwaway Windows export to de-risk distribution, or kick off the first
+per-object design grill (pyramid or pitfall). Optional voice setup still pending the user's `sudo apt
+install sox pulseaudio-utils` (WSL mic for the native voice skill; WSLg PulseServer is live).
+
 ## Session 10 (2026-06-23): Link layer SLICE 4 (wizard) BUILT + SLICE 5 (dogfood) DONE
 Built the wizard end to end in `editor.gd`. The big remaining link-layer piece is now in.
 
