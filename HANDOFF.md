@@ -36,9 +36,20 @@ PLAYER-only trigger (broken void blocks enemies for free via enemy_sphere's live
 fragile from the start, breaks INSTANTLY on vacate. OPEN EDGE CASE flagged by the dev: does an extend-then-
 collapse (shape-change) vacate count, or only a tumble? -> resolve in the pitfall spec pass.
 
-PARKED THREADS: (1) dev's new MOVEMENT TECH from their notes, unexplored -- dev to surface it, review
-implications + whether it earns a tutorial. (2) Per-object design grills owed before building each enemy/
-prop (pyramid, cylinder, floor button, closing gate, remote-noise, laser/tripwire, pitfall).
+EVENING NOTES (2026-06-26, triaged into the task list, NOT implemented):
+- UI/UX not user-friendly -> widened the pre-demo polish item to a "UI/UX + accessibility pass
+  (ALPHA-BLOCKING)": general UI cleanup + a SETTINGS menu (accessibility + user-facing control REMAPPING;
+  collect the squad's remaps as feedback) + fold in the deferred control-scheme overhaul.
+- WORMING: dev's emergent movement tech (extend-then-collapse repeatedly = silent fast travel). Exploitable
+  but maybe a feature -- WATCH in alpha, don't preemptively nerf; reserve lever is an extend OVERHEAT reusing
+  the dodge cooldown (single timer). Replaces the vague "movement tech" parked thread.
+- BLEND between mismatched walls: ANSWERED (working-as-designed, no partial blend). _is_in_cover needs an
+  opposite pair of sides walled to EXACTLY the cube's top height per-cell; mismatched heights can't both
+  match so it just doesn't blend. Logged as a design note, no action.
+
+PARKED THREADS: (1) WORMING (see evening notes) -- decide after alpha. (2) Per-object design grills owed
+before building each enemy/prop (pyramid, cylinder, floor button, closing gate, remote-noise, laser/
+tripwire, pitfall).
 
 NEXT (obvious first move): the throwaway Windows export to de-risk distribution, or kick off the first
 per-object design grill (pyramid or pitfall). Optional voice setup still pending the user's `sudo apt
