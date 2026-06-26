@@ -46,6 +46,10 @@ EVENING NOTES (2026-06-26, triaged into the task list, NOT implemented):
 - BLEND between mismatched walls: ANSWERED (working-as-designed, no partial blend). _is_in_cover needs an
   opposite pair of sides walled to EXACTLY the cube's top height per-cell; mismatched heights can't both
   match so it just doesn't blend. Logged as a design note, no action.
+- BLEND in GLASS: DECIDED no -- glass must NOT count as cover (it's see-through, so blending against it =
+  invisible-behind-a-window, an exploit). Today it DOES (glass is a layer-1 Wall* solid). Fix filed in the
+  task list: cover probe ignores group "glass", glass stays solid for movement. Small (~5-10 lines), do
+  before alpha. NOT yet implemented.
 
 PARKED THREADS: (1) WORMING (see evening notes) -- decide after alpha. (2) Per-object design grills owed
 before building each enemy/prop (pyramid, cylinder, floor button, closing gate, remote-noise, laser/
