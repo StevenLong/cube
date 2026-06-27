@@ -34,6 +34,10 @@ Metal Gear Solid VR Mission aesthetic - stark, clean, artificial.
 - **tumble**: one move — the cube rolls 90° and advances 1 cell.
 - **grid position**: (x, z) in whole units; always integers. The cube's center sits at the cell centre.
 
+These are the grid/movement primitives. Gameplay/systems vocabulary (blend, detection, the
+echo pyramid, overheat, debuff, ...) lives in GLOSSARY.md — our ubiquitous-language doc. When a
+term is ambiguous or being coined, pin it there before building on it.
+
 ## Key Design Decisions
 - Grid-based movement. Everything sized in cube-side units.
 - Cube tumbles face to face. Movement noise scales with speed.

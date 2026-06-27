@@ -215,19 +215,24 @@ void fragment() {
 		}
 		vec3 with_cone = mix(with_waves, cone_color, cone_intensity);
 
-		// Echo pyramids: a dim floor-only danger disc (zone) plus an expanding ring
-		// band at the live pulse front. Floor-only because this shader runs only on
-		// floor tiles, so the readout never overhangs the void.
+		// Echo pyramids: a persistent outer ring marks the danger radius, and the
+		// detection pulse lights up the floor tiles being scanned PER TILE, the same
+		// cell-snapped effect as the player's step wave (round() to the cell centre).
+		// Floor-only because this shader runs only on floor tiles, so it never overhangs
+		// the void.
+		vec2 pyr_cell = round(world_xz);
 		float pyr_total = 0.0;
 		for (int i = 0; i < 4; i++) {
 			float zr = pyr_zone_radii[i];
 			if (zr <= 0.01) { continue; }
-			float pdist = length(world_xz - pyr_origins[i]);
-			float zone = 1.0 - smoothstep(zr - 0.4, zr + 0.4, pdist);
-			float zone_a = mix(0.05, 0.22, pyr_charge[i]) * zone;
+			float cd = length(pyr_cell - pyr_origins[i]);
+			// Persistent outer ring (a tile-wide band at the danger radius).
+			float boundary = 1.0 - smoothstep(0.5, 1.0, abs(cd - zr));
+			float zone_a = mix(0.12, 0.30, pyr_charge[i]) * boundary;
+			// Scan: tiles inside the live front light up per tile, like a step wave.
 			float pr = pyr_pulse_radii[i];
-			float ring = (pr > 0.01) ? (1.0 - smoothstep(0.0, 0.55, abs(pdist - pr))) : 0.0;
-			pyr_total = clamp(pyr_total + zone_a + ring * 0.55, 0.0, 1.0);
+			float scan = (pr > 0.01) ? (1.0 - smoothstep(pr - 0.5, pr + 0.5, cd)) : 0.0;
+			pyr_total = clamp(pyr_total + zone_a + scan * 0.5, 0.0, 1.0);
 		}
 		vec3 with_pyr = mix(with_cone, vec3(0.35, 0.7, 1.0), pyr_total);
 
