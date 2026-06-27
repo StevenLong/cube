@@ -858,7 +858,25 @@ func _settle_pitfalls(extra: Array = []) -> void:
 			origin += Vector2(cell.x, cell.y)
 			n += 1
 	if n > 0:
-		noise_emitted.emit(origin / float(n), PITFALL_NOISE_RADIUS, WAVE_DURATION)
+		_emit_pitfall_noise(origin / float(n))
+
+
+func _emit_pitfall_noise(origin: Vector2) -> void:
+	# A collapsing tile: audible cue + the visible ground wave ring + the signal the
+	# enemy hears, same plumbing as a footstep/knock. Reuses the step waveform pitched
+	# low for a heavy crumble (a real SFX waits on the audio pass, like _play_thud).
+	_step_player.volume_db = linear_to_db(0.7)
+	_step_player.pitch_scale = 0.45
+	_step_player.play()
+	if _waves.size() >= MAX_WAVES:
+		_waves.pop_front()
+	_waves.append({
+		"origin": origin,
+		"half_extent": Vector2.ZERO,
+		"t": 0.0,
+		"max_radius": PITFALL_NOISE_RADIUS
+	})
+	noise_emitted.emit(origin, PITFALL_NOISE_RADIUS, WAVE_DURATION)
 
 
 func _is_stable_at(test_grid_pos: Vector2i, test_ext: Array) -> bool:
