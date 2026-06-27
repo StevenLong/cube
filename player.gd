@@ -98,6 +98,7 @@ var _buf_t := 0.0       # remaining grace on the buffered action
 var _dodge_flash := 0.0 # counts down the green "ready" edge blink after the cooldown ends
 var _dodge_heat_max := 0.0  # peak heat for the current/last dodge (= distance / DODGE_DISTANCE)
 var _ready_player: AudioStreamPlayer  # soft chime when the dodge cools to ready
+var _crumble_player: AudioStreamPlayer  # pitfall break cue; own player so a same-frame step can't clobber it
 var _expression := -1   # active fail-screen face index (-1 = none); chosen at random on a fail
 var _dodge_duration := DODGE_DURATION
 var _slide_last_cell: Vector2i = Vector2i.ZERO
@@ -170,6 +171,11 @@ func _ready() -> void:
 	_ready_player.stream = _make_ready_sound()
 	_ready_player.volume_db = -15.0   # soft hint, not a klaxon
 	add_child(_ready_player)
+	_crumble_player = AudioStreamPlayer.new()
+	_crumble_player.stream = _make_step_sound()   # step waveform pitched low (placeholder crumble)
+	_crumble_player.pitch_scale = 0.45
+	_crumble_player.volume_db = linear_to_db(0.7)
+	add_child(_crumble_player)
 	# Shared resource across every FloorTile and this player; uniforms set on it
 	# here push to every tile's top surface in one go.
 	_ground_material = GROUND_MATERIAL
@@ -863,11 +869,9 @@ func _settle_pitfalls(extra: Array = []) -> void:
 
 func _emit_pitfall_noise(origin: Vector2) -> void:
 	# A collapsing tile: audible cue + the visible ground wave ring + the signal the
-	# enemy hears, same plumbing as a footstep/knock. Reuses the step waveform pitched
-	# low for a heavy crumble (a real SFX waits on the audio pass, like _play_thud).
-	_step_player.volume_db = linear_to_db(0.7)
-	_step_player.pitch_scale = 0.45
-	_step_player.play()
+	# enemy hears, same plumbing as a footstep/knock. Its own player (not _step_player)
+	# because a tumble-off plays a step on the same frame and would restart-clobber it.
+	_crumble_player.play()
 	if _waves.size() >= MAX_WAVES:
 		_waves.pop_front()
 	_waves.append({
