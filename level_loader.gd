@@ -61,6 +61,7 @@ static var sequence_noun: String = "Level"   # the button reads "Next <noun>"; t
 
 var _edge_mat: StandardMaterial3D
 var _glass_mat: StandardMaterial3D
+var _pitfall_mat: StandardMaterial3D
 var _wall_idx := 0          # running Wall* counter; nav keys off unique Wall names
 var _arrow_mesh_res: ArrayMesh   # shared flat arrowhead for jump markers, built once on first use
 
@@ -79,6 +80,12 @@ func _ready() -> void:
 	_glass_mat.emission = Color(0.4, 0.8, 1.0)
 	_glass_mat.emission_energy_multiplier = 0.2
 	_glass_mat.cull_mode = BaseMaterial3D.CULL_DISABLED  # both faces of the pane visible
+	# Pitfall floor: amber, visibly fragile/distinct from normal floor so it's plannable.
+	_pitfall_mat = StandardMaterial3D.new()
+	_pitfall_mat.albedo_color = Color(0.85, 0.45, 0.1)
+	_pitfall_mat.emission_enabled = true
+	_pitfall_mat.emission = Color(0.85, 0.45, 0.1)
+	_pitfall_mat.emission_energy_multiplier = 0.35
 	# Deferred: add_child into the freshly-entering scene root errors mid-_ready.
 	_load.call_deferred()
 
@@ -175,6 +182,7 @@ func _parse_base(rows: Array) -> Dictionary:
 	var tall: Array[Vector2i] = []
 	var edges: Array[Vector2i] = []
 	var glass: Array[Vector2i] = []
+	var pitfall: Array[Vector2i] = []
 	var start := Vector2i.ZERO
 	var end := Vector2i.ZERO
 	for z in rows.size():
@@ -196,9 +204,14 @@ func _parse_base(rows: Array) -> Dictionary:
 					edges.append(cell)
 				"glass_wall":
 					glass.append(cell)
+				"pitfall":
+					# Walkable floor until the player vacates it; level.gd tags the
+					# tile so it can break at runtime.
+					floor_cells[cell] = true
+					pitfall.append(cell)
 				_:
 					pass             # void / unknown
-	return {"floor": floor_cells, "tall": tall, "edges": edges, "glass": glass, "start": start, "end": end}
+	return {"floor": floor_cells, "tall": tall, "edges": edges, "glass": glass, "pitfall": pitfall, "start": start, "end": end}
 
 
 func _parse_overlay(rows: Array) -> Dictionary:
@@ -249,9 +262,24 @@ func _populate(world: Node3D, data: Dictionary) -> void:
 		data["floor"][cell] = true
 
 	var floor_scene: PackedScene = ObjectRegistry.scene_for("floor")
+	var pitfall_set := {}
+	for cell in data["pitfall"]:
+		pitfall_set[cell] = true
 	for cell in data["floor"]:
+		if pitfall_set.has(cell):
+			continue   # pitfall cells get their own (breakable) tile below
 		var tile: Node3D = floor_scene.instantiate()
 		tile.position = Vector3(cell.x, -1.0, cell.y)
+		world.add_child(tile)
+	# Pitfall tiles: a normal floor tile (so it counts as floor and is in group
+	# "floor_tiles"), recoloured and tagged so level.gd can break it on vacate.
+	for cell in data["pitfall"]:
+		var tile: Node3D = floor_scene.instantiate()
+		tile.position = Vector3(cell.x, -1.0, cell.y)
+		tile.add_to_group("pitfall_tiles")
+		var mi: MeshInstance3D = tile.get_node_or_null("MeshInstance3D")
+		if mi != null:
+			mi.set_surface_override_material(0, _pitfall_mat)
 		world.add_child(tile)
 
 	_wall_idx = 0

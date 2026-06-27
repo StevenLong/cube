@@ -657,6 +657,8 @@ func _obj_y(id: String) -> float:
 			return 0.4
 		"extend_lock_gate":
 			return 0.0   # floor-level holder; the sized ghost centres itself
+		"pitfall":
+			return 0.05  # flat tile sits just above the floor plane
 		_:
 			return 0.5
 
@@ -683,6 +685,12 @@ func _preview_mesh(id: String) -> MeshInstance3D:
 			mat.emission_enabled = true
 			mat.emission = Color(0.4, 0.8, 1.0)
 			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		"pitfall":
+			# Flat amber tile: matches the in-game fragile-floor look (_pitfall_mat).
+			mi.mesh = _box(Vector3(1, 0.1, 1))
+			mat.albedo_color = Color(0.85, 0.45, 0.1)
+			mat.emission_enabled = true
+			mat.emission = Color(0.85, 0.45, 0.1)
 		"enemy_sphere":
 			mi.mesh = _sphere(0.4)
 			mat.albedo_color = Color(0.7, 0.7, 0.75)

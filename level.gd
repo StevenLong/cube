@@ -32,6 +32,7 @@ var _end_cell: Vector2i = Vector2i.ZERO
 var _start_material: StandardMaterial3D
 var _end_material: StandardMaterial3D
 var _floor_cells: Dictionary = {}
+var _pitfall_tiles: Dictionary = {}   # cell -> tile node, for floor that breaks on vacate
 
 @onready var _player: Node3D = get_node("../Player")
 var _enemies: Array[Node] = []
@@ -357,6 +358,20 @@ func is_floor(cell: Vector2i) -> bool:
 	return _floor_cells.has(cell)
 
 
+func break_pitfall(cell: Vector2i) -> bool:
+	# Collapse a pitfall tile the player has just vacated: the cell becomes ordinary
+	# void (no floor, tile gone) for player and enemies alike. False if the cell is
+	# not a (still-intact) pitfall. Resets on level reload (floor is rebuilt fresh).
+	if not _pitfall_tiles.has(cell):
+		return false
+	var tile: Node = _pitfall_tiles[cell]
+	_pitfall_tiles.erase(cell)
+	_floor_cells.erase(cell)
+	if is_instance_valid(tile):
+		tile.queue_free()
+	return true
+
+
 func get_floor_bounds() -> Rect2i:
 	# Tight rect around every floor cell, or empty if there is no floor. Used for
 	# debug and any system that needs a quick reach estimate.
@@ -415,6 +430,8 @@ func _build_floor() -> void:
 		t.position = Vector3(cell.x, -1.0, cell.y)
 		_floor_cells[cell] = true
 		pre_placed[cell] = true
+		if t.is_in_group("pitfall_tiles"):
+			_pitfall_tiles[cell] = t
 
 	for cell in _floor_cells.keys():
 		if pre_placed.has(cell):

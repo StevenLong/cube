@@ -29,6 +29,9 @@ const TYPES := {
 	"glass_wall": {
 		"name": "Glass Wall", "kind": Kind.BASE_TILE, "glyph": "g", "paint_mode": "paint",
 	},
+	"pitfall": {
+		"name": "Pitfall", "kind": Kind.BASE_TILE, "glyph": "p", "paint_mode": "paint",
+	},
 	"void": {
 		"name": "Void", "kind": Kind.BASE_TILE, "glyph": " ", "paint_mode": "paint",
 	},

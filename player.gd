@@ -22,6 +22,7 @@ const DODGE_COOLDOWN := 1.5
 const DODGE_FLASH_TIME := 0.3  # green "ready" edge blink duration when the cooldown completes
 const WAVE_DURATION := 0.4
 const KNOCK_RADIUS := 10.0  # wall-knock noise radius (knock is a cube-only ability)
+const PITFALL_NOISE_RADIUS := 5.0  # collapsing-floor noise: a local ping, ~a sprint footstep
 const KNOCK_COOLDOWN := 0.4  # min seconds between wall knocks
 const BUMP_DURATION := 0.25  # won't-fit lean-and-rock-back for a blocked extended move
 const EXTEND_ANIM_RATE := 22.0  # exponential smoothing rate for the extend/collapse mesh grow/shrink (~0.15s settle); higher = snappier
@@ -100,6 +101,7 @@ var _ready_player: AudioStreamPlayer  # soft chime when the dodge cools to ready
 var _expression := -1   # active fail-screen face index (-1 = none); chosen at random on a fail
 var _dodge_duration := DODGE_DURATION
 var _slide_last_cell: Vector2i = Vector2i.ZERO
+var _last_footprint: Dictionary = {}   # cells the cube occupied at the last settle (pitfall vacate diff)
 var _ext := [0, 0, 0, 0, 0]
 var _pending_ext := [0, 0, 0, 0, 0]
 var _disp_size := Vector3.ONE     # displayed mesh size; eases toward the _ext target so extend/collapse animate instead of popping
@@ -161,6 +163,7 @@ func _ready() -> void:
 	# anywhere. Without this it stays at the (0,0) default and the first settle
 	# snaps position to (0,0)-relative coords, lurching the cube off its start.
 	grid_pos = Vector2i(roundi(position.x), roundi(position.z))
+	_last_footprint = _footprint_cells_now()   # seed so the first move's vacate diffs right
 	_step_player.stream = _make_step_sound()
 	_splash_player.stream = _make_splash_sound()
 	_ready_player = AudioStreamPlayer.new()
@@ -431,6 +434,7 @@ func _try_extend(side: int) -> void:
 	# ink / water / footprint / move_settled side effects gate on not _falling
 	# for parity with the tumble path.
 	_check_fall_at_settle()
+	_settle_pitfalls()   # extend only grows the footprint, so this just refreshes the snapshot
 	if not _falling and side != EXT_UP:
 		_check_ink_contact_footprint()
 		_check_water_contact_footprint()
@@ -802,6 +806,59 @@ func _check_fall_at_settle() -> void:
 func _is_floor(cell: Vector2i) -> bool:
 	# Null-safe is_floor: _level is absent when the cube runs standalone (editor).
 	return _level != null and _level.is_floor(cell)
+
+
+func _footprint_cells_now() -> Dictionary:
+	# Every cell the cuboid currently rests on (same rect math as the cover check).
+	var cells := {}
+	var minx: int = grid_pos.x - _ext[EXT_LEFT]
+	var maxx: int = grid_pos.x + _ext[EXT_RIGHT]
+	var minz: int = grid_pos.y - _ext[EXT_FWD]
+	var maxz: int = grid_pos.y + _ext[EXT_BACK]
+	for x in range(minx, maxx + 1):
+		for z in range(minz, maxz + 1):
+			cells[Vector2i(x, z)] = true
+	return cells
+
+
+func _cardinal_line(a: Vector2i, b: Vector2i) -> Array:
+	# Cells from a to b inclusive along one axis (a dodge is always cardinal).
+	var cells: Array = [a]
+	var step := Vector2i(signi(b.x - a.x), signi(b.y - a.y))
+	var c := a
+	while c != b:
+		c += step
+		cells.append(c)
+	return cells
+
+
+func _settle_pitfalls(extra: Array = []) -> void:
+	# Break any pitfall tile the cube vacated this settle. Compares the new footprint
+	# against the last one (so a tumble/collapse off a pitfall breaks it); `extra`
+	# adds cells a dodge swept OVER (never footprint cells, so the diff alone misses
+	# them). Runs on every settle to keep the snapshot live (extend only grows it, so
+	# it breaks nothing). No-op in the editor, where there is no Level. One noise ping
+	# at the centroid of whatever broke, so a multi-cell collapse isn't N stacked pings.
+	var cur := _footprint_cells_now()
+	if _level == null:
+		_last_footprint = cur
+		return
+	var broke: Array = []
+	for cell in _last_footprint:
+		if not cur.has(cell):
+			broke.append(cell)
+	for cell in extra:
+		if not cur.has(cell):
+			broke.append(cell)
+	_last_footprint = cur
+	var origin := Vector2.ZERO
+	var n := 0
+	for cell in broke:
+		if _level.break_pitfall(cell):
+			origin += Vector2(cell.x, cell.y)
+			n += 1
+	if n > 0:
+		noise_emitted.emit(origin / float(n), PITFALL_NOISE_RADIUS, WAVE_DURATION)
 
 
 func _is_stable_at(test_grid_pos: Vector2i, test_ext: Array) -> bool:
@@ -1309,6 +1366,9 @@ func _process(delta: float) -> void:
 			# Cooldown is proportional to the heat built up (distance travelled).
 			_dodge_cooldown_t = DODGE_COOLDOWN * _dodge_heat_max
 			_check_fall_at_settle()
+			# A dodge breaks pitfalls it sweeps OVER, not just where it lands.
+			_settle_pitfalls(_cardinal_line(
+				Vector2i(roundi(_dodge_start_pos.x), roundi(_dodge_start_pos.z)), grid_pos))
 			if not _falling:
 				_check_ink_contact()
 				_check_water_contact()
@@ -1331,6 +1391,7 @@ func _process(delta: float) -> void:
 			_orient = _quantize_basis(Basis(_axis, _angle) * _orient)
 			_ext = _pending_ext
 			_check_fall_at_settle()
+			_settle_pitfalls()   # trailing cells an extended cube rolled off break here
 			if not _falling:
 				_play_step(TUMBLE_DURATION / per_cell)
 				_check_ink_contact_footprint()
@@ -1383,6 +1444,7 @@ func _process(delta: float) -> void:
 		# Collapse shifts grid_pos to the cuboid centre; if that lands on void
 		# (the bridge case collapsing over its gap) the cube starts to fall.
 		_check_fall_at_settle()
+		_settle_pitfalls()   # outer cells the cube collapsed away from break here
 		return
 
 	# Holding dodge primes it AND locks out tumbling, so you can line up a dodge
