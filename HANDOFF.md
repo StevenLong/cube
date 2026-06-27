@@ -1,5 +1,54 @@
 # Handoff
 
+## Session 12 (2026-06-27): Glass fix + PITFALL tiles + ECHO PYRAMID enemy built; Exposed/overheat GRILLED (not built)
+Stage 1 toolkit work. Four things shipped, one design fully settled and queued.
+
+GLASS-BLEND FIX (commit c1322b4) -- the filed exploit. `_extend_cell_clear` gained `ignore_glass`; the
+cover probes `_column_walled`/`_row_walled` (player.gd) pass it so a glass-only cell reads CLEAR (can't hide
+behind a window), while extension-collision callers keep glass solid. Glass already in group "glass". Headless
+branch test green. Feel-check still owed (30s: cube flanked by glass = no blend; by real walls = still blends).
+
+PITFALL TILES (commits 3631cdf, 37e81da, 2c75602) -- BUILT + dev-driven, "good for now". New `pitfall`
+BASE_TILE (glyph p): walkable floor that breaks when the cube's WHOLE footprint vacates it -> ordinary void.
+ONE mechanism: footprint-before/after diff on every settle (tumble/collapse/extend/dodge); a dodge also breaks
+pitfalls it sweeps OVER (dev's call). Player-only trigger; a broken cell blocks enemies free via live is_floor.
+Each break = a moderate ~5-cell noise ping with the player-step wave ring + a low crumble (own _crumble_player,
+since a tumble plays a step the same frame). Loader tags tiles group "pitfall_tiles"; level.gd break_pitfall()
+erases floor + frees tile. Verified headless (unit + full-pipeline smoke). OPEN: amber telegraph visual needs
+work (-> UI/UX pass); the 5-cell ping radius "feels a bit much", first knob to lower after more play.
+
+ECHO PYRAMID enemy (commits 24ae5ca, 43447c7, 2184843) -- BUILT, design grilled first. Stationary FLOATING
+sonar pylon that DEFEATS COVER (the sphere's opposite: non-visual, immobile, no LoS). Fixed-beat pulse: charge
+tell, then a detection FRONT expands centre->R; caught the instant it reaches your cell inside R (edge =
+dodge out ahead, centre = near-instant). On a CATCH, every guard CURRENTLY inside the radius gets your exact
+position (enemy_sphere.reveal_player_at() -> reuses ungated _on_sound_heard -> _last_seen_pos + INVESTIGATE,
+bypassing LoS/walls). No standalone fail, no global alert, no links; lone pyramid = inert. Recoverable: leave
+the field. Registry OBJECT (per-instance radius+interval, editor auto-lists). Readout is drawn on the FLOOR
+TILES via the ground shader (pyr_* uniforms, per-slot like cones; loader wipes slots each load): persistent
+outer ring + a per-tile step-wave SCAN (after two visual reworks -- first floating meshes overhung void + the
+TorusMesh was a glitchy diamond). DEMO LEVEL: user://levels/echo_pyramid_demo.json. KEY TUNABLE: front_speed
+vs dodge distance. Verified headless (parse + smoke: proximity gate reveals in-range guard only). Feel-check
+of the per-tile scan + an audio cue on catch still owed.
+
+EXPOSED / OVERHEAT ON A CATCH -- GRILLED + FULLY SETTLED 2026-06-27, NOT BUILT (the obvious NEXT). Fixes:
+blending currently shrugs off a catch (re-blend and vanish). Settled spec (full version + build hooks in the
+task list "PYRAMID CATCH -> OVERHEAT + EXPOSED" item, and terms in GLOSSARY.md): a catch ALSO (a) OVERHEATS
+(max dodge cooldown, no dodge) and (b) applies EXPOSED (force-break blend + block re-entry, no hide), both on
+ONE shared timer = a new CATCH_OVERHEAT const (default DODGE_COOLDOWN 1.5s, tunable up), re-maxed per catch.
+Only dodge+blend lock; walk/tumble/extend free (walk out exposed = the escape). Pyramid-SPECIFIC (not all
+overheat). TELL: distinct red "Exposed" cube-display look. Build is small (apply_catch_overheat() + one
+`wants_blend` condition + cube-display red state + the _on_catch call). I asked "green light to build?" -- not
+yet answered; START HERE next session.
+
+NEW THIS SESSION: GLOSSARY.md (repo root) -- a Domain-Driven-Design ubiquitous-language doc (dev's request).
+Pins ambiguous/coined gameplay terms ([settled]/[proposed]/[contested]) before they drive a build; CLAUDE.md
+points at it. Already settled: Blend, Cover, Catch (vs guard Detection), Echo Pyramid/Zone/Pulse/Scan, Dodge
+cooldown, Overheat, Exposed, Worming. Keep it updated when coining/disambiguating terms (auto-memory
+feedback_glossary_ubiquitous_language).
+
+PARKED/OWED FEEL-CHECKS: glass-blend (30s), pitfall amber visual + ping radius, pyramid per-tile scan +
+catch audio cue. Per-object grills still owed for: cylinder, floor button, closing gate, remote-noise, laser.
+
 ## Session 11 (2026-06-26): Link layer SLICE 6 (editor lint) DONE + endgame REPLANNED
 Link layer is now COMPLETE end to end (all 6 slices + backfill retired).
 

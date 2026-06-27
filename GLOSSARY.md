@@ -45,11 +45,16 @@ The grid/movement primitives (unit, cell, face, tumble, grid position) live in C
 
 - **Dodge cooldown** [settled] — the recovery timer after a dodge before another can fire
   (`_dodge_cooldown_t`, scales with dodge distance / heat). Shown on the cube display as heat.
-- **Overheat** [proposed] — the dodge cooldown driven to its max so the player cannot dodge.
-  Proposed triggers: a pyramid **catch** (new); extend/collapse spam (the parked **worming**
-  nerf reserve). OPEN: is overheat a single shared timer across all sources?
-- **Debuff** [proposed] — a temporary negative status on the player. First concrete one:
-  **no-blend** (cannot blend) applied by a pyramid catch, ending when that catch's overheat ends.
-  OPEN: is no-blend universal to all overheat, or specific to pyramid catches? (Leaning specific.)
+- **Overheat** [settled] — the dodge cooldown driven to its max by an event, so the player
+  cannot dodge for one full dodge-reset. A pyramid **catch** maxes it (re-maxed on each catch).
+  One shared cooldown timer; a separate tunable for the catch amount (default = the dodge cooldown)
+  so it can be bumped without changing normal dodging. Also the parked **worming** nerf reserve.
+- **Exposed** [settled] — the debuff a pyramid **catch** applies, riding the catch's overheat
+  timer (clears when the dodge cooldown finishes): your position is revealed to in-zone guards AND
+  you cannot **blend** (a current blend is force-broken, re-entry blocked). SPECIFIC to pyramid
+  catches, not to overheat generally (so non-pyramid overheat, e.g. worming, never denies blend).
+  You can still walk/tumble out; dodge + blend are what's locked. Shown by a distinct cube-display
+  look (red, vs the normal amber dodge-heat) for the duration -- it doubles as the overheat tell,
+  since a catch always triggers both.
 - **Worming** [proposed] — emergent tech: repeated extend-then-collapse to travel silently/fast.
   Watched, not yet nerfed; the reserve lever is extend **overheat**.
