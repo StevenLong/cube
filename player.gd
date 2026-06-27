@@ -335,7 +335,7 @@ func _column_walled(x: int, z0: int, z1: int) -> bool:
 	var above_y := top_y + 1.0
 	for z in range(z0, z1 + 1):
 		var cell := Vector2i(x, z)
-		if _extend_cell_clear(cell, top_y) or not _extend_cell_clear(cell, above_y):
+		if _extend_cell_clear(cell, top_y, true) or not _extend_cell_clear(cell, above_y, true):
 			return false
 	return true
 
@@ -345,7 +345,7 @@ func _row_walled(z: int, x0: int, x1: int) -> bool:
 	var above_y := top_y + 1.0
 	for x in range(x0, x1 + 1):
 		var cell := Vector2i(x, z)
-		if _extend_cell_clear(cell, top_y) or not _extend_cell_clear(cell, above_y):
+		if _extend_cell_clear(cell, top_y, true) or not _extend_cell_clear(cell, above_y, true):
 			return false
 	return true
 
@@ -473,7 +473,7 @@ func _extend_side_clear(side: int) -> bool:
 	return true
 
 
-func _extend_cell_clear(cell: Vector2i, probe_y: float = 0.5) -> bool:
+func _extend_cell_clear(cell: Vector2i, probe_y: float = 0.5, ignore_glass: bool = false) -> bool:
 	# True if the cell has no wall to grow into. Queries live physics (layer 1), so
 	# it respects the perimeter walls (now collision-only) and the gate's current
 	# open/closed collision state. "Clear" here means "not a wall" — cover
@@ -483,12 +483,21 @@ func _extend_cell_clear(cell: Vector2i, probe_y: float = 0.5) -> bool:
 	# probe_y defaults to base level (the extension-collision callers). The cover
 	# check (_column_walled / _row_walled) probes at the player's top cell and just
 	# above it to require the wall height to match the player's, not merely exceed it.
+	# ignore_glass: cover callers pass true so a see-through glass pane reads as CLEAR
+	# (you can't hide behind a window); extension-collision callers leave it false so
+	# glass stays a solid you can't grow into.
 	var space := get_world_3d().direct_space_state
 	var params := PhysicsPointQueryParameters3D.new()
 	params.position = Vector3(cell.x, probe_y, cell.y)
 	params.collision_mask = 1
 	params.collide_with_areas = false
-	return space.intersect_point(params).is_empty()
+	var hits := space.intersect_point(params)
+	if ignore_glass:
+		for h in hits:
+			if not h.collider.is_in_group("glass"):
+				return false  # a real wall blocks -> not clear
+		return true  # nothing, or only glass -> clear for cover
+	return hits.is_empty()
 
 
 func _reset_extensions() -> void:
