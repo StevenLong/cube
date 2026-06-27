@@ -233,6 +233,9 @@ func _parse_overlay(rows: Array) -> Dictionary:
 
 
 func _populate(world: Node3D, data: Dictionary) -> void:
+	# Wipe any echo-pyramid shader slots left on the shared ground material by a prior
+	# level, so a level with fewer (or no) pyramids never shows a phantom danger zone.
+	_clear_pyramid_overlays()
 	# Position the singletons BEFORE the subtree enters the tree, so Player syncs
 	# grid_pos and Level reads _end_cell from the right cells at _ready.
 	var start: Vector2i = data["start"]
@@ -738,9 +741,20 @@ func _same_dims_set(a: Vector3i, b: Vector3i) -> bool:
 	return aa == bb
 
 
+func _clear_pyramid_overlays() -> void:
+	var mat := preload("res://grid_ground_material.tres")
+	var zv := PackedVector2Array(); zv.resize(4)
+	var zf := PackedFloat32Array(); zf.resize(4)
+	mat.set_shader_parameter("pyr_origins", zv)
+	mat.set_shader_parameter("pyr_zone_radii", zf)
+	mat.set_shader_parameter("pyr_pulse_radii", zf.duplicate())
+	mat.set_shader_parameter("pyr_charge", zf.duplicate())
+
+
 func _build_pyramid(spec: Dictionary, idx: int) -> Node3D:
 	var pyr: Node3D = ObjectRegistry.scene_for("enemy_pyramid").instantiate()
 	pyr.name = "Pyramid%d" % idx
+	pyr.pyr_index = idx   # slot in the ground-shader pyr_* arrays
 	var cell := _cell(spec.get("cell", [0, 0]))
 	pyr.position = Vector3(cell.x, 0.0, cell.y)   # anchored on the cell; the mesh hovers via a child offset
 	pyr.radius = float(spec.get("radius", ObjectRegistry.default_param("enemy_pyramid", "radius")))

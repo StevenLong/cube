@@ -21,6 +21,12 @@ uniform float cone_radii[8];
 uniform vec3 cone_colors[8];
 uniform float cone_alphas[8];
 
+// Echo pyramids: per-slot danger disc + live pulse front, drawn on the floor tiles.
+uniform vec2 pyr_origins[4];
+uniform float pyr_zone_radii[4];   // persistent danger radius (dim disc); 0 = inactive slot
+uniform float pyr_pulse_radii[4];  // current expanding front radius; 0 = no live pulse
+uniform float pyr_charge[4];       // 0..1 zone brighten during the charge tell / catch flash
+
 uniform vec2 player_xz;
 uniform vec2 wall_mins[64];
 uniform vec2 wall_maxs[64];
@@ -209,6 +215,22 @@ void fragment() {
 		}
 		vec3 with_cone = mix(with_waves, cone_color, cone_intensity);
 
+		// Echo pyramids: a dim floor-only danger disc (zone) plus an expanding ring
+		// band at the live pulse front. Floor-only because this shader runs only on
+		// floor tiles, so the readout never overhangs the void.
+		float pyr_total = 0.0;
+		for (int i = 0; i < 4; i++) {
+			float zr = pyr_zone_radii[i];
+			if (zr <= 0.01) { continue; }
+			float pdist = length(world_xz - pyr_origins[i]);
+			float zone = 1.0 - smoothstep(zr - 0.4, zr + 0.4, pdist);
+			float zone_a = mix(0.05, 0.22, pyr_charge[i]) * zone;
+			float pr = pyr_pulse_radii[i];
+			float ring = (pr > 0.01) ? (1.0 - smoothstep(0.0, 0.55, abs(pdist - pr))) : 0.0;
+			pyr_total = clamp(pyr_total + zone_a + ring * 0.55, 0.0, 1.0);
+		}
+		vec3 with_pyr = mix(with_cone, vec3(0.35, 0.7, 1.0), pyr_total);
+
 		// Ink footprints: each print is a soft-edge tile centered on its cell, so
 		// adjacent per-cell prints tile into a continuous oblong.
 		float ink_total = 0.0;
@@ -219,7 +241,7 @@ void fragment() {
 			ink_total = clamp(ink_total + in_range * footprint_alphas[i], 0.0, 1.0);
 		}
 
-		vec3 final_color = mix(with_cone, vec3(0.1, 0.15, 0.3), ink_total);
+		vec3 final_color = mix(with_pyr, vec3(0.1, 0.15, 0.3), ink_total);
 		ALBEDO = final_color * mix(dark_factor, 1.0, player_vis);
 	}
 }

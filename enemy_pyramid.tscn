@@ -1,4 +1,4 @@
-[gd_scene load_steps=2 format=3 uid="uid://cpyr4mid0echo01"]
+[gd_scene format=3 uid="uid://b6u3cthynnja7"]
 
 [ext_resource type="Script" path="res://enemy_pyramid.gd" id="1"]
 
