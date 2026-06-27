@@ -134,6 +134,7 @@ func _ready() -> void:
 	_mesh.set_surface_override_material(0, _material)
 	_player = get_node("../Player") as Player
 	_player.noise_emitted.connect(_on_player_noise)
+	add_to_group("guards")   # echo pyramids feed position to in-range guards (reveal_player_at)
 	_ground_material = GROUND_MATERIAL
 	_hum_player.stream = _make_hum_sound()
 	_hum_player.play()
@@ -603,6 +604,15 @@ func _on_sound_heard(origin: Vector2) -> void:
 	else:
 		_last_seen_pos = heard_pos
 		_enter_state(State.INVESTIGATE)
+
+
+func reveal_player_at(pos: Vector3) -> void:
+	# An echo pyramid hands this guard the player's exact position with no LoS/wall
+	# gating (perfect intel = the pyramid defeats cover). Reuses the noise-investigate
+	# path: PATROL/SUSPICIOUS -> INVESTIGATE the spot, INVESTIGATE refreshes the target,
+	# PURSUIT is already locked on and ignores it. Recoverable: stop feeding (leave the
+	# field) and the guard drains back down normally.
+	_on_sound_heard(Vector2(pos.x, pos.z))
 
 
 func _is_seeing_player() -> bool:

@@ -54,6 +54,11 @@ const TYPES := {
 		"scene": preload("res://enemy_sphere.tscn"),
 		"params": {"speed": 1.8},
 	},
+	"enemy_pyramid": {
+		"name": "Echo Pyramid", "kind": Kind.OBJECT, "glyph": "", "paint_mode": "single",
+		"scene": preload("res://enemy_pyramid.tscn"),
+		"params": {"radius": 5.0, "interval": 3.0},
+	},
 	"extend_lock_zone": {
 		"name": "Lock Zone", "kind": Kind.OBJECT, "glyph": "", "paint_mode": "single",
 		"scene": preload("res://extend_lock_zone.tscn"),

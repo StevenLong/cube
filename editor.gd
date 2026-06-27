@@ -579,7 +579,29 @@ func _make_object_visual(id: String, params: Dictionary) -> Node3D:
 		return holder
 	if id == "extend_lock_gate":
 		return _make_gate_visual(params)
+	if id == "enemy_pyramid":
+		return _make_pyramid_visual(params)
 	return _preview_mesh(id)
+
+
+func _make_pyramid_visual(params: Dictionary) -> Node3D:
+	# Hovering pyramid marker + a flat coverage disc so the author sees the radius.
+	var holder := Node3D.new()
+	var r: float = float(params.get("radius", ObjectRegistry.default_param("enemy_pyramid", "radius")))
+	var pyr := _preview_mesh("enemy_pyramid")
+	pyr.position = Vector3(0, 2.0, 0)
+	holder.add_child(pyr)
+	var disc := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = r
+	cyl.bottom_radius = r
+	cyl.height = 0.02
+	cyl.radial_segments = 40
+	disc.mesh = cyl
+	disc.position = Vector3(0, 0.02, 0)
+	disc.set_surface_override_material(0, _ghost_mat(Color(0.4, 0.7, 1.0, 0.12)))
+	holder.add_child(disc)
+	return holder
 
 
 func _make_gate_visual(params: Dictionary) -> Node3D:
@@ -659,6 +681,8 @@ func _obj_y(id: String) -> float:
 			return 0.0   # floor-level holder; the sized ghost centres itself
 		"pitfall":
 			return 0.05  # flat tile sits just above the floor plane
+		"enemy_pyramid":
+			return 0.0   # holder anchors on the cell; pyramid + disc offset themselves
 		_:
 			return 0.5
 
@@ -694,6 +718,17 @@ func _preview_mesh(id: String) -> MeshInstance3D:
 		"enemy_sphere":
 			mi.mesh = _sphere(0.4)
 			mat.albedo_color = Color(0.7, 0.7, 0.75)
+		"enemy_pyramid":
+			var cone := CylinderMesh.new()
+			cone.top_radius = 0.0
+			cone.bottom_radius = 0.55
+			cone.height = 0.8
+			cone.radial_segments = 4
+			mi.mesh = cone
+			mi.rotation_degrees = Vector3(180, 45, 0)
+			mat.albedo_color = Color(0.4, 0.7, 1.0)
+			mat.emission_enabled = true
+			mat.emission = Color(0.4, 0.7, 1.0)
 		"extend_lock_gate":
 			mi.mesh = _box(Vector3(0.4, 3, 1))
 			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA

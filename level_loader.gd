@@ -327,6 +327,7 @@ func _build_objects(world: Node3D, data: Dictionary) -> void:
 	# Dispatch each typed instance to its builder. New object types register here.
 	var objects: Array = data.get("objects", [])
 	var enemy_idx := 0
+	var pyramid_idx := 0
 	var zone_idx := 0
 	var gate_idx := 0
 	var lock_zones: Array = []
@@ -341,6 +342,9 @@ func _build_objects(world: Node3D, data: Dictionary) -> void:
 			"enemy_sphere":
 				world.add_child(_build_enemy(spec, enemy_idx))
 				enemy_idx += 1
+			"enemy_pyramid":
+				world.add_child(_build_pyramid(spec, pyramid_idx))
+				pyramid_idx += 1
 			"extend_lock_zone":
 				var zone: Node3D = _build_lock_zone(spec, cell, zone_idx)
 				world.add_child(zone)
@@ -732,6 +736,16 @@ func _same_dims_set(a: Vector3i, b: Vector3i) -> bool:
 	aa.sort()
 	bb.sort()
 	return aa == bb
+
+
+func _build_pyramid(spec: Dictionary, idx: int) -> Node3D:
+	var pyr: Node3D = ObjectRegistry.scene_for("enemy_pyramid").instantiate()
+	pyr.name = "Pyramid%d" % idx
+	var cell := _cell(spec.get("cell", [0, 0]))
+	pyr.position = Vector3(cell.x, 0.0, cell.y)   # anchored on the cell; the mesh hovers via a child offset
+	pyr.radius = float(spec.get("radius", ObjectRegistry.default_param("enemy_pyramid", "radius")))
+	pyr.interval = float(spec.get("interval", ObjectRegistry.default_param("enemy_pyramid", "interval")))
+	return pyr
 
 
 func _build_enemy(spec: Dictionary, idx: int) -> Node3D:
