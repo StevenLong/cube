@@ -215,24 +215,27 @@ void fragment() {
 		}
 		vec3 with_cone = mix(with_waves, cone_color, cone_intensity);
 
-		// Echo pyramids: a filled circular danger area + an expanding scan ring, drawn on
-		// the floor tiles. Distance is per-FRAGMENT (continuous world_xz), so the disc reads
-		// as a round circle instead of a blocky cell-stepped square. The fill is hard-edged
-		// at the catch radius, so the fragment under the player's cell centre is lit IFF a
-		// ping would catch them there (matches enemy_pyramid's d <= radius test).
-		// Floor-only because this shader runs only on floor tiles, so it never overhangs void.
-		float pyr_total = 0.0;   // filled circular danger area + charge brighten
-		float pyr_scan = 0.0;    // bright ring riding the live sweep front
+		// Echo pyramids: a per-TILE danger indicator + an expanding scan, drawn on the floor
+		// tiles. Distance is measured to the cell CENTRE (round(world_xz)) so each tile is a
+		// uniform block. Two tiers: a tile whose centre is within the catch radius is FULL
+		// colour (a ping catches you there -- matches enemy_pyramid's d <= radius test); a
+		// tile the radius circle only clips (centre outside, but part of the tile inside) gets
+		// a dimmer wash, so the disc still reads round at the edges. Floor-only, never void.
+		vec2 pyr_cell = round(world_xz);
+		float pyr_total = 0.0;   // per-tile danger area: full = catchable, dim = clipped fringe
+		float pyr_scan = 0.0;    // per-tile scan front riding the live sweep
 		for (int i = 0; i < 4; i++) {
 			float zr = pyr_zone_radii[i];
 			if (zr <= 0.01) { continue; }
-			float cd = length(world_xz - pyr_origins[i]);
-			float inside = step(cd, zr);
-			float zone_a = mix(0.10, 0.35, pyr_charge[i]) * inside;
+			vec2 oc = pyr_origins[i] - pyr_cell;
+			float cd = length(oc);                                          // centre distance
+			float nearest = length(max(abs(oc) - vec2(0.5), vec2(0.0)));    // nearest point of the tile
+			float tier = max(step(cd, zr), step(nearest, zr) * 0.6);        // 1 = centre in, 0.6 = only clipped
+			float zone_a = mix(0.10, 0.35, pyr_charge[i]) * tier;
 			pyr_total = clamp(pyr_total + zone_a, 0.0, 1.0);
-			// Scan: a bright ring at the expanding front (an outward sonar wave).
+			// Scan: a bright per-tile band at the expanding front (an outward sonar wave).
 			float pr = pyr_pulse_radii[i];
-			float front = (pr > 0.01) ? (1.0 - smoothstep(0.0, 1.0, abs(cd - pr))) * inside : 0.0;
+			float front = (pr > 0.01) ? (1.0 - smoothstep(0.0, 1.0, abs(cd - pr))) * tier : 0.0;
 			pyr_scan = clamp(pyr_scan + front, 0.0, 1.0);
 		}
 		vec3 with_pyr = mix(with_cone, vec3(0.32, 0.62, 1.0), pyr_total);
