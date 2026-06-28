@@ -171,9 +171,10 @@ void fragment() {
 		EMISSION = (heat_color * red_amt + ready_color * green_amt) * glow_strength;
 		// N9b: gentle breathing glow on the edges while blended + idle (blend_pulse > 0).
 		EMISSION += blend_edge_color * edge * blend_pulse;
-		// Exposed alarm: pulsing red wash over the whole face (pyramid catch lockout).
-		float exp_pulse = 0.5 + 0.5 * sin(TIME * 12.0);
-		ALBEDO = mix(ALBEDO, exposed_color, exposed * (0.4 + 0.3 * exp_pulse));
-		EMISSION += exposed_color * exposed * (0.4 + 0.5 * exp_pulse);
+		// Exposed alarm: strong pulsing red wash over the whole face (pyramid catch
+		// lockout). Mostly red even at the trough, throbbing to a hot full-red glow.
+		float exp_pulse = 0.5 + 0.5 * sin(TIME * 9.0);
+		ALBEDO = mix(ALBEDO, exposed_color, exposed * (0.7 + 0.3 * exp_pulse));
+		EMISSION += exposed_color * exposed * (0.8 + 0.9 * exp_pulse);
 	}
 }

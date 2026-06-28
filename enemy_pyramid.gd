@@ -23,7 +23,10 @@ const PYR_MAX := 4   # pyr_* slots in grid_ground.gdshader
 @export var pyr_index: int = 0        # this pyramid's slot in the shared ground-shader arrays
 
 const FLOAT_Y := 3.0                   # how high the pyramid mesh hovers above its cell
+const CHARGE_RISE := 1.5               # extra lift while charging; snaps back down on emit (the wind-up tell)
+const APEX_Y := FLOAT_Y - 0.4          # cone tip height above the cell; the emit beam runs from here to the floor
 const CATCH_FLASH_TIME := 0.35
+const BEAM_FLASH_TIME := 0.3           # how long the emit shaft stays lit at sweep start
 
 var _player: Player
 var _t := 0.0
@@ -31,11 +34,19 @@ var _sweeping := false
 var _sweep_t := 0.0
 var _detected_this_pulse := false
 var _catch_flash := 0.0
+var _beam_flash := 0.0
+var _pyr_mesh: MeshInstance3D
+var _beam: MeshInstance3D
+var _beam_mat: StandardMaterial3D
+var _sweep_player: AudioStreamPlayer3D   # sonar ping at sweep start
+var _catch_player: AudioStreamPlayer3D   # distinct low alarm on a catch
 
 
 func _ready() -> void:
 	_player = get_node_or_null("../Player") as Player
 	_build_pyramid_mesh()
+	_build_beam()
+	_build_audio()
 	# Stale slots from a prior level are wiped by the loader (_clear_pyramid_overlays).
 
 
@@ -58,23 +69,64 @@ func _build_pyramid_mesh() -> void:
 	pmat.emission_energy_multiplier = 0.5
 	pyr.set_surface_override_material(0, pmat)
 	add_child(pyr)
+	_pyr_mesh = pyr
+
+
+func _build_beam() -> void:
+	# A thin bright shaft from the cone tip down to the floor, flashed for an instant
+	# at sweep start so the exact emit moment is unmistakable (cf. the wall edge beams).
+	_beam = MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.05
+	cyl.bottom_radius = 0.05
+	cyl.height = APEX_Y
+	_beam.mesh = cyl
+	_beam.position = Vector3(0, APEX_Y * 0.5, 0)
+	_beam_mat = StandardMaterial3D.new()
+	_beam_mat.albedo_color = Color(0.6, 0.9, 1.0)
+	_beam_mat.emission_enabled = true
+	_beam_mat.emission = Color(0.6, 0.9, 1.0)
+	_beam_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_beam.set_surface_override_material(0, _beam_mat)
+	_beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_beam.visible = false
+	add_child(_beam)
+
+
+func _build_audio() -> void:
+	# Two procedural one-shots on their own 3D players (no audio assets to ship).
+	_sweep_player = AudioStreamPlayer3D.new()
+	_sweep_player.unit_size = 6.0
+	_sweep_player.max_distance = 25.0
+	_sweep_player.stream = _make_ping(1180.0, 1020.0, 0.5, 0.7)   # sonar ping: high, ringing
+	add_child(_sweep_player)
+	_catch_player = AudioStreamPlayer3D.new()
+	_catch_player.unit_size = 6.0
+	_catch_player.max_distance = 25.0
+	_catch_player.stream = _make_ping(540.0, 150.0, 0.5, 0.95)    # caught: low descending alarm
+	add_child(_catch_player)
 
 
 func _process(delta: float) -> void:
 	if _catch_flash > 0.0:
 		_catch_flash = maxf(_catch_flash - delta, 0.0)
+	if _beam_flash > 0.0:
+		_beam_flash = maxf(_beam_flash - delta, 0.0)
 
 	var pulse_r := 0.0
 	var charge_amt := 0.0
+	var rise := 0.0   # 0..1 charge wind-up; drives the mesh lift (and the zone brighten)
 	if not _sweeping:
 		_t += delta
-		# Charge tell: brighten the zone over the last `charge` seconds before firing.
+		# Charge tell: brighten the zone + lift the pyramid over the last `charge` seconds.
 		if charge > 0.0 and _t > interval - charge:
-			charge_amt = clampf((_t - (interval - charge)) / charge, 0.0, 1.0)
+			rise = clampf((_t - (interval - charge)) / charge, 0.0, 1.0)
+		charge_amt = rise
 		if _t >= interval:
 			_sweeping = true
 			_sweep_t = 0.0
 			_detected_this_pulse = false
+			_on_sweep_start()
 	else:
 		_sweep_t += delta
 		pulse_r = front_speed * _sweep_t
@@ -91,14 +143,28 @@ func _process(delta: float) -> void:
 			_t = 0.0
 			pulse_r = 0.0
 
+	# Mesh lifts while charging, snaps back down the instant it fires (rise -> 0).
+	_pyr_mesh.position.y = FLOAT_Y + CHARGE_RISE * rise
+	var beam_ratio := _beam_flash / BEAM_FLASH_TIME
+	_beam.visible = beam_ratio > 0.0
+	if _beam.visible:
+		_beam_mat.emission_energy_multiplier = 4.0 * beam_ratio
+
 	if _catch_flash > 0.0:
 		charge_amt = 1.0   # whole zone flashes bright the moment it catches you
 	_push_ground(minf(pulse_r, radius), charge_amt)
 
 
+func _on_sweep_start() -> void:
+	# The exact moment the detection front launches: flash the beam + sonar ping.
+	_beam_flash = BEAM_FLASH_TIME
+	_sweep_player.play()
+
+
 func _on_catch(player_pos: Vector3) -> void:
 	# Feed the player's position to every guard currently inside the radius.
 	_catch_flash = CATCH_FLASH_TIME
+	_catch_player.play()   # distinct low alarm: you were caught
 	# Overheat + Exposed: a catch must STICK -- bar dodge/blend so you can't just
 	# re-blend and vanish. Pyramid-specific; the player owns the timer.
 	_player.apply_catch_overheat()
@@ -146,3 +212,27 @@ func _slot_f(param: String) -> PackedFloat32Array:
 		z.resize(PYR_MAX)
 		return z
 	return a
+
+
+static func _make_ping(f0: float, f1: float, dur: float, peak: float) -> AudioStreamWAV:
+	# One-shot tone gliding f0 -> f1, fast attack + long exponential ring (sonar-ish).
+	# Procedural so there's no audio asset to ship.
+	var rate := 44100
+	var samples := int(rate * dur)
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = rate
+	stream.stereo = false
+	var data := PackedByteArray()
+	data.resize(samples * 2)
+	var phase := 0.0
+	for i in samples:
+		var u := float(i) / float(samples)
+		var freq := lerpf(f0, f1, u)
+		phase += TAU * freq / float(rate)
+		var env := minf(u / 0.01, 1.0) * exp(-2.5 * u)
+		var val := int(sin(phase) * env * peak * 30000.0)
+		data[i * 2] = val & 0xFF
+		data[i * 2 + 1] = (val >> 8) & 0xFF
+	stream.data = data
+	return stream

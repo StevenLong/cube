@@ -221,20 +221,25 @@ void fragment() {
 		// Floor-only because this shader runs only on floor tiles, so it never overhangs
 		// the void.
 		vec2 pyr_cell = round(world_xz);
-		float pyr_total = 0.0;
+		float pyr_total = 0.0;   // dim filled danger area (+ a brighter rim) and charge brighten
+		float pyr_scan = 0.0;    // bright per-tile front band riding the live sweep
 		for (int i = 0; i < 4; i++) {
 			float zr = pyr_zone_radii[i];
 			if (zr <= 0.01) { continue; }
 			float cd = length(pyr_cell - pyr_origins[i]);
-			// Persistent outer ring (a tile-wide band at the danger radius).
-			float boundary = 1.0 - smoothstep(0.5, 1.0, abs(cd - zr));
-			float zone_a = mix(0.12, 0.30, pyr_charge[i]) * boundary;
-			// Scan: tiles inside the live front light up per tile, like a step wave.
+			// Filled danger area: the whole disc reads, dim at rest, brightening on the
+			// charge tell, with a slightly hotter rim so the boundary stays legible.
+			float inside = 1.0 - smoothstep(zr - 0.5, zr + 0.5, cd);
+			float rim = 1.0 - smoothstep(0.3, 0.9, abs(cd - zr));
+			float zone_a = mix(0.10, 0.35, pyr_charge[i]) * inside + 0.18 * rim;
+			pyr_total = clamp(pyr_total + zone_a, 0.0, 1.0);
+			// Scan: a bright tile-wide band at the expanding front (an outward sonar wave).
 			float pr = pyr_pulse_radii[i];
-			float scan = (pr > 0.01) ? (1.0 - smoothstep(pr - 0.5, pr + 0.5, cd)) : 0.0;
-			pyr_total = clamp(pyr_total + zone_a + scan * 0.5, 0.0, 1.0);
+			float front = (pr > 0.01) ? (1.0 - smoothstep(0.0, 1.0, abs(cd - pr))) * inside : 0.0;
+			pyr_scan = clamp(pyr_scan + front, 0.0, 1.0);
 		}
-		vec3 with_pyr = mix(with_cone, vec3(0.35, 0.7, 1.0), pyr_total);
+		vec3 with_pyr = mix(with_cone, vec3(0.32, 0.62, 1.0), pyr_total);
+		with_pyr = mix(with_pyr, vec3(0.7, 0.95, 1.0), pyr_scan);
 
 		// Ink footprints: each print is a soft-edge tile centered on its cell, so
 		// adjacent per-cell prints tile into a continuous oblong.
