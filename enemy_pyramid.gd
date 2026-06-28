@@ -44,6 +44,7 @@ var _dropping := false
 var _pyr_mesh: MeshInstance3D
 var _beam: MeshInstance3D
 var _beam_mat: StandardMaterial3D
+var _flashes: Array = []   # transient catch beams: {node, mat, delay, t}
 var _sweep_player: AudioStreamPlayer3D   # sonar ping at sweep start
 var _catch_player: AudioStreamPlayer3D   # distinct low alarm on a catch
 
@@ -79,24 +80,29 @@ func _build_pyramid_mesh() -> void:
 
 
 func _build_beam() -> void:
-	# A thin bright shaft from the cone tip down to the floor, flashed for an instant
-	# at sweep start so the exact emit moment is unmistakable (cf. the wall edge beams).
+	# A thin shaft flashed at sweep start. Unit height (1u), stretched via scale.y each frame
+	# so its top stays on the cone tip as the pyramid falls (stays attached, see _process).
 	_beam = MeshInstance3D.new()
 	var cyl := CylinderMesh.new()
-	cyl.top_radius = 0.05
-	cyl.bottom_radius = 0.05
-	cyl.height = APEX_Y
+	cyl.top_radius = 0.025
+	cyl.bottom_radius = 0.025
+	cyl.height = 1.0
 	_beam.mesh = cyl
-	_beam.position = Vector3(0, APEX_Y * 0.5, 0)
-	_beam_mat = StandardMaterial3D.new()
-	_beam_mat.albedo_color = Color(0.6, 0.9, 1.0)
-	_beam_mat.emission_enabled = true
-	_beam_mat.emission = Color(0.6, 0.9, 1.0)
-	_beam_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_beam_mat = _make_beam_mat()
 	_beam.set_surface_override_material(0, _beam_mat)
 	_beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_beam.visible = false
 	add_child(_beam)
+
+
+func _make_beam_mat() -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(0.6, 0.9, 1.0)
+	m.emission_enabled = true
+	m.emission = Color(0.6, 0.9, 1.0)
+	m.emission_energy_multiplier = 4.0
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	return m
 
 
 func _build_audio() -> void:
@@ -164,10 +170,15 @@ func _process(delta: float) -> void:
 	else:
 		_mesh_y = FLOAT_Y + CHARGE_RISE * rise
 	_pyr_mesh.position.y = _mesh_y
+	# Emit beam: span the cone tip (mesh apex, which moves as it falls) down to the floor.
 	var beam_ratio := _beam_flash / BEAM_FLASH_TIME
 	_beam.visible = beam_ratio > 0.0
 	if _beam.visible:
+		var apex_local := _mesh_y - 0.4   # cone tip sits 0.4u below the mesh centre
+		_beam.scale.y = apex_local
+		_beam.position.y = apex_local * 0.5
 		_beam_mat.emission_energy_multiplier = 4.0 * beam_ratio
+	_tick_flashes(delta)
 
 	if _catch_flash > 0.0:
 		charge_amt = 1.0   # whole zone flashes bright the moment it catches you
@@ -189,13 +200,61 @@ func _on_catch(player_pos: Vector3) -> void:
 	# Overheat + Exposed: a catch must STICK -- bar dodge/blend so you can't just
 	# re-blend and vanish. Pyramid-specific; the player owns the timer.
 	_player.apply_catch_overheat()
+	# Comms beams: a return shaft straight up from the caught tile, then (a beat later)
+	# one out to each guard the pyramid notifies -- the player's spot being broadcast.
+	_spawn_flash(Vector3(player_pos.x, 0.05, player_pos.z), Vector3(player_pos.x, FLOAT_Y, player_pos.z), 0.0)
+	var broadcast := Vector3(player_pos.x, 1.0, player_pos.z)
 	var center := Vector2(position.x, position.z)
 	for g in get_tree().get_nodes_in_group("guards"):
 		if not g.has_method("reveal_player_at"):
 			continue
-		var gc := Vector2((g as Node3D).position.x, (g as Node3D).position.z)
-		if gc.distance_to(center) <= radius:
+		var gn := g as Node3D
+		if Vector2(gn.position.x, gn.position.z).distance_to(center) <= radius:
 			g.reveal_player_at(player_pos)
+			_spawn_flash(broadcast, Vector3(gn.position.x, 1.0, gn.position.z), 0.1)
+
+
+func _spawn_flash(from: Vector3, to: Vector3, delay: float) -> void:
+	# A thin cyan beam between two world points, flashed then freed (the catch comms).
+	var d := to - from
+	var seg_len := d.length()
+	if seg_len < 0.01:
+		return
+	var seg := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.025
+	cyl.bottom_radius = 0.025
+	cyl.height = 1.0
+	seg.mesh = cyl
+	var mat := _make_beam_mat()
+	seg.set_surface_override_material(0, mat)
+	seg.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(seg)
+	# Orient the +Y cylinder axis along (to - from), stretched to length, at the midpoint.
+	var up := d / seg_len
+	var ref := Vector3.RIGHT if absf(up.x) < 0.9 else Vector3.FORWARD
+	var right := ref.cross(up).normalized()
+	var fwd := up.cross(right).normalized()
+	# Scale the up-AXIS directly (Basis.scaled scales rows, not columns -- wrong for a tilted beam).
+	seg.global_transform = Transform3D(Basis(right, up * seg_len, fwd), (from + to) * 0.5)
+	seg.visible = delay <= 0.0
+	_flashes.append({ "node": seg, "mat": mat, "delay": delay, "t": BEAM_FLASH_TIME })
+
+
+func _tick_flashes(delta: float) -> void:
+	for i in range(_flashes.size() - 1, -1, -1):
+		var f: Dictionary = _flashes[i]
+		if f["delay"] > 0.0:
+			f["delay"] -= delta
+			if f["delay"] <= 0.0:
+				f["node"].visible = true
+			continue
+		f["t"] -= delta
+		if f["t"] <= 0.0:
+			f["node"].queue_free()
+			_flashes.remove_at(i)
+		else:
+			f["mat"].emission_energy_multiplier = 4.0 * (f["t"] / BEAM_FLASH_TIME)
 
 
 func _push_ground(pulse_r: float, charge_amt: float) -> void:
