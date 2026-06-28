@@ -1,5 +1,66 @@
 # Handoff
 
+## Session 13 (2026-06-28): Catch overheat/exposed BUILT; pyramid feel pass; SEEK enemy state; pursuit stickiness; beams (BUG open)
+Big iterative session on the echo pyramid + the guard it feeds. Nine commits (4e1dd33..b2d9e7e), all pushed.
+
+CATCH -> OVERHEAT + EXPOSED (BUILT, the Session-12 grilled spec). A pyramid catch now sticks instead of
+being shrugged off by re-blending. The real dodge gate is `_dodge_cooldown_t` (not the `is_dodge_available`
+helper -- my first attempt gated the wrong thing, 4e1dd33, fixed in e551908): a catch sets the FULL dodge
+cooldown (= a max-length dodge, so the existing trigger bars dodge) AND sets `_exposed` (force-breaks blend +
+blocks re-entry via the `wants_blend` condition). One window: `_exposed` clears exactly when the cooldown hits
+0, so both indicators (edge-heat + red wash) show and end together. Tell: a strong pulsing red whole-face wash
+(cube.gdshader `exposed` uniform). player.gd `apply_catch_overheat()`; enemy_pyramid `_on_catch` calls it.
+
+PYRAMID READABILITY/FEEL PASS (4929ced, e551908): filled danger zone (was a bare ring); charge wind-up now
+LIFTS the pyramid mesh then it FALLS back under gravity with a damped bounce (DROP_GRAVITY/BOUNCE consts) --
+no more teleport-snap; an emit beam at sweep start; procedural audio via `_make_ping(f0,f1,dur,peak,decay,
+glide_k)` -- sonar "boing" (high + long ring) at sweep start, sharp short sting on catch; strengthened red wash.
+
+ZONE SHAPE -- final = TWO-TIER PER-TILE (8885ca7). Iterated: hard per-cell cutoff (7fb7f5a) read "square" at
+r=5; tried a round continuous circle (d3f072d) but dev wanted per-tile back. FINAL: per-tile (round() to cell
+centre), FULL colour where the tile centre is within radius (exactly the catchable cells, matches the d<=radius
+catch test), a DIMMER wash (0.6) on tiles the radius only clips -> rounds the silhouette while staying honest.
+In shaders/grid_ground.gdshader.
+
+SEEK ENEMY STATE (be7c913, GRILLED first). New 5th `State.SEEK` so a pyramid catch makes guards AGGRESSIVE
+instead of the gentle INVESTIGATE (stepping behind a wall no longer shakes the combo). reveal_player_at routes
+here for every guard in range (PURSUIT guards keep their own lock). Beelines to the EXACT revealed cell at a
+~4.0 u/s floor (SEEK_SPEED/MULT; above walk, below pursuit) via pursuit's hybrid locomotion (extracted to
+`_chase`); cone aimed ahead -> escalates to real PURSUIT on sight; each ping refreshes target + resets the
+give-up timer; on reaching a stale cell -> INVESTIGATE. Ignores noise like pursuit. Tell: electric cyan body +
+cyan "!" + hum 1.35. GLOSSARY: `Seek [proposed]` (NAME NOT RATIFIED -- SEEK/ALERT/TAGGED?), Zone/Catch refreshed.
+CRASH FIX d6684cd: `_update_hum` indexes TWO arrays by `_state` (HUM_PITCH + HUM_VOL); I added the 5th entry to
+HUM_PITCH but missed HUM_VOL -> out-of-bounds the instant a guard entered SEEK. (Lesson in auto-memory
+feedback_godot_runtime_gotchas: grep EVERY `[_state]` when growing an enum; also const/enum edits need a FULL
+Godot restart, hot-reload leaves them stale.)
+
+PURSUIT STICKINESS (3eb0f22): two fixes so the chase isn't shaken trivially. (1) PURSUIT_GRACE (1.2s): after
+LoS breaks (ducking a corner right in front) the guard keeps tracking the player's cell briefly instead of
+freezing/staring -> one corner isn't a free escape; re-seeing refreshes it. (2) reveal_player_at during PURSUIT
+now ACTS on the fresh intel at once (retarget, refresh detection lock + grace, repath) instead of early-returning.
+
+BEAMS (b2d9e7e) -- BUILT but WRONG + has a BUG. Emit shaft now stays attached to the falling cone tip (unit
+cylinder stretched via scale.y), thinner (r 0.025). On a catch it spawns transient comms beams (_spawn_flash/
+_tick_flashes; beam stretch uses Basis(right, up*len, fwd) NOT Basis.scaled -- scaled scales rows not the axis).
+   *** TWO THINGS TO FIX NEXT (deferred this session, dev out of time): ***
+   1. WRONG DIRECTION. Intended signal trail (dev-confirmed): pyramid->floor (emit, DONE) -> ping hits player ->
+      player->PYRAMID (return) -> PYRAMID->each reachable guard (broadcast). Current code does player->straight-UP
+      and player->guard. FIX in enemy_pyramid `_on_catch`: aim the return beam from the player tile to the
+      pyramid's mesh position; change the broadcast ORIGIN from the player to the pyramid position.
+   2. BUG: on a ping/catch there's a stray "second beam that goes to random positions," hard to read. Investigate
+      the broadcast _spawn_flash -- candidate causes: a guard position read, a degenerate orientation, or beams
+      stacking across repeated catches while the player lingers in the zone. Diagnose before re-aiming.
+
+OWED FEEL-CHECKS (none verifiable headless; all this session's work): catch overheat dodge-block + both
+indicators together; sonar boing / catch sting; pyramid descent bounce; two-tier zone; SEEK (cyan, beeline,
+escalate on sight, unshakeable-by-a-single-wall); pursuit corner grace; ping-during-pursuit; beams. NOTE: dev on
+NATIVE Windows Godot over \\wsl$ -- after any const/enum push, FULL editor restart (hot-reload leaves stale).
+
+KEY TUNABLES: CATCH lockout = DODGE_COOLDOWN (1.5); SEEK_SPEED 4.0 / SEEK_SPEED_MULT 1.3 / SEEK_ARRIVE_DIST 0.6
+/ SEEK_TIMEOUT 8.0; PURSUIT_GRACE 1.2; COLOR_SEEK cyan; HUM_PITCH/HUM_VOL[4]; zone fringe dim 0.6 (grid_ground);
+beam radius/timing + _make_ping params (enemy_pyramid). NEXT: fix the beams (redirect + the stray-beam bug), then
+the owed feel-checks; ratify the SEEK name.
+
 ## Session 12 (2026-06-27): Glass fix + PITFALL tiles + ECHO PYRAMID enemy built; Exposed/overheat GRILLED (not built)
 Stage 1 toolkit work. Four things shipped, one design fully settled and queued.
 
