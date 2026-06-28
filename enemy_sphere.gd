@@ -78,7 +78,7 @@ const GLYPH_POP_TIME := 0.25         # seconds the glyph pop decays over
 # the alert ladder, indexed by State. Pitch also speeds the baked tremolo, so a
 # higher alert reads as a more agitated hum even when the enemy is out of sight.
 const HUM_PITCH: Array[float] = [1.0, 1.12, 1.22, 1.5, 1.35]   # PATROL/SUSPICIOUS/INVESTIGATE/PURSUIT/SEEK (indexed by the State enum)
-const HUM_VOL: Array[float] = [-10.0, -9.0, -8.0, -6.0]
+const HUM_VOL: Array[float] = [-10.0, -9.0, -8.0, -6.0, -7.0]   # PATROL/SUSPICIOUS/INVESTIGATE/PURSUIT/SEEK (indexed by the State enum)
 const HUM_LERP_RATE := 4.0           # how fast the hum eases between state targets
 
 enum State { PATROL, SUSPICIOUS, INVESTIGATE, PURSUIT, SEEK }
