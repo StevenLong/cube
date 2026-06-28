@@ -215,26 +215,22 @@ void fragment() {
 		}
 		vec3 with_cone = mix(with_waves, cone_color, cone_intensity);
 
-		// Echo pyramids: a persistent outer ring marks the danger radius, and the
-		// detection pulse lights up the floor tiles being scanned PER TILE, the same
-		// cell-snapped effect as the player's step wave (round() to the cell centre).
-		// Floor-only because this shader runs only on floor tiles, so it never overhangs
-		// the void.
-		vec2 pyr_cell = round(world_xz);
-		float pyr_total = 0.0;   // filled danger area (exactly the catchable cells) + charge brighten
-		float pyr_scan = 0.0;    // bright per-tile front band riding the live sweep
+		// Echo pyramids: a filled circular danger area + an expanding scan ring, drawn on
+		// the floor tiles. Distance is per-FRAGMENT (continuous world_xz), so the disc reads
+		// as a round circle instead of a blocky cell-stepped square. The fill is hard-edged
+		// at the catch radius, so the fragment under the player's cell centre is lit IFF a
+		// ping would catch them there (matches enemy_pyramid's d <= radius test).
+		// Floor-only because this shader runs only on floor tiles, so it never overhangs void.
+		float pyr_total = 0.0;   // filled circular danger area + charge brighten
+		float pyr_scan = 0.0;    // bright ring riding the live sweep front
 		for (int i = 0; i < 4; i++) {
 			float zr = pyr_zone_radii[i];
 			if (zr <= 0.01) { continue; }
-			float cd = length(pyr_cell - pyr_origins[i]);
-			// Hard per-cell cutoff: a cell is marked IFF its centre is within the catch
-			// radius, so a marked tile is exactly a tile a ping catches you on (cd is
-			// constant per cell, so no fade bleeds past the real range). This mirrors the
-			// d <= radius catch test in enemy_pyramid._process for a settled player.
+			float cd = length(world_xz - pyr_origins[i]);
 			float inside = step(cd, zr);
 			float zone_a = mix(0.10, 0.35, pyr_charge[i]) * inside;
 			pyr_total = clamp(pyr_total + zone_a, 0.0, 1.0);
-			// Scan: a bright tile-wide band at the expanding front (an outward sonar wave).
+			// Scan: a bright ring at the expanding front (an outward sonar wave).
 			float pr = pyr_pulse_radii[i];
 			float front = (pr > 0.01) ? (1.0 - smoothstep(0.0, 1.0, abs(cd - pr))) * inside : 0.0;
 			pyr_scan = clamp(pyr_scan + front, 0.0, 1.0);
