@@ -7,6 +7,7 @@ const GROUND_MATERIAL := preload("res://grid_ground_material.tres")
 const COLOR_PATROL := Color(0.7, 0.7, 0.75)
 const COLOR_SUSPICIOUS := Color(1.0, 0.85, 0.0)
 const COLOR_INVESTIGATE := Color(1.0, 0.55, 0.0)
+const COLOR_SEEK := Color(0.0, 0.85, 1.0)  # electric cyan: a guard acting on echo-pyramid intel (ties the behaviour to its cause)
 const COLOR_PURSUIT := Color(1.0, 0.2, 0.2)
 
 const ARRIVE_THRESHOLD := 0.05
@@ -16,6 +17,10 @@ const SEARCH_MAX_CELLS := 5         # cap of tiles checked around a source
 const SEARCH_ARRIVE := 0.35         # distance that counts as "at" a search tile
 const PURSUIT_SPEED_MULT := 1.5
 const PURSUIT_SPEED := 4.5  # absolute floor on pursuit speed (units/sec). Walking is 1/TUMBLE_DURATION (about 3.3 u/s), so pursuit has to beat it or the player just strolls away; sprint (about 6.7 u/s) still outruns it. A fast guard keeps speed * PURSUIT_SPEED_MULT when that is higher.
+const SEEK_SPEED_MULT := 1.3  # a fast guard keeps speed*this while seeking on pyramid intel (below pursuit's 1.5)
+const SEEK_SPEED := 4.0  # absolute floor (u/s) on the pyramid-intel seek: above walking (~3.3), below pursuit (4.5)
+const SEEK_ARRIVE_DIST := 0.6  # within this of the revealed cell counts as arrived -> hand off to INVESTIGATE
+const SEEK_TIMEOUT := 8.0  # safety cap if the cell can't be reached; pings reset it, so it won't fire while you stay in the field
 const SUSPICIOUS_SPEED_MULT := 0.5
 const INVESTIGATE_SPEED_MULT := 1.0
 const VIEW_RADIUS := 8.0
@@ -72,11 +77,11 @@ const GLYPH_POP_TIME := 0.25         # seconds the glyph pop decays over
 # State-encoded hum (occlusion-proof alert channel): pitch and volume rise along
 # the alert ladder, indexed by State. Pitch also speeds the baked tremolo, so a
 # higher alert reads as a more agitated hum even when the enemy is out of sight.
-const HUM_PITCH: Array[float] = [1.0, 1.12, 1.22, 1.5]   # PATROL/SUSPICIOUS/INVESTIGATE/PURSUIT
+const HUM_PITCH: Array[float] = [1.0, 1.12, 1.22, 1.5, 1.35]   # PATROL/SUSPICIOUS/INVESTIGATE/PURSUIT/SEEK (indexed by the State enum)
 const HUM_VOL: Array[float] = [-10.0, -9.0, -8.0, -6.0]
 const HUM_LERP_RATE := 4.0           # how fast the hum eases between state targets
 
-enum State { PATROL, SUSPICIOUS, INVESTIGATE, PURSUIT }
+enum State { PATROL, SUSPICIOUS, INVESTIGATE, PURSUIT, SEEK }
 
 @export var waypoints: Array[Vector3] = [
 	Vector3(8, 0.4, 0),
@@ -166,7 +171,7 @@ func _process(delta: float) -> void:
 	_update_detection(delta, seeing)
 
 	var footprint_pos := Vector3.INF
-	if not seeing and _state != State.PURSUIT:
+	if not seeing and _state != State.PURSUIT and _state != State.SEEK:
 		footprint_pos = _visible_footprint_pos()
 
 	match _state:
@@ -215,6 +220,19 @@ func _process(delta: float) -> void:
 			if _detection < DETECT_PURSUIT_KEEP:
 				_last_seen_pos = Vector3(_last_seen_pos.x, position.y, _last_seen_pos.z)
 				_enter_state(State.INVESTIGATE)
+		State.SEEK:
+			# Charge the exact revealed cell on perfect pyramid intel. Escalate to a real
+			# chase if the cone actually catches sight; otherwise drive there and, on arrival
+			# (or the safety cap) with no fresh ping, hand off to the local search.
+			if _detection >= DETECT_PURSUIT:
+				_enter_state(State.PURSUIT)
+			else:
+				_seek(delta)
+				_state_timer += delta
+				var seek_d := Vector2(position.x, position.z).distance_to(
+					Vector2(_last_seen_pos.x, _last_seen_pos.z))
+				if seek_d < SEEK_ARRIVE_DIST or _state_timer >= SEEK_TIMEOUT:
+					_enter_state(State.INVESTIGATE)
 
 	var target_alpha := 1.0 if (not ENEMY_LOS_FADE or _debug_reveal or _visible_to_player()) else SILHOUETTE_ALPHA
 	if not _visibility_initialized:
@@ -298,19 +316,28 @@ func _creep(delta: float) -> void:
 
 
 func _pursue(delta: float) -> void:
-	# Hybrid locomotion: seek the suspect directly (off-grid, more threatening)
-	# once a sphere-wide corridor has stayed clear for CORRIDOR_HYSTERESIS. That
-	# debounces the per-frame ray check so the sphere does not jitter between
-	# modes at a wall corner. Any block resets the timer and falls back to A*
-	# immediately, the safe choice near walls.
 	# Chase _last_seen_pos (the last visible cell), not the player's origin: for an
 	# extended bar that is the exposed end currently in view, so the sphere closes on
 	# what it can actually see instead of pathing toward the hidden base cell.
-	var target := _last_seen_pos
 	# Pursuit speed has an absolute floor (PURSUIT_SPEED) so a walking player can't
 	# stroll away from any guard, whatever its patrol speed; a fast guard keeps the
 	# higher speed * PURSUIT_SPEED_MULT. Expressed as the mult _move_toward expects.
 	var pmult := maxf(PURSUIT_SPEED_MULT, PURSUIT_SPEED / maxf(speed, 0.01))
+	_chase(_last_seen_pos, delta, pmult)
+
+
+func _seek(delta: float) -> void:
+	# Aggressive directed seek on perfect pyramid intel: the same hybrid locomotion as
+	# pursuit but at the lower SEEK floor, charging the exact revealed cell.
+	var smult := maxf(SEEK_SPEED_MULT, SEEK_SPEED / maxf(speed, 0.01))
+	_chase(_last_seen_pos, delta, smult)
+
+
+func _chase(target: Vector3, delta: float, mult: float) -> void:
+	# Hybrid locomotion shared by PURSUIT and SEEK: go off-grid straight at the target once
+	# a sphere-wide corridor has stayed clear for CORRIDOR_HYSTERESIS (debounces the per-frame
+	# ray check so it does not jitter at a corner); otherwise A* repath. Any block resets the
+	# timer and falls back to A* immediately, the safe choice near walls.
 	if _has_pursuit_corridor(target):
 		_corridor_open_timer += delta
 	else:
@@ -319,13 +346,13 @@ func _pursue(delta: float) -> void:
 		_path = []
 		_path_idx = 0
 		_pursuit_repath_timer = 0.0
-		_move_toward(target, delta, pmult)
+		_move_toward(target, delta, mult)
 		return
 	_pursuit_repath_timer -= delta
 	if _pursuit_repath_timer <= 0.0:
 		_set_path_to(target)
 		_pursuit_repath_timer = PURSUIT_REPATH_INTERVAL
-	_follow_path(delta, pmult, target)
+	_follow_path(delta, mult, target)
 
 
 func _has_pursuit_corridor(target: Vector3) -> bool:
@@ -419,6 +446,12 @@ func _enter_state(new_state: State) -> void:
 		_pending_sounds.clear()  # drop in-flight noise; pursuit ignores distractions
 		if not was_pursuit:
 			entered_pursuit.emit()
+	if new_state == State.SEEK:
+		# Seed the path to the revealed cell; the shared chase locomotion takes over per frame.
+		_set_path_to(_last_seen_pos)
+		_pursuit_repath_timer = PURSUIT_REPATH_INTERVAL
+		_corridor_open_timer = 0.0
+		_pending_sounds.clear()  # perfect intel: ignore noise distractions like pursuit does
 
 
 func _closest_waypoint_idx() -> int:
@@ -436,6 +469,7 @@ func _state_color() -> Color:
 	match _state:
 		State.SUSPICIOUS: return COLOR_SUSPICIOUS
 		State.INVESTIGATE: return COLOR_INVESTIGATE
+		State.SEEK: return COLOR_SEEK
 		State.PURSUIT: return COLOR_PURSUIT
 		_: return COLOR_PATROL
 
@@ -472,6 +506,7 @@ func _state_name() -> String:
 	match _state:
 		State.SUSPICIOUS: return "SUSPICIOUS"
 		State.INVESTIGATE: return "INVESTIGATE"
+		State.SEEK: return "SEEK"
 		State.PURSUIT: return "PURSUIT"
 		_: return "PATROL"
 
@@ -545,9 +580,9 @@ func _update_scan_line(seeing: bool, footprint_pos: Vector3) -> void:
 
 
 func _on_player_noise(origin: Vector2, max_radius: float, duration: float) -> void:
-	# Pursuit is locked on and ignores noise entirely, so don't even queue it: a knock
-	# fired mid-chase must not be able to land as an investigate after pursuit drops.
-	if _state == State.PURSUIT:
+	# Pursuit/seek are locked on and ignore noise entirely, so don't even queue it: a knock
+	# fired mid-chase must not be able to land as an investigate after the lock drops.
+	if _state == State.PURSUIT or _state == State.SEEK:
 		return
 	var enemy_xz := Vector2(position.x, position.z)
 	var dist := enemy_xz.distance_to(origin)
@@ -586,8 +621,8 @@ func _advance_pending_sounds(delta: float) -> void:
 
 func _on_sound_heard(origin: Vector2) -> void:
 	# A noise is a located clue, so go investigate the source (this is what makes
-	# knocking a usable lure). Pursuit ignores noise — already locked on.
-	if _state == State.PURSUIT:
+	# knocking a usable lure). Pursuit/seek ignore noise — already locked on better intel.
+	if _state == State.PURSUIT or _state == State.SEEK:
 		return
 	_detection = maxf(_detection, DETECT_NOISE_SEED)
 	var heard_pos := Vector3(origin.x, position.y, origin.y)
@@ -607,12 +642,19 @@ func _on_sound_heard(origin: Vector2) -> void:
 
 
 func reveal_player_at(pos: Vector3) -> void:
-	# An echo pyramid hands this guard the player's exact position with no LoS/wall
-	# gating (perfect intel = the pyramid defeats cover). Reuses the noise-investigate
-	# path: PATROL/SUSPICIOUS -> INVESTIGATE the spot, INVESTIGATE refreshes the target,
-	# PURSUIT is already locked on and ignores it. Recoverable: stop feeding (leave the
-	# field) and the guard drains back down normally.
-	_on_sound_heard(Vector2(pos.x, pos.z))
+	# An echo pyramid hands this guard the player's exact position with no LoS/wall gating
+	# (perfect intel = the pyramid defeats cover): aggressively SEEK the exact cell. A guard
+	# already in PURSUIT keeps its own tighter lock. Each ping refreshes the live target and
+	# resets the give-up timer, so cover only helps once you LEAVE the field (pings stop, the
+	# guard reaches the stale cell and drops to a local INVESTIGATE).
+	if _state == State.PURSUIT:
+		return
+	_last_seen_pos = Vector3(pos.x, position.y, pos.z)
+	if _state == State.SEEK:
+		_state_timer = 0.0
+		_set_path_to(_last_seen_pos)
+	else:
+		_enter_state(State.SEEK)
 
 
 func _is_seeing_player() -> bool:
@@ -933,6 +975,9 @@ func _update_alert_glyph(delta: float) -> void:
 		State.INVESTIGATE:
 			glyph = "?"
 			col = COLOR_INVESTIGATE
+		State.SEEK:
+			glyph = "!"
+			col = COLOR_SEEK
 		State.PURSUIT:
 			glyph = "!"
 			col = COLOR_PURSUIT

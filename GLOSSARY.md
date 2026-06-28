@@ -28,18 +28,23 @@ The grid/movement primitives (unit, cell, face, tumble, grid position) live in C
     pyramid so it is not confused with guard detection.
 - **Spotted / Pursuit** [settled] — a guard at full detection actively chasing. Break line of
   sight long enough and it de-escalates.
+- **Seek** [proposed] — a guard's aggressive directed state when an echo-pyramid **catch** hands it
+  the player's exact cell. It beelines to that cell faster than INVESTIGATE but below PURSUIT, cone
+  aimed ahead (so it escalates to PURSUIT if it actually sees you). Each pulse refreshes the target;
+  reaching a stale cell drops it to INVESTIGATE. Tell: electric cyan. (Name not yet ratified.)
 
 ## Echo Pyramid
 
 - **Echo Pyramid** [settled] — the stationary floating sonar enemy. Defeats cover.
-- **Zone** [settled] — the pyramid's circular danger area, radius R. Drawn as a persistent
-  **outer ring** on the floor tiles.
+- **Zone** [settled] — the pyramid's circular danger area, radius R. Drawn as a filled per-tile
+  area on the floor: full colour where a tile's centre is within R (a catch lands there), a dimmer
+  wash on tiles the radius only clips (rounds out the silhouette).
 - **Pulse** [settled] — one firing of the pyramid on its fixed beat (charge tell, then fire).
 - **Scan / Front** [settled] — the detection wave that expands from the pyramid's centre to R on
   a pulse, lighting the floor tiles per tile (step-wave style). "Front" = its leading edge.
-- **Catch** [settled] — the pulse front reaching the player while inside the zone. A catch feeds
-  the player's exact position to every guard currently inside the zone (and, proposed, overheats
-  the player). It is **not** a guaranteed alert or instant fail.
+- **Catch** [settled] — the pulse front reaching the player while inside the zone. A catch puts
+  every guard currently inside the zone into **Seek** (perfect intel on the player's cell) and
+  applies **Overheat** + **Exposed** to the player. It is **not** a guaranteed alert or instant fail.
 
 ## Player resource / status
 
