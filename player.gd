@@ -19,7 +19,6 @@ const SPRINT_DURATION := 0.15
 const DODGE_DISTANCE := 5
 const DODGE_DURATION := 0.4
 const DODGE_COOLDOWN := 1.5
-const CATCH_OVERHEAT := 1.5  # pyramid-catch lockout: dodge + blend barred for this long (re-maxed each catch). Tunable up.
 const DODGE_FLASH_TIME := 0.3  # green "ready" edge blink duration when the cooldown completes
 const WAVE_DURATION := 0.4
 const KNOCK_RADIUS := 10.0  # wall-knock noise radius (knock is a cube-only ability)
@@ -93,7 +92,7 @@ var _dodge_t := 0.0
 var _dodge_start_pos := Vector3.ZERO
 var _dodge_end_pos := Vector3.ZERO
 var _dodge_cooldown_t := 0.0
-var _exposed_t := 0.0   # pyramid-catch overheat/exposed window: while > 0, dodge + blend are locked (the red alarm wash). Counts down; walking out is the escape.
+var _exposed := false   # pyramid-catch debuff: blend force-broken + barred (the red alarm wash). Rides the full dodge cooldown a catch sets, so it ends exactly when dodge becomes ready again.
 var _knock_cooldown_t := 0.0
 var _buf_action := ""   # latest buffered discrete shape press (see _capture_buffer)
 var _buf_t := 0.0       # remaining grace on the buffered action
@@ -603,14 +602,17 @@ func get_dodge_cooldown_ratio() -> float:
 
 
 func is_dodge_available() -> bool:
-	return _dodge_cooldown_t <= 0.0 and _exposed_t <= 0.0 and not _is_extended() and not suppress_dodge and (allow_dodge_in_god_mode or not god_mode)
+	return _dodge_cooldown_t <= 0.0 and not _is_extended() and not suppress_dodge and (allow_dodge_in_god_mode or not god_mode)
 
 
 func apply_catch_overheat() -> void:
-	# Echo-pyramid catch: bar dodge AND blend (force-break + block re-entry) for one
-	# shared window, re-maxed per catch. Walk/tumble/extend stay free -- walking out of
-	# the field IS the escape. Pyramid-specific; the red alarm wash is the tell.
-	_exposed_t = CATCH_OVERHEAT
+	# Echo-pyramid catch: exactly like having just done a full-length dodge (max dodge
+	# cooldown -> dodge barred via the normal gate), PLUS exposed (blend force-broken +
+	# re-entry blocked) for that SAME window, so both indicators show together and clear
+	# together when the cooldown ends. Walk/tumble/extend stay free; walking out escapes.
+	_dodge_cooldown_t = DODGE_COOLDOWN
+	_dodge_heat_max = 1.0
+	_exposed = true
 
 
 func _reset_ground_overlays() -> void:
@@ -1301,10 +1303,9 @@ func _process(delta: float) -> void:
 		if _dodge_cooldown_t == 0.0:
 			_dodge_flash = DODGE_FLASH_TIME   # just cooled to ready: fire the green blink
 			_ready_player.play()              # soft positive "dodge ready" chime
+			_exposed = false                  # catch debuff ends exactly with the cooldown
 	if _dodge_flash > 0.0:
 		_dodge_flash = maxf(_dodge_flash - delta, 0.0)
-	if _exposed_t > 0.0:
-		_exposed_t = maxf(_exposed_t - delta, 0.0)
 	if _knock_cooldown_t > 0.0:
 		_knock_cooldown_t = maxf(_knock_cooldown_t - delta, 0.0)
 
@@ -1371,7 +1372,7 @@ func _process(delta: float) -> void:
 	# almost instantly. is_blending (gameplay) flips only at full phase.
 	var move := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	var is_animating := _dodging or _tumbling or _bumping
-	var wants_blend := not is_animating and move.length() <= 0.5 and _exposed_t <= 0.0 and _is_in_cover()
+	var wants_blend := not is_animating and move.length() <= 0.5 and not _exposed and _is_in_cover()
 	is_hiding = wants_blend  # nav-block flag for enemies: kicks in immediately on entering cover at rest, before the visual fade completes
 	if wants_blend and not _was_wanting_blend:
 		_cover_color = _sample_cover_color()
@@ -1760,7 +1761,7 @@ func _push_cube_material() -> void:
 	_player_material.set_shader_parameter("cube_half", _box_mesh.size * 0.5)
 	_player_material.set_shader_parameter("dodge_heat", heat)
 	_player_material.set_shader_parameter("dodge_flash", _dodge_flash / DODGE_FLASH_TIME)
-	_player_material.set_shader_parameter("exposed", 1.0 if _exposed_t > 0.0 else 0.0)
+	_player_material.set_shader_parameter("exposed", 1.0 if _exposed else 0.0)
 	_player_material.set_shader_parameter("expression", _expression)
 	# Idle breathing edge glow while fully blended and still (N9b): a slow 0 -> 1 -> 0
 	# pulse, anchored on blend entry so it always starts at the bottom of the breath

@@ -23,10 +23,13 @@ const PYR_MAX := 4   # pyr_* slots in grid_ground.gdshader
 @export var pyr_index: int = 0        # this pyramid's slot in the shared ground-shader arrays
 
 const FLOAT_Y := 3.0                   # how high the pyramid mesh hovers above its cell
-const CHARGE_RISE := 1.5               # extra lift while charging; snaps back down on emit (the wind-up tell)
+const CHARGE_RISE := 1.5               # extra lift while charging; falls back under gravity on emit (the wind-up tell)
 const APEX_Y := FLOAT_Y - 0.4          # cone tip height above the cell; the emit beam runs from here to the floor
 const CATCH_FLASH_TIME := 0.35
 const BEAM_FLASH_TIME := 0.3           # how long the emit shaft stays lit at sweep start
+const DROP_GRAVITY := 32.0             # mesh fall acceleration after firing (u/s^2)
+const DROP_BOUNCE_DAMP := 0.35         # fraction of landing speed kept on each bounce
+const DROP_BOUNCE_MIN := 1.2           # landing speed below which it stops bouncing and settles
 
 var _player: Player
 var _t := 0.0
@@ -35,6 +38,9 @@ var _sweep_t := 0.0
 var _detected_this_pulse := false
 var _catch_flash := 0.0
 var _beam_flash := 0.0
+var _mesh_y := FLOAT_Y     # current pyramid lift: rises with the charge, gravity-drops with a bounce on emit
+var _drop_v := 0.0
+var _dropping := false
 var _pyr_mesh: MeshInstance3D
 var _beam: MeshInstance3D
 var _beam_mat: StandardMaterial3D
@@ -98,12 +104,12 @@ func _build_audio() -> void:
 	_sweep_player = AudioStreamPlayer3D.new()
 	_sweep_player.unit_size = 6.0
 	_sweep_player.max_distance = 25.0
-	_sweep_player.stream = _make_ping(1180.0, 1020.0, 0.5, 0.7)   # sonar ping: high, ringing
+	_sweep_player.stream = _make_ping(1650.0, 1000.0, 0.8, 0.6, 1.6, 6.0)   # sonar: high "boing" + long ring
 	add_child(_sweep_player)
 	_catch_player = AudioStreamPlayer3D.new()
 	_catch_player.unit_size = 6.0
 	_catch_player.max_distance = 25.0
-	_catch_player.stream = _make_ping(540.0, 150.0, 0.5, 0.95)    # caught: low descending alarm
+	_catch_player.stream = _make_ping(900.0, 280.0, 0.28, 0.95, 6.0, 3.0)   # catch sting: sharp, short, punchy
 	add_child(_catch_player)
 
 
@@ -143,8 +149,21 @@ func _process(delta: float) -> void:
 			_t = 0.0
 			pulse_r = 0.0
 
-	# Mesh lifts while charging, snaps back down the instant it fires (rise -> 0).
-	_pyr_mesh.position.y = FLOAT_Y + CHARGE_RISE * rise
+	# Mesh lift: rises with the charge, then falls back under gravity with a small damped
+	# bounce when it fires (instead of teleporting down).
+	if _dropping:
+		_drop_v += DROP_GRAVITY * delta
+		_mesh_y -= _drop_v * delta
+		if _mesh_y <= FLOAT_Y:
+			_mesh_y = FLOAT_Y
+			if _drop_v > DROP_BOUNCE_MIN:
+				_drop_v = -_drop_v * DROP_BOUNCE_DAMP   # bounce back up
+			else:
+				_drop_v = 0.0
+				_dropping = false
+	else:
+		_mesh_y = FLOAT_Y + CHARGE_RISE * rise
+	_pyr_mesh.position.y = _mesh_y
 	var beam_ratio := _beam_flash / BEAM_FLASH_TIME
 	_beam.visible = beam_ratio > 0.0
 	if _beam.visible:
@@ -156,7 +175,9 @@ func _process(delta: float) -> void:
 
 
 func _on_sweep_start() -> void:
-	# The exact moment the detection front launches: flash the beam + sonar ping.
+	# The exact moment the detection front launches: drop the mesh, flash the beam, ping.
+	_dropping = true
+	_drop_v = 0.0
 	_beam_flash = BEAM_FLASH_TIME
 	_sweep_player.play()
 
@@ -214,9 +235,10 @@ func _slot_f(param: String) -> PackedFloat32Array:
 	return a
 
 
-static func _make_ping(f0: float, f1: float, dur: float, peak: float) -> AudioStreamWAV:
-	# One-shot tone gliding f0 -> f1, fast attack + long exponential ring (sonar-ish).
-	# Procedural so there's no audio asset to ship.
+static func _make_ping(f0: float, f1: float, dur: float, peak: float, decay := 2.5, glide_k := 0.0) -> AudioStreamWAV:
+	# One-shot tone gliding f0 -> f1 with a fast attack + exponential decay. glide_k > 0
+	# bends the pitch fast-then-settle (a springy "boing"); 0 = linear glide. decay sets
+	# the ring length (lower = longer tail). Procedural, no audio asset to ship.
 	var rate := 44100
 	var samples := int(rate * dur)
 	var stream := AudioStreamWAV.new()
@@ -226,11 +248,13 @@ static func _make_ping(f0: float, f1: float, dur: float, peak: float) -> AudioSt
 	var data := PackedByteArray()
 	data.resize(samples * 2)
 	var phase := 0.0
+	var glide_norm := (1.0 - exp(-glide_k)) if glide_k > 0.0 else 1.0
 	for i in samples:
 		var u := float(i) / float(samples)
-		var freq := lerpf(f0, f1, u)
+		var fu := u if glide_k <= 0.0 else (1.0 - exp(-glide_k * u)) / glide_norm
+		var freq := lerpf(f0, f1, fu)
 		phase += TAU * freq / float(rate)
-		var env := minf(u / 0.01, 1.0) * exp(-2.5 * u)
+		var env := minf(u / 0.005, 1.0) * exp(-decay * u)
 		var val := int(sin(phase) * env * peak * 30000.0)
 		data[i * 2] = val & 0xFF
 		data[i * 2 + 1] = (val >> 8) & 0xFF
