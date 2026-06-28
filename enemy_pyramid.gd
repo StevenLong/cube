@@ -99,6 +99,9 @@ func _process(delta: float) -> void:
 func _on_catch(player_pos: Vector3) -> void:
 	# Feed the player's position to every guard currently inside the radius.
 	_catch_flash = CATCH_FLASH_TIME
+	# Overheat + Exposed: a catch must STICK -- bar dodge/blend so you can't just
+	# re-blend and vanish. Pyramid-specific; the player owns the timer.
+	_player.apply_catch_overheat()
 	var center := Vector2(position.x, position.z)
 	for g in get_tree().get_nodes_in_group("guards"):
 		if not g.has_method("reveal_player_at"):

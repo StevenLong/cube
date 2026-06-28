@@ -32,6 +32,12 @@ uniform float edge_darken = 0.1;       // how dark the glowing edge groove goes 
 uniform float blend_pulse = 0.0;
 uniform vec3 blend_edge_color : source_color = vec3(0.3, 0.6, 0.7);
 
+// Exposed (echo-pyramid catch): a fast pulsing red wash over the WHOLE cube while
+// dodge + blend are locked out. Whole-face, not the edge-only dodge heat, so it
+// never reads as a routine cooldown -- it's an alarm: "you can't hide, walk out".
+uniform float exposed = 0.0;   // 1 while exposed, 0 otherwise
+uniform vec3 exposed_color : source_color = vec3(1.0, 0.05, 0.05);
+
 // Fail-state "broken screen" expression: when >= 0, the faces show this pattern
 // (a fail readout) instead of the normal cube. The player picks one at random on
 // a fail and pushes the index. Add patterns in expr_color and bump EXPRESSION_COUNT.
@@ -165,5 +171,9 @@ void fragment() {
 		EMISSION = (heat_color * red_amt + ready_color * green_amt) * glow_strength;
 		// N9b: gentle breathing glow on the edges while blended + idle (blend_pulse > 0).
 		EMISSION += blend_edge_color * edge * blend_pulse;
+		// Exposed alarm: pulsing red wash over the whole face (pyramid catch lockout).
+		float exp_pulse = 0.5 + 0.5 * sin(TIME * 12.0);
+		ALBEDO = mix(ALBEDO, exposed_color, exposed * (0.4 + 0.3 * exp_pulse));
+		EMISSION += exposed_color * exposed * (0.4 + 0.5 * exp_pulse);
 	}
 }
