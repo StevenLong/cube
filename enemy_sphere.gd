@@ -21,6 +21,7 @@ const SEEK_SPEED_MULT := 1.3  # a fast guard keeps speed*this while seeking on p
 const SEEK_SPEED := 4.0  # absolute floor (u/s) on the pyramid-intel seek: above walking (~3.3), below pursuit (4.5)
 const SEEK_ARRIVE_DIST := 0.6  # within this of the revealed cell counts as arrived -> hand off to INVESTIGATE
 const SEEK_TIMEOUT := 8.0  # safety cap if the cell can't be reached; pings reset it, so it won't fire while you stay in the field
+const PURSUIT_GRACE := 1.2  # seconds the chaser keeps tracking the player after LoS breaks (ducking a corner), so one corner is not a free escape
 const SUSPICIOUS_SPEED_MULT := 0.5
 const INVESTIGATE_SPEED_MULT := 1.0
 const VIEW_RADIUS := 8.0
@@ -112,6 +113,7 @@ var _search_cells: Array[Vector2i] = []
 var _search_dwell: float = 0.0
 var _pursuit_repath_timer: float = 0.0
 var _corridor_open_timer: float = 0.0
+var _pursuit_grace: float = 0.0  # countdown of post-LoS tracking in PURSUIT (see PURSUIT_GRACE)
 var _speed_mult: float = 1.0  # eased toward the commanded speed mult (see _move_toward / SPEED_RAMP) so speed changes accelerate in instead of snapping
 var _visibility_alpha: float = 1.0
 var _visibility_initialized: bool = false
@@ -216,6 +218,14 @@ func _process(delta: float) -> void:
 				if _search_cells.is_empty() or _state_timer >= INVESTIGATE_TIMEOUT:
 					_enter_state(State.PATROL)
 		State.PURSUIT:
+			# Keep tracking the player for a short grace after LoS breaks (e.g. ducking around
+			# a corner right in front), so a single corner is not a free escape -- shaking the
+			# guard takes real distance or several breaks. Re-seeing refreshes the grace.
+			if seeing:
+				_pursuit_grace = PURSUIT_GRACE
+			elif _pursuit_grace > 0.0:
+				_pursuit_grace = maxf(_pursuit_grace - delta, 0.0)
+				_last_seen_pos = Vector3(_player.position.x, position.y, _player.position.z)
 			_pursue(delta)
 			if _detection < DETECT_PURSUIT_KEEP:
 				_last_seen_pos = Vector3(_last_seen_pos.x, position.y, _last_seen_pos.z)
@@ -647,9 +657,15 @@ func reveal_player_at(pos: Vector3) -> void:
 	# already in PURSUIT keeps its own tighter lock. Each ping refreshes the live target and
 	# resets the give-up timer, so cover only helps once you LEAVE the field (pings stop, the
 	# guard reaches the stale cell and drops to a local INVESTIGATE).
-	if _state == State.PURSUIT:
-		return
 	_last_seen_pos = Vector3(pos.x, position.y, pos.z)
+	if _state == State.PURSUIT:
+		# Already chasing: act on the fresh intel at once -- refresh the lock and repath to the
+		# new cell instead of playing out the stale pursue/de-escalate cycle.
+		_detection = maxf(_detection, DETECT_PURSUIT)
+		_pursuit_grace = PURSUIT_GRACE
+		_set_path_to(_last_seen_pos)
+		_pursuit_repath_timer = PURSUIT_REPATH_INTERVAL
+		return
 	if _state == State.SEEK:
 		_state_timer = 0.0
 		_set_path_to(_last_seen_pos)
