@@ -1,5 +1,61 @@
 # Handoff
 
+## Session 14 (2026-06-29): Pyramid beams/detection/REVEALED finished + feel-checked; Windows export de-risked; floor button GRILLED
+Tight, productive session. ALL feel-checks CONFIRMED by the dev in-editor this session. Commits: cube
+87cf5a0, c5d5a18, 7e3a86c, ba27fbe, 35c4eca + game-dev task list baf0b0b, ccbd18d. All pushed.
+
+ECHO PYRAMID BEAMS + DETECTION (87cf5a0, c5d5a18) -- finished the Session-13 deferred beam work.
+- DIRECTION FIX: comms beams traced the wrong path (player->straight-up + player->guard). Now
+  pyramid->floor (emit) -> player->PYRAMID (return) -> PYRAMID->each guard (broadcast). The "stray beam to
+  random positions" was NOT a separate bug -- it was the player-origin broadcast with an invisible source;
+  re-anchoring to the pyramid fixed both at once.
+- DETECTION (real bug): the catch tested the cube's CENTRE point vs radius, so an extended cube partway
+  into the zone wasn't caught. Now `_nearest_footprint_dist` walks the footprint extent (footprint_covers/
+  get_footprint_min) + clamps to the nearest occupied cell -> caught by the overlapping edge. Dev confirmed.
+- BEAM VISUAL PASS: beams track the live guard (recomputed each tick via _orient_flash), stop at the sphere
+  SURFACE (inset by GUARD_BODY_RADIUS 0.4 -- centre-aim showed through the alpha-blended body), thinner
+  (r 0.015), translucent (alpha 0.55), fade in+out (sin envelope). Return beam originates at + tracks the
+  CUBE, not the floor tile.
+
+REVEALED DEBUFF (7e3a86c) -- closed the dodge/walk/corner escape after a catch. GRILLED + settled: a catch
+now also tags the player REVEALED, a SIBLING flag to EXPOSED on the SAME shared overheat timer
+(DODGE_COOLDOWN 1.5s, re-maxed per catch). While revealed, each pyramid re-feeds in-range guards the LIVE
+cell (throttled REVEAL_FEED_INTERVAL 0.2s via enemy_pyramid `_feed_revealed`), so guards track THROUGH
+cover. Kept as a separate flag so it can later be SPLIT off the timer into a "clears only when you leave the
+zone" version (the revisit lever) if same-timer feels weak. DEV VERDICT: "aggressive but still outsmartable
+with calm skill" = the target -> KEEP same-timer, DON'T pull the leave-zone lever. Shares EXPOSED's red wash
+(always co-occur). player.is_revealed(); GLOSSARY: Revealed [settled], Exposed trimmed, Catch updated.
+
+THROWAWAY WINDOWS EXPORT (ba27fbe, 35c4eca; task baf0b0b) -- DONE, distribution de-risked. export_presets.cfg
+(Windows Desktop, tracked; /build/ gitignored). Ran CLEAN on native 4.7: menu, built-in levels, editor save
+to user://, a pyramid level. FINDING: Godot 4.7 `export_filter=all_resources` already packs the raw
+res://levels/data/*.json (read via FileAccess by string path) -- the editor cleared the belt-and-suspenders
+`*.json` include filter and it still worked. Only re-add *.json if a future export ever 404s a level.
+Templates already installed; no signing friction.
+
+FLOOR BUTTON GRILLED (task ccbd18d, "### Floor button" SPEC) -- NOT built. LATCHING one-shot pressure plate
+(the latching complement to the momentary lock; OR-only was rejected as too close to a shape-less lock).
+button--opens-->gate (same kind as locks); per-GATE `require_all` flag for ANY/ALL (multi-button AND);
+all-to-all within a group, no per-edge/blending. Runtime = refactor the gate to poll each opener OBJECT's
+is_active() (lock=active-lock, button=latched) then open = require_all?all:any (~30-40 lines, allows mixed
+openers). Exit gating = a gate on the EndTile (no new mechanism). Editor = a NEW "Button Puzzle" wizard
+parallel to the lock wizard (buttons->gates->finish, per-gate ANY/ALL toggle), reuses grouping +
+_build_links. BUILD ORDER: (1) button object + latch runtime, (2) gate opener-poll refactor + require_all,
+(3) wizard; verify (1)+(2) headless before the editor.
+
+DEFERRED / FILED (task ccbd18d, "### Enemy nav robustness") -- a cluster the dev leans "moderately strongly"
+toward but OUT of the button build (own grill): (a) shut gates BLOCK/corral enemies (DYNAMIC nav -- grid is
+built once at load), (b) graceful RE-NAV when the next patrol node is unreachable, (c) no-nodes default =
+"LIGHTHOUSE" (node-less sphere rotates+scans in place instead of sitting dead; also a sound-test default).
+PARKED note: gates opening visually for enemies / circular holes only non-cubic enemies fit through (cute,
+sneak-through unresolved, left as is). NOTE: gates are ENEMY-TRANSPARENT today (a shut gate blocks the CUBE
+via StaticBody colliders but not enemies -- out of the nav grid + kinematic sphere movement); a button-gated
+room is NOT guard-proof until this cluster lands.
+
+NEXT (obvious first move): BUILD the floor button per the SPEC. Still owed: ratify the SEEK name (still
+[proposed] in GLOSSARY -- SEEK/ALERT/TAGGED?); remote-noise button (own grill); cylinder enemy (grill);
+parked feel-checks (glass-blend 30s; pitfall amber telegraph + 5-cell ping radius likely lowered).
+
 ## Session 13 (2026-06-28): Catch overheat/exposed BUILT; pyramid feel pass; SEEK enemy state; pursuit stickiness; beams (BUG open)
 Big iterative session on the echo pyramid + the guard it feeds. Nine commits (4e1dd33..b2d9e7e), all pushed.
 
