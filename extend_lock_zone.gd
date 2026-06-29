@@ -76,6 +76,13 @@ func _cell() -> Vector2i:
 	return Vector2i(roundi(global_position.x), roundi(global_position.z))
 
 
+func is_active() -> bool:
+	# A LOCK is "active" as an opener while it is the player's current active lock, so a
+	# gate can poll it the same way it polls a button (see extend_lock_gate). UNLOCK zones
+	# are not openers; this never matters for them (they are never wired as one).
+	return link_id != "" and _player.active_lock_id() == link_id
+
+
 func _process(delta: float) -> void:
 	if mode == Mode.LOCK:
 		_update_lock_telegraph(delta)

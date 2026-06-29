@@ -24,11 +24,15 @@ const RED_SIDE := Color(0.12, 0.03, 0.04)
 @export var nodes: Array[Vector2i] = []   # absolute cells; first = this node's cell
 @export var height: int = 3               # kept for format compat; tiles raise to RAISED_TOP
 
-# Link layer (injected by the loader from the level's `links`). This gate is open while
-# the player's active lock is one of `opener_ids`. Empty = unlinked: it never opens from
-# a lock (it still holds open while the cube stands on it, see _process).
+# Link layer (injected by the loader from the level's `links`). The gate polls each
+# opener OBJECT's is_active() (a lock = am-I-the-active-lock, a button = am-I-latched),
+# so locks and buttons open gates through the same machinery. `require_all` picks the
+# combinator: false (default) = ANY opener active opens it; true = ALL openers must be
+# active. Empty openers = unlinked: it never opens from a source (it still holds open
+# while the cube stands on it, see _process).
 var link_id := ""
-var opener_ids: Array[String] = []
+var require_all := false
+var _openers: Array = []   # objects exposing is_active(): lock zones and/or floor buttons
 
 var _player: Player
 var _material: ShaderMaterial
@@ -94,7 +98,7 @@ func _add_tile(local_pos: Vector3) -> void:
 
 
 func _process(delta: float) -> void:
-	var want_open: bool = opener_ids.has(_player.active_lock_id())
+	var want_open: bool = _openers_satisfied()
 	# Never rise on the player: the unlock zone can release the lock while the cube
 	# still overlaps the doorway. Hold open while the footprint covers any gate cell
 	# and only rise once it has moved clear.
@@ -105,6 +109,25 @@ func _process(delta: float) -> void:
 	if _raise_t != target:
 		_raise_t = move_toward(_raise_t, target, delta / RAISE_TIME)
 		_apply_visual()
+
+
+func _openers_satisfied() -> bool:
+	# ANY (require_all false): open if any opener is active. ALL: open only when every
+	# opener is active. No openers => never opens from a source (a latching/locking gate
+	# with nothing wired stays shut unless the cube is physically standing on it).
+	if _openers.is_empty():
+		return false
+	for o in _openers:
+		var active: bool = o.is_active()
+		if require_all and not active:
+			return false
+		if not require_all and active:
+			return true
+	return require_all
+
+
+func add_opener(o: Object) -> void:
+	_openers.append(o)
 
 
 func _covers_player() -> bool:

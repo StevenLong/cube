@@ -69,6 +69,11 @@ const TYPES := {
 		"scene": preload("res://extend_lock_gate.tscn"),
 		"params": {"height": 3},
 	},
+	"floor_button": {
+		"name": "Floor Button", "kind": Kind.OBJECT, "glyph": "", "paint_mode": "single",
+		"scene": preload("res://floor_button.tscn"),
+		"params": {},
+	},
 }
 
 

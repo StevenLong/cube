@@ -1,5 +1,61 @@
 # Handoff
 
+## Session 15 (2026-06-29): FLOOR BUTTON built end to end (object + gate refactor + Button Puzzle wizard); headless-verified, feel-check owed
+Built the floor button per the Session-14 SPEC, in the pinned build order. All logic verified headless;
+in-editor feel-check is the only thing owed. GLOSSARY + task list updated.
+
+PHASE 1 -- BUTTON OBJECT + LATCH (floor_button.gd/.tscn, registry entry, loader). Single-cell LATCHING
+one-shot pressure plate: latches when the cube comes to REST on its cell (gated on not is_moving(), like the
+lock zone -- grid_pos jumps to a tumble's destination at its START, so without the guard it fired mid-anim;
+feel-check fix). Stays on for the run (restart resets), PLAYER-ONLY. Plain Node3D (not Wall*, stays out of nav). `is_active()` = latched. Loader
+_build_button + a `floor_button` case in _add_object_floor (the cube must stand on it, so the cell is floor).
+Visual = a flat plate (grey unpressed -> green + sinks when latched).
+
+PHASE 2 -- GATE OPENER-POLL REFACTOR (extend_lock_gate.gd, extend_lock_zone.gd, loader _wire_lock_links).
+The gate no longer polls `_player.active_lock_id()`; it polls each opener OBJECT's `is_active()` and opens per
+a new per-gate `require_all` flag (ANY default / ALL). Added `lock.is_active()` (= am-I-the-active-lock) so
+locks and buttons are interchangeable openers; the loader resolves an `opens` edge's `from` id to the actual
+lock OR button object and calls `gate.add_opener(obj)`. BEHAVIOR-PRESERVING for existing lock levels:
+require_all defaults false => ANY => the old `opener_ids.has(active_lock)` semantics; a single lock opener
+under ANY is identical. Mixed lock+button openers on one gate work as a free bonus.
+
+PHASE 3 -- BUTTON PUZZLE WIZARD (editor.gd). New "Button Puzzle (wizard)" tool entry PARALLEL to the lock
+wizard, driven by a stage-sequence map (WIZARD_STAGES: lock=lock/gate/unlock, button=button/gate). Reuses ALL
+the existing plumbing -- grouping, id minting (added a "button" counter -> button1/button2...), and
+_emit_group_links (buttons emit the same `opens` kind to every gate in the group; groups stay independent).
+Per-gate ANY/ALL: `T` toggles `require_all` on the gate whose fence covers the cursor cell (only button-wizard
+gates carry the flag; lock gates omit it, so their look is unchanged); a billboard Label3D "ANY"/"ALL" tag
+floats over the gate ghost. Lint wording updated ("Gate has no opener (lock or button)").
+
+GUIDE LINES (added on dev request after the first pass): a button->gate guide line now draws too, matching the
+lock system. TEAL path (distinct from orange lock->gate / green lock->unlock), routed along the grid; stays
+visible but GRAYS OUT once the button latches (feel-check: dev wanted it dimmed, not hidden -- the connection
+still reads, just spent; one-shot so it dims once via guide_line `_gray_out`). guide_line.gd gained an `opener`
+mode that polls the button's is_active() directly (bypasses the lock-state branches); level_loader `_build_lock_links` now
+takes `buttons` and anchors an `opens` edge's line on a lock OR a button (`_new_button_link_holder`,
+`_button_cell`, BUTTON_LINE_COLOR). Headless-verified the line draws + disables on latch, and that shipped
+LOCK levels still draw their lines (tut_07 = 4, unchanged).
+
+VERIFIED HEADLESS (parse-clean; throwaway tests stashed in scratchpad, removed from repo per convention):
+- Gate combinator truth table (ANY/ALL/empty), button latch + one-shot, full LevelLoader load pipeline.
+- Wizard emission: mint button1/gate1 + lock regression (lock->gate opens, lock->unlock released_by), groups
+  independent (no cross-bleed), ALL gate keeps require_all.
+- END-TO-END ALL gate: a JSON level with 2 buttons + a require_all gate loads, opens ONLY when both latched.
+  NOTE: the `-s` SceneTree harness does NOT auto-tick node _process on `await process_frame`; the tests pump
+  button/gate `_process` explicitly (exercises the real bodies). Keep that in mind for future load tests.
+
+OWED IN-EDITOR FEEL-CHECK (none headless-able, all this session): button plate look (unpressed grey -> latched
+green sink); the teal button->gate guide line graying out (staying visible) on press; the ANY/ALL Label3D tag + the
+`T` toggle UX (stand on a button gate, press T); the Button Puzzle wizard flow (place buttons -> gate(s) ->
+finish; readout shows "BUTTON PUZZLE n [stage] nB nG ... T ANY/ALL").
+Build a quick 2-button ALL-gate room in the editor to exercise it. CAVEAT (unchanged, by design): gates are
+ENEMY-TRANSPARENT -- a button-gated room blocks the cube but NOT guards (see "### Enemy nav robustness").
+
+NEXT (obvious): feel-check the button in-editor, then a gizmo TUTORIAL for it (tutorial pipeline). Still owed
+from before: ratify the SEEK name (still [proposed]); remaining per-object grills (closing gate, remote-noise,
+cylinder); parked feel-checks (glass-blend 30s; pitfall amber telegraph + 5-cell ping radius). The Enemy nav
+robustness cluster (dynamic gate blocking / re-nav / lighthouse) is the unlock for guard-proof button rooms.
+
 ## Session 14 (2026-06-29): Pyramid beams/detection/REVEALED finished + feel-checked; Windows export de-risked; floor button GRILLED
 Tight, productive session. ALL feel-checks CONFIRMED by the dev in-editor this session. Commits: cube
 87cf5a0, c5d5a18, 7e3a86c, ba27fbe, 35c4eca + game-dev task list baf0b0b, ccbd18d. All pushed.

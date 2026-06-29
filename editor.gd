@@ -12,6 +12,13 @@ class_name LevelEditor
 # mirror level_loader; both want a shared LevelBuilder.
 
 const REAL_SCENES := ["floor", "ink", "water"]
+# Puzzle-wizard stage sequences. The lock wizard places lock(s) -> gate(s) -> unlock(s);
+# the button wizard is the same grouped-sequence flow minus the unlock stage (a latching
+# button needs no re-seat). Both share the grouping, id minting, and _emit_group_links.
+const WIZARD_STAGES := {
+	"lock": ["lock", "gate", "unlock"],
+	"button": ["button", "gate"],
+}
 const PLAYTEST_PATH := "user://_playtest.json"   # scratch level the Play action writes and the loader runs
 const SESSION_PATH := "user://_editor_session.json"   # full editor snapshot: written on every exit (menu or playtest), restored by Continue and the playtest return
 
@@ -45,8 +52,9 @@ static func has_session() -> bool:
 var _tool := "none"              # active tool: "none" (free control) or an ObjectRegistry type id
 var _command_open := false       # the Start/Esc command menu (resume/playtest/save/quit) is up
 var _tool_mode := "lock"         # extend_lock_zone variant chosen in the menu (lock | unlock)
-var _wizard_active := false      # the lock-puzzle wizard is guiding placement (slice 4)
-var _wizard_stage := "lock"      # current wizard stage: lock -> gate -> unlock
+var _wizard_active := false      # a puzzle wizard is guiding placement (slice 4)
+var _wizard_kind := "lock"       # which wizard: "lock" or "button" (see WIZARD_STAGES)
+var _wizard_stage := "lock"      # current stage within that wizard's sequence
 var _wizard_group := 0           # group id stamped onto objects placed in the current puzzle
 var _next_group := 0             # monotonic source of fresh group ids (session-local; not serialized)
 var _path_active := false        # a patrol path is being authored (A extends it)
@@ -184,6 +192,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				_open_finish()
 			KEY_P:
 				_enter_play()
+			KEY_T:
+				_toggle_gate_combinator()   # flip ANY/ALL on the gate under the cursor
 
 
 func _cell() -> Vector2i:
@@ -476,8 +486,13 @@ func _path_start_params(id: String, cell: Vector2i) -> Dictionary:
 	if id == "enemy_sphere":
 		return {"waypoints": [[cell.x, cell.y]], "speed": float(ObjectRegistry.default_param("enemy_sphere", "speed"))}
 	# Gate: height is the one shape axis that matters (extend up first for a
-	# taller fence); width/depth are the fence's own node geometry.
-	return {"nodes": [[cell.x, cell.y]], "height": _player.get_dimensions().y}
+	# taller fence); width/depth are the fence's own node geometry. A gate placed in
+	# the button wizard carries require_all (default false = ANY) so it shows an ANY/ALL
+	# tag and T can toggle it; lock-wizard gates omit it (one opener, ANY/ALL is moot).
+	var p: Dictionary = {"nodes": [[cell.x, cell.y]], "height": _player.get_dimensions().y}
+	if _wizard_active and _wizard_kind == "button":
+		p["require_all"] = false
+	return p
 
 
 func _end_path() -> void:
@@ -517,7 +532,7 @@ func _stamp_object_at(id: String, cell: Vector2i, params: Dictionary) -> void:
 	# joins the active puzzle, so _serialize can mint ids + emit its links.
 	if _objects.has(cell) and (_objects[cell] as Dictionary).has("group"):
 		entry["group"] = _objects[cell]["group"]
-	elif _wizard_active and (id == "extend_lock_zone" or id == "extend_lock_gate"):
+	elif _wizard_active and (id == "extend_lock_zone" or id == "extend_lock_gate" or id == "floor_button"):
 		entry["group"] = _wizard_group
 	_objects[cell] = entry
 	var node := _make_object_visual(id, params)
@@ -629,6 +644,18 @@ func _make_gate_visual(params: Dictionary) -> Node3D:
 			seg.position = Vector3(mid.x, h * 0.5, mid.y)
 			seg.rotation.y = atan2(nxt.x - n.x, nxt.y - n.y)
 			holder.add_child(seg)
+	# Button-puzzle gates carry require_all: float an ANY/ALL tag over the first post so
+	# the combinator reads at a glance. Lock gates omit the flag and show no tag.
+	if params.has("require_all"):
+		var tag := Label3D.new()
+		tag.text = "ALL" if bool(params["require_all"]) else "ANY"
+		tag.font_size = 64
+		tag.pixel_size = 0.012
+		tag.modulate = Color(1.0, 0.9, 0.35)
+		tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		tag.no_depth_test = true
+		tag.position = Vector3(0, h + 0.5, 0)
+		holder.add_child(tag)
 	return holder
 
 
@@ -683,6 +710,8 @@ func _obj_y(id: String) -> float:
 			return 0.05  # flat tile sits just above the floor plane
 		"enemy_pyramid":
 			return 0.0   # holder anchors on the cell; pyramid + disc offset themselves
+		"floor_button":
+			return 0.04  # flat plate rests just above the floor plane
 		_:
 			return 0.5
 
@@ -733,6 +762,13 @@ func _preview_mesh(id: String) -> MeshInstance3D:
 			mi.mesh = _box(Vector3(0.4, 3, 1))
 			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 			mat.albedo_color = Color(0.9, 0.2, 0.2, 0.5)
+		"floor_button":
+			# Flat plate matching the in-game button (floor_button.gd unpressed look).
+			mi.mesh = _box(Vector3(0.8, 0.08, 0.8))
+			mat.albedo_color = Color(0.45, 0.5, 0.6)
+			mat.emission_enabled = true
+			mat.emission = Color(0.45, 0.5, 0.6)
+			mat.emission_energy_multiplier = 0.25
 		"start":
 			mi.mesh = _plane()
 			mat.albedo_color = Color(0.2, 0.7, 1)
@@ -784,12 +820,19 @@ func _refresh() -> void:
 	var path_line := "\nPATH: A = add node, A on last node = finish, X/B = undo" if _path_active else ""
 	var wizard_line := ""
 	if _wizard_active:
-		wizard_line = "\nLOCK PUZZLE %d  [%s stage]  %dL %dG %dU   Tab next, Shift+Tab back, ` done; X/B erase" % [
-			_wizard_group, _wizard_stage,
-			_wizard_role_cells(_wizard_group, "lock").size(),
-			_wizard_role_cells(_wizard_group, "gate").size(),
-			_wizard_role_cells(_wizard_group, "unlock").size(),
-		]
+		var counts: String
+		if _wizard_kind == "button":
+			counts = "%dB %dG" % [
+				_wizard_role_cells(_wizard_group, "button").size(),
+				_wizard_role_cells(_wizard_group, "gate").size()]
+		else:
+			counts = "%dL %dG %dU" % [
+				_wizard_role_cells(_wizard_group, "lock").size(),
+				_wizard_role_cells(_wizard_group, "gate").size(),
+				_wizard_role_cells(_wizard_group, "unlock").size()]
+		var toggle_hint := "; T ANY/ALL" if (_wizard_kind == "button" and _wizard_stage == "gate") else ""
+		wizard_line = "\n%s %d  [%s stage]  %s   Tab next, Shift+Tab back, ` done; X/B erase%s" % [
+			_wizard_noun().to_upper(), _wizard_group, _wizard_stage, counts, toggle_hint]
 	_info.text = "Editing: %s%s\nCell (%d, %d)   Cube %dx%dx%d   Tool: %s\nWASD move, arrows/E/Q shape; Tab menu; Enter place (hold = fill); X/B erase (hold = fill); ` none; F5 finish; P playtest\n%d tiles   %d overlay   %d objects%s%s%s" % [
 		_level_name, tag, c.x, c.y, shape.x, shape.y, shape.z, _tool_label(_tool), _base.size(), _overlay.size(), _objects.size(), wizard_line, path_line, status_line
 	]
@@ -843,7 +886,7 @@ func _compute_warnings() -> Array:
 		var who: String = oid if oid != "" else "at (%d,%d)" % [c.x, c.y]
 		if ent["id"] == "extend_lock_gate":
 			if oid == "" or not opened.has(oid):
-				w.append("Gate %s has no lock" % who)
+				w.append("Gate %s has no opener (lock or button)" % who)
 		elif ent["id"] == "extend_lock_zone" and String(ent["params"].get("mode", "lock")) == "unlock":
 			if oid == "" or not released.has(oid):
 				w.append("Unlock %s has no lock" % who)
@@ -904,13 +947,18 @@ func _add_tool_button(id: String, label: String, variant: String = "lock") -> vo
 
 
 func _add_wizard_button() -> void:
-	# The lock-puzzle wizard is not a registry type; it drives placement across the
-	# lock/gate/unlock stages and auto-wires the links (slice 4).
+	# The puzzle wizards are not registry types; each drives placement across its stages
+	# and auto-wires the links (slice 4). Lock = lock/gate/unlock; Button = button/gate.
+	_add_wizard_entry("Lock Puzzle (wizard)", "lock")
+	_add_wizard_entry("Button Puzzle (wizard)", "button")
+
+
+func _add_wizard_entry(label: String, kind: String) -> void:
 	var b := Button.new()
 	b.custom_minimum_size = Vector2(0, 34)
 	b.add_theme_font_size_override("font_size", 18)
-	b.text = "Lock Puzzle (wizard)"
-	b.pressed.connect(_start_wizard)
+	b.text = label
+	b.pressed.connect(_start_wizard.bind(kind))
 	_tool_list.add_child(b)
 
 
@@ -985,13 +1033,14 @@ func _tool_label(id: String) -> String:
 # finish this puzzle and start the next one); ` (editor_none) = finish and exit.
 # Placement itself is the existing zone/gate tooling, untouched. ---
 
-func _start_wizard() -> void:
+func _start_wizard(kind: String) -> void:
 	_close_menu()
 	_wizard_active = true
+	_wizard_kind = kind
 	_wizard_group = _next_group
 	_next_group += 1
-	_wizard_set_stage("lock")
-	_flash("Lock Puzzle %d: place lock zone(s).  Tab = next stage,  ` = done" % _wizard_group)
+	_wizard_set_stage(WIZARD_STAGES[kind][0])
+	_flash(_wizard_prompt())
 
 
 func _wizard_set_stage(stage: String) -> void:
@@ -1001,6 +1050,9 @@ func _wizard_set_stage(stage: String) -> void:
 		"lock":
 			_tool = "extend_lock_zone"
 			_tool_mode = "lock"
+		"button":
+			_tool = "floor_button"
+			_tool_mode = "lock"   # mode is irrelevant for buttons (single-cell stamp)
 		"gate":
 			_tool = "extend_lock_gate"
 			_tool_mode = "lock"   # mode is irrelevant for gates (path tool)
@@ -1011,37 +1063,48 @@ func _wizard_set_stage(stage: String) -> void:
 
 
 func _wizard_advance() -> void:
-	match _wizard_stage:
-		"lock":
-			if _wizard_role_cells(_wizard_group, "lock").is_empty():
-				_flash("Place at least one lock zone before advancing")
-				return
-			_wizard_set_stage("gate")
-			_flash("Lock Puzzle %d: place gate(s).  Tab = next stage,  ` = done" % _wizard_group)
-		"gate":
-			_wizard_set_stage("unlock")
-			_flash("Lock Puzzle %d: place unlock zone(s).  Tab = finish & next puzzle,  ` = done" % _wizard_group)
-		"unlock":
-			# Past the last stage: close this puzzle and open a fresh one.
-			_wizard_group = _next_group
-			_next_group += 1
-			_wizard_set_stage("lock")
-			_flash("Lock Puzzle %d: place lock zone(s).  Tab = next stage,  ` = done" % _wizard_group)
+	var stages: Array = WIZARD_STAGES[_wizard_kind]
+	var i := stages.find(_wizard_stage)
+	# The first stage needs at least one source (a lock/button) before advancing, so a
+	# group always has something to wire its gates to.
+	if i == 0 and _wizard_role_cells(_wizard_group, stages[0]).is_empty():
+		_flash("Place at least one %s before advancing" % stages[0])
+		return
+	if i < stages.size() - 1:
+		_wizard_set_stage(stages[i + 1])
+	else:
+		# Past the last stage: close this puzzle and open a fresh independent one.
+		_wizard_group = _next_group
+		_next_group += 1
+		_wizard_set_stage(stages[0])
+	_flash(_wizard_prompt())
 
 
 func _wizard_back() -> void:
 	# Step back a stage within the SAME puzzle to add more of an earlier role. Safe
-	# because wiring is all-to-all per group and order-independent. Stops at lock
-	# (no crossing into the previous puzzle).
-	match _wizard_stage:
-		"unlock":
-			_wizard_set_stage("gate")
-			_flash("Lock Puzzle %d: back to gate(s).  Tab = next, Shift+Tab/L3 = back" % _wizard_group)
-		"gate":
-			_wizard_set_stage("lock")
-			_flash("Lock Puzzle %d: back to lock(s).  Tab = next, Shift+Tab/L3 = back" % _wizard_group)
-		"lock":
-			_flash("Already at the first stage (lock)")
+	# because wiring is all-to-all per group and order-independent. Stops at the first
+	# stage (no crossing into the previous puzzle).
+	var stages: Array = WIZARD_STAGES[_wizard_kind]
+	var i := stages.find(_wizard_stage)
+	if i <= 0:
+		_flash("Already at the first stage (%s)" % stages[0])
+		return
+	_wizard_set_stage(stages[i - 1])
+	_flash(_wizard_prompt())
+
+
+func _wizard_noun() -> String:
+	return "Button Puzzle" if _wizard_kind == "button" else "Lock Puzzle"
+
+
+func _wizard_prompt() -> String:
+	var what: String = {
+		"lock": "place lock zone(s)",
+		"button": "place button(s)",
+		"gate": "place gate(s)" + ("  [T = gate ANY/ALL]" if _wizard_kind == "button" else ""),
+		"unlock": "place unlock zone(s)",
+	}[_wizard_stage]
+	return "%s %d: %s.  Tab = next/finish, Shift+Tab = back, ` = done" % [_wizard_noun(), _wizard_group, what]
 
 
 func _wizard_exit() -> void:
@@ -1061,13 +1124,52 @@ func _wizard_role_cells(group: int, role: String) -> Array:
 
 
 func _lock_role(entry: Dictionary) -> String:
-	# The lock-puzzle role of an object entry, or "" if it is not a lock component.
+	# The puzzle role of an object entry, or "" if it is not a puzzle component.
 	var id := String(entry["id"])
 	if id == "extend_lock_gate":
 		return "gate"
+	if id == "floor_button":
+		return "button"
 	if id == "extend_lock_zone":
 		return "unlock" if String((entry["params"] as Dictionary).get("mode", "lock")) == "unlock" else "lock"
 	return ""
+
+
+func _toggle_gate_combinator() -> void:
+	# Flip a gate's ANY/ALL combinator (require_all). Targets the gate whose fence covers
+	# the cursor cell; only button-puzzle gates carry the flag (lock gates have one opener,
+	# so ANY/ALL is moot and the flag is absent on them).
+	var cell := _cell()
+	for c in _objects:
+		var e: Dictionary = _objects[c]
+		if String(e["id"]) != "extend_lock_gate":
+			continue
+		var params: Dictionary = e["params"]
+		if not params.has("require_all"):
+			continue
+		if not _gate_covered_cells(params.get("nodes", [])).has(cell):
+			continue
+		params["require_all"] = not bool(params["require_all"])
+		_refresh_object_visual(c)
+		_flash("Gate: %s" % ("ALL (every button)" if params["require_all"] else "ANY (any button)"))
+		return
+	_flash("Stand on a button-puzzle gate to toggle ANY/ALL")
+
+
+func _gate_covered_cells(nds: Array) -> Dictionary:
+	# Cells a gate fence occupies: each node cell plus the half-cell-sampled run between
+	# consecutive nodes (mirrors the loader's _compute_covered), as a set for membership.
+	var cov: Dictionary = {}
+	for i in nds.size():
+		var a := Vector2(float(nds[i][0]), float(nds[i][1]))
+		cov[Vector2i(roundi(a.x), roundi(a.y))] = true
+		if i < nds.size() - 1:
+			var b := Vector2(float(nds[i + 1][0]), float(nds[i + 1][1]))
+			var steps := maxi(1, ceili(a.distance_to(b) * 2.0))
+			for s in range(steps + 1):
+				var p := a.lerp(b, float(s) / float(steps))
+				cov[Vector2i(roundi(p.x), roundi(p.y))] = true
+	return cov
 
 
 # --- Finish / name panel: freeze the cube, name the level, write user://levels/<slug>.json ---
@@ -1299,7 +1401,7 @@ func _mint_link_ids() -> void:
 		var oid := String((_objects[c]["params"] as Dictionary).get("id", ""))
 		if oid != "":
 			used[oid] = true
-	var counters: Dictionary = {"lock": 0, "gate": 0, "unlock": 0}
+	var counters: Dictionary = {"lock": 0, "button": 0, "gate": 0, "unlock": 0}
 	for c in _objects:
 		var e: Dictionary = _objects[c]
 		if not e.has("group"):
@@ -1321,9 +1423,10 @@ func _mint_link_ids() -> void:
 
 
 func _emit_group_links() -> Array:
-	# All-to-all OR within each group: every lock opens every gate, every lock is
-	# released_by every unlock. Groups are independent puzzles.
-	var groups: Dictionary = {}   # group -> { "lock": [ids], "gate": [ids], "unlock": [ids] }
+	# All-to-all OR within each group: every lock AND every button opens every gate, and
+	# every lock is released_by every unlock. Groups are independent puzzles. Both locks
+	# and buttons emit the same `opens` kind, so the gate's opener-poll treats them alike.
+	var groups: Dictionary = {}   # group -> { "lock":[ids], "button":[ids], "gate":[ids], "unlock":[ids] }
 	for c in _objects:
 		var e: Dictionary = _objects[c]
 		if not e.has("group"):
@@ -1334,14 +1437,15 @@ func _emit_group_links() -> Array:
 			continue
 		var g := int(e["group"])
 		if not groups.has(g):
-			groups[g] = {"lock": [], "gate": [], "unlock": []}
+			groups[g] = {"lock": [], "button": [], "gate": [], "unlock": []}
 		(groups[g][role] as Array).append(oid)
 	var out: Array = []
 	for g in groups:
 		var rec: Dictionary = groups[g]
+		for gt in rec["gate"]:
+			for src in (rec["lock"] + rec["button"]):
+				out.append({"from": src, "to": gt, "kind": "opens"})
 		for lk in rec["lock"]:
-			for gt in rec["gate"]:
-				out.append({"from": lk, "to": gt, "kind": "opens"})
 			for ul in rec["unlock"]:
 				out.append({"from": lk, "to": ul, "kind": "released_by"})
 	return out

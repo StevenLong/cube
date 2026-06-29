@@ -44,6 +44,7 @@ const SAFE_EDGE_VERT := 0.02    # vertical thickness (reads as paint, not a bar)
 const SAFE_EDGE_ENERGY := 0.6
 const LINK_ALPHA := 0.5       # guide-line opacity: understated, reads as a hint not a bar
 const LINK_EMISSION := 0.55   # guide-line glow strength (dimmed from the old full 1.0)
+const BUTTON_LINE_COLOR := Color(0.3, 0.75, 0.9)   # teal button->gate guide (distinct from orange lock->gate, green lock->unlock)
 const JUMP_MAX := 5           # mirrors player.gd DODGE_DISTANCE: the cube can cross a straight
 							  # cardinal gap of up to JUMP_MAX-1 void cells (dodge/bridge), so the
 							  # guide router treats such a gap as a traversable edge, not a wall.
@@ -333,9 +334,11 @@ func _build_objects(world: Node3D, data: Dictionary) -> void:
 	var pyramid_idx := 0
 	var zone_idx := 0
 	var gate_idx := 0
+	var button_idx := 0
 	var lock_zones: Array = []
 	var unlock_zones: Array = []
 	var gates: Array = []
+	var buttons: Array = []
 	for obj in objects:
 		if typeof(obj) != TYPE_DICTIONARY:
 			continue
@@ -358,6 +361,11 @@ func _build_objects(world: Node3D, data: Dictionary) -> void:
 				world.add_child(gate)
 				gates.append(gate)
 				gate_idx += 1
+			"floor_button":
+				var button: Node3D = _build_button(spec, cell, button_idx)
+				world.add_child(button)
+				buttons.append(button)
+				button_idx += 1
 			_:
 				push_warning("level_loader: unknown object type '%s', skipped" % spec.get("type", ""))
 	# Softlock guard: a locked shape can tumble into any PERMUTATION of a lock's dims,
@@ -378,28 +386,32 @@ func _build_objects(world: Node3D, data: Dictionary) -> void:
 			if not reachable:
 				push_warning("level_loader: unlock dims %s match no lock, synced to %s" % [u.required_dims, lock_zones[0].required_dims])
 				u.required_dims = lock_zones[0].required_dims
-	_wire_lock_links(lock_zones, unlock_zones, gates, data.get("links", []))
-	_build_lock_links(world, lock_zones, unlock_zones, gates, data.get("links", []), _walkable_cells(data), _blocked_cells(data))
+	_wire_lock_links(lock_zones, unlock_zones, gates, buttons, data.get("links", []))
+	_build_lock_links(world, lock_zones, unlock_zones, gates, buttons, data.get("links", []), _walkable_cells(data), _blocked_cells(data))
 
 
-func _wire_lock_links(locks: Array, unlocks: Array, gates: Array, links: Array) -> void:
-	# Decentralised partner injection (slice 2): hand each object the lock ids it must
-	# react to, then the objects self-update against the player's single active lock id
-	# (a gate opens while its opener is active; an unlock releases its paired lock). The
-	# coupling is EXPLICIT-LINKS-ONLY: an object with nothing injected reacts to nothing.
-	# A level with no lock edges wires nothing (a lone lock is a commit-to-a-shape puzzle).
-	if locks.is_empty():
+func _wire_lock_links(locks: Array, unlocks: Array, gates: Array, buttons: Array, links: Array) -> void:
+	# Decentralised partner injection (slice 2): a gate is handed the opener OBJECTS it
+	# polls (locks and/or buttons, both exposing is_active()), and unlocks the lock ids
+	# they release; the objects then self-update against the player's single active lock
+	# id and the buttons' latch state. EXPLICIT-LINKS-ONLY: an object with nothing injected
+	# reacts to nothing. A level with no locks AND no buttons wires nothing.
+	if locks.is_empty() and buttons.is_empty():
 		return
+	var opener_by_id := _by_link_id(locks)            # both locks and buttons are openers,
+	opener_by_id.merge(_by_link_id(buttons))          # keyed by their per-instance link_id
 	var gate_by_id := _by_link_id(gates)
 	var unlock_by_id := _by_link_id(unlocks)
 	for edge in links:
 		var e: Dictionary = edge
 		match String(e["kind"]):
 			"opens":
-				if gate_by_id.has(e["to"]):
-					gate_by_id[e["to"]].opener_ids.append(String(e["from"]))
-				else:
+				if not gate_by_id.has(e["to"]):
 					push_warning("level_loader: 'opens' target '%s' is not a gate, skipped" % e["to"])
+				elif not opener_by_id.has(e["from"]):
+					push_warning("level_loader: 'opens' source '%s' is not a lock or button, skipped" % e["from"])
+				else:
+					gate_by_id[e["to"]].add_opener(opener_by_id[e["from"]])
 			"released_by":
 				if unlock_by_id.has(e["to"]):
 					unlock_by_id[e["to"]].release_lock_ids.append(String(e["from"]))
@@ -439,6 +451,9 @@ func _add_object_floor(data: Dictionary) -> void:
 				for i in range(dims.x):       # width = x
 					for j in range(dims.z):   # depth = z
 						floor_cells[cell + Vector2i(i, j)] = true
+			"floor_button":
+				# the cube has to stand on the button cell to latch it, so it must be floor
+				floor_cells[_cell(obj.get("cell", [0, 0]))] = true
 
 
 func _walkable_cells(data: Dictionary) -> Dictionary:
@@ -470,39 +485,59 @@ func _blocked_cells(data: Dictionary) -> Dictionary:
 	return out
 
 
-func _build_lock_links(world: Node3D, locks: Array, unlocks: Array, gates: Array, links: Array, walkable: Dictionary, blocked: Dictionary) -> void:
-	# Guide lines so the lock puzzle reads at a glance, routed ALONG THE GRID (not
-	# crow-flies): an orange path lock->gate (shown while the gate is shut) and a green
-	# path lock->unlock (shown once that lock is armed). Each line is drawn per edge and
-	# tagged with its lock id, so a multi-lock level reads each puzzle on its own. A level
-	# with no lock edges draws no guide lines.
-	if locks.is_empty():
+func _build_lock_links(world: Node3D, locks: Array, unlocks: Array, gates: Array, buttons: Array, links: Array, walkable: Dictionary, blocked: Dictionary) -> void:
+	# Guide lines so the puzzle reads at a glance, routed ALONG THE GRID (not crow-flies):
+	# an orange path lock->gate (shown while the gate is shut), a green path lock->unlock
+	# (shown once that lock is armed), and a teal path button->gate (shown until the button
+	# latches). Each line is drawn per edge; lock lines are tagged with their lock id so a
+	# multi-lock level reads each puzzle on its own, button lines track their button object.
+	# A level with no locks AND no buttons draws no guide lines.
+	if locks.is_empty() and buttons.is_empty():
 		return
 	var lock_by_id := _by_link_id(locks)
 	var gate_by_id := _by_link_id(gates)
 	var unlock_by_id := _by_link_id(unlocks)
+	var button_by_id := _by_link_id(buttons)
 	for edge in links:
 		var e: Dictionary = edge
-		var lock_id := String(e["from"])
-		var lock = lock_by_id.get(lock_id)
-		if lock == null:
-			continue   # 'from' is not a lock: nothing to anchor a line on (already warned at parse)
-		var lock_cell := _zone_center_cell(lock)
+		var from_id := String(e["from"])
 		match String(e["kind"]):
 			"opens":
 				var g = gate_by_id.get(String(e["to"]))
-				if g != null:
-					var holder := _new_link_holder(false, lock_id)
-					_draw_grid_path(holder, lock_cell, _gate_center_cell(g), walkable, blocked, Color(0.9, 0.55, 0.15), 0.07)
+				if g == null:
+					continue
+				var gate_cell := _gate_center_cell(g)
+				if lock_by_id.has(from_id):
+					var holder := _new_link_holder(false, from_id)
+					_draw_grid_path(holder, _zone_center_cell(lock_by_id[from_id]), gate_cell, walkable, blocked, Color(0.9, 0.55, 0.15), 0.07)
+					world.add_child(holder)
+				elif button_by_id.has(from_id):
+					var btn = button_by_id[from_id]
+					var holder := _new_button_link_holder(btn)
+					_draw_grid_path(holder, _button_cell(btn), gate_cell, walkable, blocked, BUTTON_LINE_COLOR, 0.06)
 					world.add_child(holder)
 			"released_by":
+				var lock = lock_by_id.get(from_id)
+				if lock == null:
+					continue   # 'from' is not a lock: nothing to anchor a release line on
 				var u = unlock_by_id.get(String(e["to"]))
 				if u != null:
-					var holder := _new_link_holder(true, lock_id)
-					_draw_grid_path(holder, lock_cell, _zone_center_cell(u), walkable, blocked, Color(0.25, 0.85, 0.4), 0.04)
+					var holder := _new_link_holder(true, from_id)
+					_draw_grid_path(holder, _zone_center_cell(lock), _zone_center_cell(u), walkable, blocked, Color(0.25, 0.85, 0.4), 0.04)
 					world.add_child(holder)
 			_:
 				pass   # no guide line for unknown kinds yet
+
+
+func _button_cell(btn: Node3D) -> Vector2i:
+	return Vector2i(roundi(btn.position.x), roundi(btn.position.z))
+
+
+func _new_button_link_holder(opener: Node3D) -> Node3D:
+	var h := Node3D.new()
+	h.set_script(load("res://guide_line.gd"))
+	h.set("opener", opener)
+	return h
 
 
 func _zone_center_cell(zone: Node3D) -> Vector2i:
@@ -802,7 +837,16 @@ func _build_gate(spec: Dictionary, cell: Vector2i, idx: int) -> Node3D:
 	gate.nodes = nds
 	gate.height = int(spec.get("height", ObjectRegistry.default_param("extend_lock_gate", "height")))
 	gate.link_id = String(spec.get("id", ""))
+	gate.require_all = bool(spec.get("require_all", false))
 	return gate
+
+
+func _build_button(spec: Dictionary, cell: Vector2i, idx: int) -> Node3D:
+	var button: Node3D = ObjectRegistry.scene_for("floor_button").instantiate()
+	button.name = "Button%d" % idx
+	button.position = Vector3(cell.x, 0.0, cell.y)   # sits on the floor surface (y=0)
+	button.link_id = String(spec.get("id", ""))
+	return button
 
 
 func _build_overlay(world: Node3D, overlay: Dictionary) -> void:

@@ -47,6 +47,21 @@ The grid/movement primitives (unit, cell, face, tumble, grid position) live in C
   applies **Overheat** + **Exposed** + **Revealed** to the player. It is **not** a guaranteed alert
   or instant fail.
 
+## Gates, locks & buttons
+
+- **Gate** [settled] — a doorway of floor tiles that rise into a soft-red blocking wall when shut
+  and sink flush (walkable) when open. Blocks the **cube** only (enemy-transparent for now). Opened
+  by polling its **openers**.
+- **Opener** [settled] — any object that can open a gate by exposing `is_active()`: a **lock**
+  (active while it is the player's current active lock) or a **floor button** (active while latched).
+  Wired by an `opens` link, gate-agnostic to which kind.
+- **Floor button (pressure plate)** [settled] — a single-cell **latching** opener. Latches ON the
+  first frame the cube's footprint covers it and stays on for the run (one-shot; restart resets).
+  Player-only. The latching complement to the momentary extend-lock.
+- **ANY / ALL combinator** [settled] — a per-gate flag (`require_all`). **ANY** (default): open if
+  any opener is active. **ALL**: open only when every opener (every button grouped with it) is
+  latched -- the multi-button AND. Toggled in the Button Puzzle wizard (T); tagged on the gate ghost.
+
 ## Player resource / status
 
 - **Dodge cooldown** [settled] — the recovery timer after a dodge before another can fire
