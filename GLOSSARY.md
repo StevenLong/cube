@@ -44,7 +44,8 @@ The grid/movement primitives (unit, cell, face, tumble, grid position) live in C
   a pulse, lighting the floor tiles per tile (step-wave style). "Front" = its leading edge.
 - **Catch** [settled] — the pulse front reaching the player while inside the zone. A catch puts
   every guard currently inside the zone into **Seek** (perfect intel on the player's cell) and
-  applies **Overheat** + **Exposed** to the player. It is **not** a guaranteed alert or instant fail.
+  applies **Overheat** + **Exposed** + **Revealed** to the player. It is **not** a guaranteed alert
+  or instant fail.
 
 ## Player resource / status
 
@@ -55,11 +56,19 @@ The grid/movement primitives (unit, cell, face, tumble, grid position) live in C
   One shared cooldown timer; a separate tunable for the catch amount (default = the dodge cooldown)
   so it can be bumped without changing normal dodging. Also the parked **worming** nerf reserve.
 - **Exposed** [settled] — the debuff a pyramid **catch** applies, riding the catch's overheat
-  timer (clears when the dodge cooldown finishes): your position is revealed to in-zone guards AND
-  you cannot **blend** (a current blend is force-broken, re-entry blocked). SPECIFIC to pyramid
-  catches, not to overheat generally (so non-pyramid overheat, e.g. worming, never denies blend).
-  You can still walk/tumble out; dodge + blend are what's locked. Shown by a distinct cube-display
-  look (red, vs the normal amber dodge-heat) for the duration -- it doubles as the overheat tell,
-  since a catch always triggers both.
+  timer (clears when the dodge cooldown finishes): you cannot **blend** (a current blend is
+  force-broken, re-entry blocked). SPECIFIC to pyramid catches, not to overheat generally (so
+  non-pyramid overheat, e.g. worming, never denies blend). You can still walk/tumble out; dodge +
+  blend are what's locked. Shown by a distinct cube-display look (red, vs the normal amber
+  dodge-heat) for the duration -- it doubles as the overheat tell, since a catch always triggers both.
+- **Revealed** [settled] — the debuff a pyramid **catch** applies alongside **Exposed**, on the
+  SAME shared overheat timer (clears when the dodge cooldown finishes). While revealed, every
+  pyramid re-feeds its in-range guards your LIVE cell each tick (throttled), so guards track you
+  THROUGH cover -- a post-catch dodge, walk, or duck-behind-a-wall can't shake the **Seek**. The
+  escape is to run it out (walk/tumble/sprint stay free) and break contact after it clears, or leave
+  the zone so the next pulse can't re-catch and re-arm it. A sibling flag to Exposed (`_revealed`),
+  kept separate so it can later be split off the timer into a "clears only when you leave the zone"
+  version if same-timer proves too weak. No distinct visual yet -- shares Exposed's red wash, since
+  the two always co-occur.
 - **Worming** [proposed] — emergent tech: repeated extend-then-collapse to travel silently/fast.
   Watched, not yet nerfed; the reserve lever is extend **overheat**.

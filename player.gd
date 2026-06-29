@@ -93,6 +93,7 @@ var _dodge_start_pos := Vector3.ZERO
 var _dodge_end_pos := Vector3.ZERO
 var _dodge_cooldown_t := 0.0
 var _exposed := false   # pyramid-catch debuff: blend force-broken + barred (the red alarm wash). Rides the full dodge cooldown a catch sets, so it ends exactly when dodge becomes ready again.
+var _revealed := false  # pyramid-catch debuff (sibling of _exposed, same timer): in-range guards get fed your LIVE position each tick (tracks through cover). Split off the timer later if we want a "leave the field to drop it" version.
 var _knock_cooldown_t := 0.0
 var _buf_action := ""   # latest buffered discrete shape press (see _capture_buffer)
 var _buf_t := 0.0       # remaining grace on the buffered action
@@ -613,6 +614,13 @@ func apply_catch_overheat() -> void:
 	_dodge_cooldown_t = DODGE_COOLDOWN
 	_dodge_heat_max = 1.0
 	_exposed = true
+	_revealed = true
+
+
+func is_revealed() -> bool:
+	# True while a recent catch still has the player tagged: in-range guards should be
+	# fed the live position (see enemy_pyramid). Clears with the shared overheat timer.
+	return _revealed
 
 
 func _reset_ground_overlays() -> void:
@@ -1303,7 +1311,8 @@ func _process(delta: float) -> void:
 		if _dodge_cooldown_t == 0.0:
 			_dodge_flash = DODGE_FLASH_TIME   # just cooled to ready: fire the green blink
 			_ready_player.play()              # soft positive "dodge ready" chime
-			_exposed = false                  # catch debuff ends exactly with the cooldown
+			_exposed = false                  # catch debuffs end exactly with the cooldown
+			_revealed = false
 	if _dodge_flash > 0.0:
 		_dodge_flash = maxf(_dodge_flash - delta, 0.0)
 	if _knock_cooldown_t > 0.0:

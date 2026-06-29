@@ -26,6 +26,7 @@ const FLOAT_Y := 3.0                   # how high the pyramid mesh hovers above 
 const CHARGE_RISE := 1.5               # extra lift while charging; falls back under gravity on emit (the wind-up tell)
 const APEX_Y := FLOAT_Y - 0.4          # cone tip height above the cell; the emit beam runs from here to the floor
 const CATCH_FLASH_TIME := 0.35
+const REVEAL_FEED_INTERVAL := 0.2     # how often to re-feed in-range guards the player's live cell while a catch keeps them REVEALED (throttled so it isn't a per-frame repath)
 const BEAM_FLASH_TIME := 0.3           # how long the emit shaft stays lit at sweep start
 const DROP_GRAVITY := 32.0             # mesh fall acceleration after firing (u/s^2)
 const DROP_BOUNCE_DAMP := 0.35         # fraction of landing speed kept on each bounce
@@ -36,6 +37,7 @@ var _t := 0.0
 var _sweeping := false
 var _sweep_t := 0.0
 var _detected_this_pulse := false
+var _reveal_feed_t := 0.0   # countdown to the next live-position re-feed while the player is REVEALED
 var _catch_flash := 0.0
 var _beam_flash := 0.0
 var _mesh_y := FLOAT_Y     # current pyramid lift: rises with the charge, gravity-drops with a bounce on emit
@@ -185,6 +187,7 @@ func _process(delta: float) -> void:
 		c.a = 0.55 * env
 		_beam_mat.albedo_color = c
 	_tick_flashes(delta)
+	_feed_revealed(delta)
 
 	if _catch_flash > 0.0:
 		charge_amt = 1.0   # whole zone flashes bright the moment it catches you
@@ -236,6 +239,27 @@ func _nearest_footprint_dist(center: Vector2) -> float:
 	var nx := clampi(roundi(center.x), fmin.x, fmin.x + w - 1)
 	var nz := clampi(roundi(center.y), fmin.y, fmin.y + d - 1)
 	return Vector2(nx, nz).distance_to(center)
+
+
+func _feed_revealed(delta: float) -> void:
+	# While a catch keeps the player REVEALED (same shared overheat timer as EXPOSED), keep
+	# feeding in-range guards the LIVE cell so they track through cover -- a post-catch dodge,
+	# walk, or duck-behind-a-wall can't shake the SEEK. Stops when the timer clears the flag;
+	# the next pulse re-catches (and re-arms) if you're still in the field.
+	if _player == null or not _player.is_revealed():
+		_reveal_feed_t = 0.0
+		return
+	_reveal_feed_t -= delta
+	if _reveal_feed_t > 0.0:
+		return
+	_reveal_feed_t = REVEAL_FEED_INTERVAL
+	var center := Vector2(position.x, position.z)
+	for g in get_tree().get_nodes_in_group("guards"):
+		if not g.has_method("reveal_player_at"):
+			continue
+		var gn := g as Node3D
+		if Vector2(gn.position.x, gn.position.z).distance_to(center) <= radius:
+			g.reveal_player_at(_player.position)
 
 
 func _spawn_flash(from: Vector3, to: Vector3, delay: float, to_node: Node3D = null) -> void:
