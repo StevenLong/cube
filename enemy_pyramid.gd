@@ -84,8 +84,8 @@ func _build_beam() -> void:
 	# so its top stays on the cone tip as the pyramid falls (stays attached, see _process).
 	_beam = MeshInstance3D.new()
 	var cyl := CylinderMesh.new()
-	cyl.top_radius = 0.025
-	cyl.bottom_radius = 0.025
+	cyl.top_radius = 0.015
+	cyl.bottom_radius = 0.015
 	cyl.height = 1.0
 	_beam.mesh = cyl
 	_beam_mat = _make_beam_mat()
@@ -97,7 +97,8 @@ func _build_beam() -> void:
 
 func _make_beam_mat() -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(0.6, 0.9, 1.0)
+	m.albedo_color = Color(0.6, 0.9, 1.0, 0.55)   # translucent shaft
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	m.emission_enabled = true
 	m.emission = Color(0.6, 0.9, 1.0)
 	m.emission_energy_multiplier = 4.0
@@ -144,9 +145,10 @@ func _process(delta: float) -> void:
 		pulse_r = front_speed * _sweep_t
 		if not _detected_this_pulse and _player != null:
 			var center := Vector2(position.x, position.z)
-			var pc := Vector2(_player.position.x, _player.position.z)
-			var d := pc.distance_to(center)
-			# Caught the instant the front reaches the player's distance, inside range.
+			var d := _nearest_footprint_dist(center)
+			# Caught the instant the front reaches the NEAREST cell the cube occupies,
+			# inside range -- an extended cube is caught by its overlapping edge, not
+			# only when its centre point is inside the radius.
 			if d <= radius and pulse_r >= d:
 				_detected_this_pulse = true
 				_on_catch(_player.position)
@@ -177,7 +179,11 @@ func _process(delta: float) -> void:
 		var apex_local := _mesh_y - 0.4   # cone tip sits 0.4u below the mesh centre
 		_beam.scale.y = apex_local
 		_beam.position.y = apex_local * 0.5
-		_beam_mat.emission_energy_multiplier = 4.0 * beam_ratio
+		var env := sin(PI * (1.0 - beam_ratio))   # 0 -> 1 -> 0 over its life: quick fade in + out
+		_beam_mat.emission_energy_multiplier = 4.0 * env
+		var c: Color = _beam_mat.albedo_color
+		c.a = 0.55 * env
+		_beam_mat.albedo_color = c
 	_tick_flashes(delta)
 
 	if _catch_flash > 0.0:
@@ -200,10 +206,12 @@ func _on_catch(player_pos: Vector3) -> void:
 	# Overheat + Exposed: a catch must STICK -- bar dodge/blend so you can't just
 	# re-blend and vanish. Pyramid-specific; the player owns the timer.
 	_player.apply_catch_overheat()
-	# Comms beams: a return shaft straight up from the caught tile, then (a beat later)
-	# one out to each guard the pyramid notifies -- the player's spot being broadcast.
-	_spawn_flash(Vector3(player_pos.x, 0.05, player_pos.z), Vector3(player_pos.x, FLOAT_Y, player_pos.z), 0.0)
-	var broadcast := Vector3(player_pos.x, 1.0, player_pos.z)
+	# Comms beams trace the signal path: the ping hit the player, so a return beam runs
+	# the caught tile -> pyramid, then (a beat later) the pyramid relays out to each
+	# in-range guard. Origin is the PYRAMID, not the player -- it's the relay. (A player-
+	# origin broadcast read as a stray beam shooting off to an invisible source.)
+	var pyr_tip := Vector3(position.x, APEX_Y, position.z)   # settled cone tip; stable beam anchor
+	_spawn_flash(Vector3(player_pos.x, 0.05, player_pos.z), pyr_tip, 0.0)
 	var center := Vector2(position.x, position.z)
 	for g in get_tree().get_nodes_in_group("guards"):
 		if not g.has_method("reveal_player_at"):
@@ -211,34 +219,59 @@ func _on_catch(player_pos: Vector3) -> void:
 		var gn := g as Node3D
 		if Vector2(gn.position.x, gn.position.z).distance_to(center) <= radius:
 			g.reveal_player_at(player_pos)
-			_spawn_flash(broadcast, Vector3(gn.position.x, 1.0, gn.position.z), 0.1)
+			# Track the guard: the broadcast beam stays pinned to its body as it moves.
+			_spawn_flash(pyr_tip, gn.position, 0.1, gn)
 
 
-func _spawn_flash(from: Vector3, to: Vector3, delay: float) -> void:
-	# A thin cyan beam between two world points, flashed then freed (the catch comms).
+func _nearest_footprint_dist(center: Vector2) -> float:
+	# Distance from the pyramid centre to the nearest cell the cube's footprint occupies
+	# (cell centres, matching the per-tile zone), found by walking the footprint extent.
+	var fmin := _player.get_footprint_min()
+	var w := 1
+	while _player.footprint_covers(Vector2i(fmin.x + w, fmin.y)):
+		w += 1
+	var d := 1
+	while _player.footprint_covers(Vector2i(fmin.x, fmin.y + d)):
+		d += 1
+	var nx := clampi(roundi(center.x), fmin.x, fmin.x + w - 1)
+	var nz := clampi(roundi(center.y), fmin.y, fmin.y + d - 1)
+	return Vector2(nx, nz).distance_to(center)
+
+
+func _spawn_flash(from: Vector3, to: Vector3, delay: float, to_node: Node3D = null) -> void:
+	# A thin translucent cyan beam, flashed (fade in + out) then freed (the catch comms).
+	# `to_node`, if given, makes the destination follow that node's live position each tick
+	# so the beam stays pinned to a moving guard; the source stays at `from`.
+	if (to - from).length() < 0.01:
+		return
+	var seg := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.015
+	cyl.bottom_radius = 0.015
+	cyl.height = 1.0
+	seg.mesh = cyl
+	var mat := _make_beam_mat()
+	mat.emission_energy_multiplier = 0.0   # starts dark; _tick_flashes fades it in
+	seg.set_surface_override_material(0, mat)
+	seg.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(seg)
+	_orient_seg(seg, from, to)
+	seg.visible = delay <= 0.0
+	_flashes.append({ "node": seg, "mat": mat, "from": from, "to": to, "to_node": to_node, "delay": delay, "t": BEAM_FLASH_TIME })
+
+
+func _orient_seg(seg: MeshInstance3D, from: Vector3, to: Vector3) -> void:
+	# Stretch the +Y cylinder axis along (to - from) and centre it at the midpoint.
 	var d := to - from
 	var seg_len := d.length()
 	if seg_len < 0.01:
 		return
-	var seg := MeshInstance3D.new()
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = 0.025
-	cyl.bottom_radius = 0.025
-	cyl.height = 1.0
-	seg.mesh = cyl
-	var mat := _make_beam_mat()
-	seg.set_surface_override_material(0, mat)
-	seg.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(seg)
-	# Orient the +Y cylinder axis along (to - from), stretched to length, at the midpoint.
 	var up := d / seg_len
 	var ref := Vector3.RIGHT if absf(up.x) < 0.9 else Vector3.FORWARD
 	var right := ref.cross(up).normalized()
 	var fwd := up.cross(right).normalized()
 	# Scale the up-AXIS directly (Basis.scaled scales rows, not columns -- wrong for a tilted beam).
 	seg.global_transform = Transform3D(Basis(right, up * seg_len, fwd), (from + to) * 0.5)
-	seg.visible = delay <= 0.0
-	_flashes.append({ "node": seg, "mat": mat, "delay": delay, "t": BEAM_FLASH_TIME })
 
 
 func _tick_flashes(delta: float) -> void:
@@ -253,8 +286,16 @@ func _tick_flashes(delta: float) -> void:
 		if f["t"] <= 0.0:
 			f["node"].queue_free()
 			_flashes.remove_at(i)
-		else:
-			f["mat"].emission_energy_multiplier = 4.0 * (f["t"] / BEAM_FLASH_TIME)
+			continue
+		var to_node: Node3D = f["to_node"]
+		if to_node != null and is_instance_valid(to_node):
+			_orient_seg(f["node"], f["from"], to_node.position)
+		var env: float = sin(PI * (1.0 - f["t"] / BEAM_FLASH_TIME))   # quick fade in + out
+		var mat: StandardMaterial3D = f["mat"]
+		mat.emission_energy_multiplier = 4.0 * env
+		var c: Color = mat.albedo_color
+		c.a = 0.55 * env
+		mat.albedo_color = c
 
 
 func _push_ground(pulse_r: float, charge_amt: float) -> void:
