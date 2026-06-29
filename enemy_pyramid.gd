@@ -27,6 +27,7 @@ const CHARGE_RISE := 1.5               # extra lift while charging; falls back u
 const APEX_Y := FLOAT_Y - 0.4          # cone tip height above the cell; the emit beam runs from here to the floor
 const CATCH_FLASH_TIME := 0.35
 const REVEAL_FEED_INTERVAL := 0.2     # how often to re-feed in-range guards the player's live cell while a catch keeps them REVEALED (throttled so it isn't a per-frame repath)
+const GUARD_BODY_RADIUS := 0.4        # enemy_sphere mesh radius; broadcast beams stop at the surface, not the centre (the body is alpha-blended, so a centre-aimed beam shows through it)
 const BEAM_FLASH_TIME := 0.3           # how long the emit shaft stays lit at sweep start
 const DROP_GRAVITY := 32.0             # mesh fall acceleration after firing (u/s^2)
 const DROP_BOUNCE_DAMP := 0.35         # fraction of landing speed kept on each bounce
@@ -214,7 +215,8 @@ func _on_catch(player_pos: Vector3) -> void:
 	# in-range guard. Origin is the PYRAMID, not the player -- it's the relay. (A player-
 	# origin broadcast read as a stray beam shooting off to an invisible source.)
 	var pyr_tip := Vector3(position.x, APEX_Y, position.z)   # settled cone tip; stable beam anchor
-	_spawn_flash(Vector3(player_pos.x, 0.05, player_pos.z), pyr_tip, 0.0)
+	# Return beam: from the CUBE (tracks it -- a catch tags it REVEALED) up to the pyramid.
+	_spawn_flash(player_pos, pyr_tip, 0.0, null, _player)
 	var center := Vector2(position.x, position.z)
 	for g in get_tree().get_nodes_in_group("guards"):
 		if not g.has_method("reveal_player_at"):
@@ -222,8 +224,8 @@ func _on_catch(player_pos: Vector3) -> void:
 		var gn := g as Node3D
 		if Vector2(gn.position.x, gn.position.z).distance_to(center) <= radius:
 			g.reveal_player_at(player_pos)
-			# Track the guard: the broadcast beam stays pinned to its body as it moves.
-			_spawn_flash(pyr_tip, gn.position, 0.1, gn)
+			# Broadcast beam: tracks the guard, stopping at its surface (not its centre).
+			_spawn_flash(pyr_tip, gn.position, 0.1, gn, null, GUARD_BODY_RADIUS)
 
 
 func _nearest_footprint_dist(center: Vector2) -> float:
@@ -262,10 +264,11 @@ func _feed_revealed(delta: float) -> void:
 			g.reveal_player_at(_player.position)
 
 
-func _spawn_flash(from: Vector3, to: Vector3, delay: float, to_node: Node3D = null) -> void:
+func _spawn_flash(from: Vector3, to: Vector3, delay: float, to_node: Node3D = null, from_node: Node3D = null, to_inset := 0.0) -> void:
 	# A thin translucent cyan beam, flashed (fade in + out) then freed (the catch comms).
-	# `to_node`, if given, makes the destination follow that node's live position each tick
-	# so the beam stays pinned to a moving guard; the source stays at `from`.
+	# `from_node`/`to_node`, if given, make that end follow the node's live position each tick so
+	# the beam stays pinned to a mover; `to_inset` pulls the destination back along the beam by
+	# that much (so it stops at a body's surface, not inside it).
 	if (to - from).length() < 0.01:
 		return
 	var seg := MeshInstance3D.new()
@@ -279,9 +282,28 @@ func _spawn_flash(from: Vector3, to: Vector3, delay: float, to_node: Node3D = nu
 	seg.set_surface_override_material(0, mat)
 	seg.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(seg)
-	_orient_seg(seg, from, to)
+	var f := { "node": seg, "mat": mat, "from": from, "from_node": from_node, "to": to, "to_node": to_node, "to_inset": to_inset, "delay": delay, "t": BEAM_FLASH_TIME }
+	_orient_flash(f)
 	seg.visible = delay <= 0.0
-	_flashes.append({ "node": seg, "mat": mat, "from": from, "to": to, "to_node": to_node, "delay": delay, "t": BEAM_FLASH_TIME })
+	_flashes.append(f)
+
+
+func _orient_flash(f: Dictionary) -> void:
+	# Resolve live endpoints (tracked nodes override the stored points), apply the surface inset,
+	# then orient the segment.
+	var from: Vector3 = f["from"]
+	if f["from_node"] != null and is_instance_valid(f["from_node"]):
+		from = (f["from_node"] as Node3D).position
+	var to: Vector3 = f["to"]
+	if f["to_node"] != null and is_instance_valid(f["to_node"]):
+		to = (f["to_node"] as Node3D).position
+	var inset: float = f["to_inset"]
+	if inset > 0.0:
+		var dir := to - from
+		var dl := dir.length()
+		if dl > inset:
+			to -= (dir / dl) * inset
+	_orient_seg(f["node"], from, to)
 
 
 func _orient_seg(seg: MeshInstance3D, from: Vector3, to: Vector3) -> void:
@@ -311,9 +333,7 @@ func _tick_flashes(delta: float) -> void:
 			f["node"].queue_free()
 			_flashes.remove_at(i)
 			continue
-		var to_node: Node3D = f["to_node"]
-		if to_node != null and is_instance_valid(to_node):
-			_orient_seg(f["node"], f["from"], to_node.position)
+		_orient_flash(f)
 		var env: float = sin(PI * (1.0 - f["t"] / BEAM_FLASH_TIME))   # quick fade in + out
 		var mat: StandardMaterial3D = f["mat"]
 		mat.emission_energy_multiplier = 4.0 * env
