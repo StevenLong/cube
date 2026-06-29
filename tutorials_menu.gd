@@ -14,6 +14,7 @@ const TUTORIALS := [
 	{"name": "Ink", "path": "res://levels/data/tut_05_ink.json"},
 	{"name": "Dodge", "path": "res://levels/data/tut_06_dodge.json"},
 	{"name": "Convergence", "path": "res://levels/data/tut_07_convergence.json"},
+	{"name": "Buttons", "path": "res://levels/data/tut_08_buttons.json"},
 ]
 
 @onready var _rows: VBoxContainer = $VBox/Scroll/Rows

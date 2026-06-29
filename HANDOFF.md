@@ -51,7 +51,16 @@ finish; readout shows "BUTTON PUZZLE n [stage] nB nG ... T ANY/ALL").
 Build a quick 2-button ALL-gate room in the editor to exercise it. CAVEAT (unchanged, by design): gates are
 ENEMY-TRANSPARENT -- a button-gated room blocks the cube but NOT guards (see "### Enemy nav robustness").
 
-NEXT (obvious): feel-check the button in-editor, then a gizmo TUTORIAL for it (tutorial pipeline). Still owed
+BUTTON TUTORIAL (tut_08_buttons.json, registered in tutorials_menu.gd as #8 "Buttons"). Hand-authored (dev
+out of time to author; levels are JSON so I built it directly + smoke-verified, not editor-drawn). Two beats,
+3 rooms L->R, NO enemies (pure mechanic): (1) one button opens an ANY gate into room B; (2) two SPACED
+buttons on an ALL gate to the exit -- spaced so a 1x1 cube can't cover both, so the LATCHING one-shot is what
+solves it (press one, it stays latched, walk to the other). The gray-out-on-latch guide lines do the teaching
+for free: a pressed button's teal line grays, the unpressed one stays lit, gate opens when both are gray --
+no in-game ALL label needed (the ANY/ALL tag is EDITOR-only; revisit only if playtesters are confused).
+Smoke-verified headless: loads, exit reachable, 3 links, ANY/ALL gates wired (1 + 2 openers).
+
+NEXT (obvious): feel-check the button + tut_08 in-editor/in-game. Still owed
 from before: ratify the SEEK name (still [proposed]); remaining per-object grills (closing gate, remote-noise,
 cylinder); parked feel-checks (glass-blend 30s; pitfall amber telegraph + 5-cell ping radius). The Enemy nav
 robustness cluster (dynamic gate blocking / re-nav / lighthouse) is the unlock for guard-proof button rooms.
