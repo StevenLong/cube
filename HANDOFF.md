@@ -1,5 +1,49 @@
 # Handoff
 
+## Session 18 (2026-07-02): built #4 gate z-clip + #5 confusion-once; feel-check found 3 bugs, all addressed; new visual-rework idea
+Built the two S17 small wins, dev feel-checked, found a serious softlock + two issues on my work. All fixed/handled.
+Commits: cube (gate, enemy), HANDOFF. Owed feel-checks noted below. NOT YET committed at time of writing =>
+see push at session end.
+
+LOCK SOFTLOCK (the serious one) -- FIXED + DEV-CONFIRMED. extend_lock_gate.gd `_process`. Root cause: the gate's
+anti-crush hold-open opened a FULLY SHUT gate whenever the player's footprint reached a gate cell (extend/tumble
+TOWARD the gate -> transient footprint overlap -> gate pops open -> walk through -> closes behind; no lock needed,
+hence "cube not locked" + direction-dependent). clear_active_lock is UNLOCK-only, so "not locked" proved the lock
+never armed => the opener was `_covers_player`, not the lock. FIX: `if not want_open and _raise_t < 1.0 and
+_covers_player()` -- a shut gate (_raise_t==1) never opens from a footprint; an open/mid gate still refuses to
+close on the cube. Headless test (shut+covered stays shut / open+covered holds / mid holds) + dev confirmed fixed.
+
+CONFUSION RESET (my #5 bug, dev diagnosed it right) -- FIXED, in-editor two-cut re-check owed. My first cut used a
+`_severed` BOOL cleared only when the WHOLE loop was reachable, so with two cuts, opening one never cleared it ->
+guard just looped, never advanced to the 2nd cut. REPLACED with `_severed_idx: int` keyed on the specific cut
+WAYPOINT INDEX: glance ONCE per distinct cut, clear the instant THAT leg reopens (non-empty path to it), re-glance
+at a DIFFERENT cut. Rare edge: a guard boxed between two persistent cuts on a multi-waypoint arc may alternate-
+glance (acceptable, far better than the old per-0.4s spam). Also added a stuck-guard: `_resettle_patrol` lighthouses
+if the only reachable waypoint is the one it's standing on (was per-frame re-target spin). `_patrol_fully_reachable`
+deleted. Headless gating test passes (incl. two-cut re-glance). CONFUSION MILKED per dev ("bigger, milk it"):
+CONFUSION_TIME 1.5->2.5, CONFUSION_GLANCE_INTERVAL 0.4->0.55. Feel-check owed; next lever if still subtle = a small
+WANDER (a step or two), not just look.
+
+GATE Z-CLIP (#4) -- fade KEPT, overscan REVERTED. The below-floor fade-to-void (fade_start 0, fade_end now -1.6,
+was -1.2 to soften the "stops abruptly") fixed the hard red box / cutoff. The MESH_OVERSCAN (widen the box to break
+coplanarity) fixed the residual side z-fight BUT added obvious extra corner edges -> dev rejected -> REVERTED. The
+residual edge z-fight + the still-somewhat-abrupt gradient are DEFERRED to the new visual rework below (which
+subsumes them).
+
+NEW VISUAL REWORK IDEA (partner's, dev loves it) -- "floor-based indicators should render UNDER the floor grid,
+not OVERLAID on it." A coherence pass: lock/unlock markers, footprints, echo-pyramid zone+scan, guard cones, step
+waves, the gate pad -- draw them BENEATH the grid lines so the grid always reads on top. Unifies the whole floor
+look AND fixes the gate z-fight for free. NOT built (bedtime). Needs its own design/grill pass + probably shader
+draw-order / a separate underlay pass on grid_ground.gdshader. FILE INTO THE TASK LIST next session (only captured
+here so far). This likely becomes the next spine (it is broad + high-value), ahead of the wizard-UX grill.
+
+OWED FEEL-CHECKS: (1) confusion milk (2.5s / 0.55 glance) reads as a real beat; (2) the two-cut confusion reset
+in-editor (open one of two gates after the first confusion -> guard advances + reacts at the 2nd cut, not loops);
+(3) gate descent fade look now that overscan is gone.
+
+NEXT: file the under-grid indicators idea into the task list + grill/design it (likely the spine). Then confusion
+milk feel-check. STILL PENDING from S17: the WIZARD-UX grill (#1, alpha-blocking) and the liveliness cluster (#2).
+
 ## Session 17 (2026-07-01): S16 feel-checks CONFIRMED; sound Option B built; 5 notes triaged
 Short session, dev out of time at the end. All of S16's owed feel-checks came back GOOD -- corralling, eject,
 confusion glance, lighthouse, level_01/tut_07 re-check, wizard un-trap, open-gate pad. Only the sound muffle

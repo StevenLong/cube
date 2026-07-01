@@ -54,6 +54,15 @@ func _ready() -> void:
 	_material.set_shader_parameter("grid_line_color", RED_LINE)
 	_material.set_shader_parameter("top_color", RED_TOP)
 	_material.set_shader_parameter("side_color", RED_SIDE)
+	# Fade the below-floor part of the box to void so a descending/open gate dissolves
+	# instead of showing a hard red box below the floor line at level edges. Walls inherit a
+	# 45u fade meant for deep columns; a gate is 1u, so tighten it: solid above the floor line,
+	# fully void below. NOTE (feel-check 07-02): the gradient still stops a touch abruptly, and a
+	# residual side z-fight (mesh coplanar with the floor tile) remains at level edges. Widening
+	# the mesh box fixed the z-fight but added obvious extra corner edges (rejected). Both are
+	# deferred to the "floor indicators UNDER the grid" visual rework, which unifies this properly.
+	_material.set_shader_parameter("fade_start", 0.0)
+	_material.set_shader_parameter("fade_end", -1.6)
 	_compute_covered()
 	var origin: Vector2i = nodes[0]
 	for cell in _covered:
@@ -100,10 +109,12 @@ func _add_tile(local_pos: Vector3) -> void:
 
 func _process(delta: float) -> void:
 	var want_open: bool = _openers_satisfied()
-	# Never rise on the player: the unlock zone can release the lock while the cube
-	# still overlaps the doorway. Hold open while the footprint covers any gate cell
-	# and only rise once it has moved clear.
-	if not want_open and _covers_player():
+	# Never CLOSE onto the player: if the gate is open or mid-motion and the cube's footprint
+	# still overlaps a gate cell (an unlock can release the lock while the cube is in the
+	# doorway), hold it open until they step clear. But a FULLY SHUT gate (_raise_t == 1) must
+	# never open just because a footprint reaches a gate cell -- otherwise extending toward the
+	# gate, or the transient footprint mid-tumble, pops a locked gate without solving it.
+	if not want_open and _raise_t < 1.0 and _covers_player():
 		want_open = true
 	_open = want_open
 	var target := 0.0 if _open else 1.0

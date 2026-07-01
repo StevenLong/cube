@@ -45,8 +45,8 @@ const PATH_CELL_ARRIVE := 0.15
 const PURSUIT_REPATH_INTERVAL := 0.3
 const PATROL_REPATH_INTERVAL := 0.5  # patrol re-plans its route this often (not just on arrival), so a gate shutting across the path is noticed and re-routed / triggers confusion instead of walking into the face forever
 const EJECT_TIME := 0.15             # a guard caught in a CLOSING gate slides out over this long, toward whichever side its position is nearer (past the cell midpoint = through, else back). Overlaps the 0.25s gate rise. TUNABLE (feel).
-const CONFUSION_TIME := 1.5          # a PATROL sub-beat when the route is suddenly severed (gate shut, or player blended in a chokepoint): erratic look-around, no alert. TUNABLE.
-const CONFUSION_GLANCE_INTERVAL := 0.4  # a confused guard snaps to a fresh glance direction this often (the erratic tell, vs the lighthouse's smooth sweep)
+const CONFUSION_TIME := 2.5          # a PATROL sub-beat when the route is suddenly severed (gate shut, or player blended in a chokepoint): erratic look-around, no alert. Milked longer (was 1.5) so the "huh?" reads as a real beat. TUNABLE -- if still too subtle, next lever is a small WANDER (a step or two), not just look.
+const CONFUSION_GLANCE_INTERVAL := 0.55  # a confused guard snaps to a fresh glance direction this often (the erratic tell, vs the lighthouse's smooth sweep); slower than 0.4 so each look lands/holds and reads deliberately
 const LIGHTHOUSE_SWEEP_RATE := 1.1   # rad/s a node-less / fully-sealed guard rotates in place, scanning. Slow + steady (contrast: confusion is erratic). TUNABLE.
 const LIGHTHOUSE_RECHECK_INTERVAL := 1.5  # a sealed guard re-tests waypoint reachability this often, so it resumes its patrol when a gate reopens
 const SILHOUETTE_ALPHA := 0.0
@@ -125,6 +125,7 @@ var _eject_t: float = 0.0         # >0 while sliding out of a gate that shut on 
 var _eject_from: Vector3 = Vector3.ZERO
 var _eject_to: Vector3 = Vector3.ZERO
 var _confused_t: float = 0.0      # >0 during the PATROL confusion beat (route just severed)
+var _severed_idx: int = -1        # waypoint index of the cut leg we've already glanced at (-1 = none). Gates confusion to ONCE per DISTINCT severance; clears when THAT leg reopens, so re-cutting it -- or hitting a different cut -- glances anew.
 var _glance_t: float = 0.0        # countdown to the next confused glance snap
 var _glance_dir: Vector2 = Vector2(0.0, 1.0)  # current confused-look target (xz)
 var _lighthouse: bool = false     # scanning in place: no reachable waypoint (or node-less)
@@ -367,7 +368,9 @@ func _patrol(delta: float) -> void:
 		_set_path_to(waypoints[_target_idx])
 		_patrol_repath_t = PATROL_REPATH_INTERVAL
 		if _path.is_empty():
-			_enter_confusion()   # the next leg is sealed
+			_handle_severed_leg()   # sealed next leg: glance ONCE per distinct cut, then cope silently
+		elif _severed_idx == _target_idx:
+			_severed_idx = -1       # this leg reopened -> a fresh cut here glances again
 		return
 	# Re-plan periodically, not only on arrival: a gate shutting ACROSS the current leg leaves a
 	# stale path that would walk us into the gate face forever (we'd never arrive). An empty
@@ -378,9 +381,24 @@ func _patrol(delta: float) -> void:
 		_set_path_to(target)
 		_patrol_repath_t = PATROL_REPATH_INTERVAL
 		if _path.is_empty():
-			_enter_confusion()
+			_handle_severed_leg()
 			return
+		elif _severed_idx == _target_idx:
+			_severed_idx = -1   # this leg reopened -> a fresh cut here glances again
 	_follow_path(delta, 1.0, target)
+
+
+func _handle_severed_leg() -> void:
+	# The leg to waypoints[_target_idx] came back empty (a gate shut across it, or the player
+	# blended in a chokepoint). Glance ONCE per DISTINCT cut: only when this leg isn't the one we
+	# already reacted to. While it stays the same cut, cope silently (reroute / lighthouse) with no
+	# repeated "huh?" every time the loop cycles back onto it. _severed_idx clears when THAT leg is
+	# walkable again (see _patrol), so re-cutting it -- or reaching a different cut -- glances anew.
+	if _severed_idx != _target_idx:
+		_severed_idx = _target_idx
+		_enter_confusion()
+	else:
+		_resettle_patrol()
 
 
 func _enter_confusion() -> void:
@@ -414,9 +432,11 @@ func _enter_lighthouse() -> void:
 
 
 func _resettle_patrol() -> void:
-	# Confusion over: patrol whatever is still reachable (keeping patrol order), else lighthouse.
+	# Confusion over (or coping silently while severed): patrol whatever is still reachable, keeping
+	# patrol order. If the only reachable waypoint is the one we're already standing on (boxed in),
+	# scan in place instead of re-targeting ourselves every frame.
 	var wp := _first_reachable_waypoint()
-	if wp >= 0:
+	if wp >= 0 and (waypoints[wp] - position).length() >= ARRIVE_THRESHOLD:
 		_target_idx = wp
 		_set_path_to(waypoints[_target_idx])
 		_patrol_repath_t = PATROL_REPATH_INTERVAL
@@ -571,6 +591,7 @@ func _enter_state(new_state: State) -> void:
 	if new_state == State.PATROL:
 		_lighthouse = false
 		_confused_t = 0.0
+		_severed_idx = -1
 		if waypoints.size() >= 2:
 			_target_idx = _closest_waypoint_idx()
 			_set_path_to(waypoints[_target_idx])
