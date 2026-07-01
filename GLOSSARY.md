@@ -28,10 +28,20 @@ The grid/movement primitives (unit, cell, face, tumble, grid position) live in C
     pyramid so it is not confused with guard detection.
 - **Spotted / Pursuit** [settled] — a guard at full detection actively chasing. Break line of
   sight long enough and it de-escalates.
-- **Seek** [proposed] — a guard's aggressive directed state when an echo-pyramid **catch** hands it
+- **Seek** [settled] — a guard's aggressive directed state when an echo-pyramid **catch** hands it
   the player's exact cell. It beelines to that cell faster than INVESTIGATE but below PURSUIT, cone
   aimed ahead (so it escalates to PURSUIT if it actually sees you). Each pulse refreshes the target;
-  reaching a stale cell drops it to INVESTIGATE. Tell: electric cyan. (Name not yet ratified.)
+  reaching a stale cell drops it to INVESTIGATE. Tell: electric cyan.
+- **Corral** [settled] — using a **shut gate** as a moving wall to block or trap a guard. A raised gate
+  blocks enemy nav (and sight) uniformly; a guard caught in a closing gate is ejected to the closer side.
+  The point of **guard-proof** rooms. Not a guard state — a player/level tactic.
+- **Confusion** [settled] — a brief non-alert PATROL sub-beat (not a full guard state) when a guard's
+  planned route is suddenly severed — a gate shuts across it, or the player **blends** in a chokepoint.
+  ~1.5s of erratic looking-around ("huh, there wasn't a wall here"), grey, no alert glyph, detection does
+  not rise; then it resettles to patrolling what it can still reach, or to **lighthouse**.
+- **Lighthouse** [settled] — a guard with no reachable patrol nodes scanning in place: a slow, steady
+  continuous cone sweep (grey, PATROL-tier, vision live), vs **confusion**'s quick erratic glance
+  (steady = scanning, erratic = confused). The default for a node-less guard; also a sound-test default.
 
 ## Echo Pyramid
 

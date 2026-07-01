@@ -43,6 +43,12 @@ const NEIGHBORS_8: Array[Vector2i] = [
 ]
 const PATH_CELL_ARRIVE := 0.15
 const PURSUIT_REPATH_INTERVAL := 0.3
+const PATROL_REPATH_INTERVAL := 0.5  # patrol re-plans its route this often (not just on arrival), so a gate shutting across the path is noticed and re-routed / triggers confusion instead of walking into the face forever
+const EJECT_TIME := 0.15             # a guard caught in a CLOSING gate slides out over this long, toward whichever side its position is nearer (past the cell midpoint = through, else back). Overlaps the 0.25s gate rise. TUNABLE (feel).
+const CONFUSION_TIME := 1.5          # a PATROL sub-beat when the route is suddenly severed (gate shut, or player blended in a chokepoint): erratic look-around, no alert. TUNABLE.
+const CONFUSION_GLANCE_INTERVAL := 0.4  # a confused guard snaps to a fresh glance direction this often (the erratic tell, vs the lighthouse's smooth sweep)
+const LIGHTHOUSE_SWEEP_RATE := 1.1   # rad/s a node-less / fully-sealed guard rotates in place, scanning. Slow + steady (contrast: confusion is erratic). TUNABLE.
+const LIGHTHOUSE_RECHECK_INTERVAL := 1.5  # a sealed guard re-tests waypoint reachability this often, so it resumes its patrol when a gate reopens
 const SILHOUETTE_ALPHA := 0.0
 const ENEMY_LOS_FADE := false  # base play: enemies always visible (perfect vision). Set true for the future "blinded" debuff to fade enemies behind walls.
 const VISIBILITY_LERP_RATE := 8.0
@@ -114,6 +120,16 @@ var _search_dwell: float = 0.0
 var _pursuit_repath_timer: float = 0.0
 var _corridor_open_timer: float = 0.0
 var _pursuit_grace: float = 0.0  # countdown of post-LoS tracking in PURSUIT (see PURSUIT_GRACE)
+var _gate_blocked_now: Dictionary = {}  # per-frame snapshot of cells shut gates block (rebuilt in _refresh_gate_blocked); read by _cell_blocked so A* routes around live gate state without rebuilding the static grid
+var _patrol_repath_t: float = 0.0
+var _eject_t: float = 0.0         # >0 while sliding out of a gate that shut on us
+var _eject_from: Vector3 = Vector3.ZERO
+var _eject_to: Vector3 = Vector3.ZERO
+var _confused_t: float = 0.0      # >0 during the PATROL confusion beat (route just severed)
+var _glance_t: float = 0.0        # countdown to the next confused glance snap
+var _glance_dir: Vector2 = Vector2(0.0, 1.0)  # current confused-look target (xz)
+var _lighthouse: bool = false     # scanning in place: no reachable waypoint (or node-less)
+var _lighthouse_recheck_t: float = 0.0
 var _speed_mult: float = 1.0  # eased toward the commanded speed mult (see _move_toward / SPEED_RAMP) so speed changes accelerate in instead of snapping
 var _visibility_alpha: float = 1.0
 var _visibility_initialized: bool = false
@@ -162,6 +178,8 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_advance_pending_sounds(delta)
+	_refresh_gate_blocked()   # snapshot shut-gate cells once; A* + the move backstop read it this frame
+	_maybe_eject()            # start a slide-out if a gate just shut on our cell
 	_trail_alpha = maxf(_trail_alpha - delta / Player.FOOTPRINT_FADE_TIME, 0.0)
 	_update_aim(delta)
 	var seeing := _is_seeing_player()
@@ -244,6 +262,14 @@ func _process(delta: float) -> void:
 				if seek_d < SEEK_ARRIVE_DIST or _state_timer >= SEEK_TIMEOUT:
 					_enter_state(State.INVESTIGATE)
 
+	# Ejection slide overrides whatever the state logic just did to position: a short
+	# ease to the open side we were shoved toward, running under the gate's own rise.
+	if _eject_t > 0.0:
+		_eject_t = maxf(_eject_t - delta, 0.0)
+		var u := 1.0 - _eject_t / EJECT_TIME
+		u = 1.0 - (1.0 - u) * (1.0 - u)   # ease-out
+		position = _eject_from.lerp(_eject_to, u)
+
 	var target_alpha := 1.0 if (not ENEMY_LOS_FADE or _debug_reveal or _visible_to_player()) else SILHOUETTE_ALPHA
 	if not _visibility_initialized:
 		_visibility_alpha = target_alpha
@@ -311,14 +337,119 @@ func _update_detection(delta: float, seeing: bool) -> void:
 
 
 func _patrol(delta: float) -> void:
+	# Sub-modes kept OFF the State enum (so the [_state]-indexed hum/colour arrays don't grow --
+	# that was the SEEK crash): CONFUSED = a brief erratic "huh, a wall?" glance after the route
+	# is suddenly severed; LIGHTHOUSE = scan in place when nothing is reachable (or there are no
+	# nodes). Both stay PATROL-tier, so the escalation check in the caller still spots the player.
+	if _confused_t > 0.0:
+		_confused_glance(delta)
+		_confused_t -= delta
+		if _confused_t <= 0.0:
+			_resettle_patrol()
+		return
+	if _lighthouse:
+		_lighthouse_scan(delta)
+		_lighthouse_recheck_t -= delta
+		if _lighthouse_recheck_t <= 0.0:
+			_lighthouse_recheck_t = LIGHTHOUSE_RECHECK_INTERVAL
+			var wp := _first_reachable_waypoint()
+			if wp >= 0:   # a gate reopened -> resume the real patrol
+				_lighthouse = false
+				_target_idx = wp
+				_set_path_to(waypoints[_target_idx])
+				_patrol_repath_t = PATROL_REPATH_INTERVAL
+		return
 	if waypoints.size() < 2:
+		_enter_lighthouse()   # node-less: scan in place instead of sitting dead
 		return
 	var target: Vector3 = waypoints[_target_idx]
 	if (target - position).length() < ARRIVE_THRESHOLD:
 		_target_idx = (_target_idx + 1) % waypoints.size()
 		_set_path_to(waypoints[_target_idx])
+		_patrol_repath_t = PATROL_REPATH_INTERVAL
+		if _path.is_empty():
+			_enter_confusion()   # the next leg is sealed
 		return
+	# Re-plan periodically, not only on arrival: a gate shutting ACROSS the current leg leaves a
+	# stale path that would walk us into the gate face forever (we'd never arrive). An empty
+	# re-plan means the leg was just severed -> confusion. A reroute (start/goal-snap found a
+	# detour) keeps a non-empty path, so we just quietly go around -- confusion is severance-only.
+	_patrol_repath_t -= delta
+	if _patrol_repath_t <= 0.0:
+		_set_path_to(target)
+		_patrol_repath_t = PATROL_REPATH_INTERVAL
+		if _path.is_empty():
+			_enter_confusion()
+			return
 	_follow_path(delta, 1.0, target)
+
+
+func _enter_confusion() -> void:
+	_confused_t = CONFUSION_TIME
+	_glance_t = 0.0   # snap a fresh glance on the first frame
+	_path = []
+	_path_idx = 0
+
+
+func _confused_glance(delta: float) -> void:
+	# Erratic look-around: snap to a fresh direction every CONFUSION_GLANCE_INTERVAL and turn the
+	# body toward it (the cone follows via _update_aim). Quick + jittery reads as "huh?", distinct
+	# from the lighthouse's smooth sweep. Stationary for now; small wander is a feel-check add.
+	_glance_t -= delta
+	if _glance_t <= 0.0:
+		_glance_t = CONFUSION_GLANCE_INTERVAL
+		var ang := randf() * TAU
+		_glance_dir = Vector2(cos(ang), sin(ang))
+	_turn_body_toward(_glance_dir, delta)
+
+
+func _lighthouse_scan(delta: float) -> void:
+	rotate(Vector3.UP, LIGHTHOUSE_SWEEP_RATE * delta)   # slow steady spin; the vision cone follows via _update_aim
+
+
+func _enter_lighthouse() -> void:
+	_lighthouse = true
+	_lighthouse_recheck_t = LIGHTHOUSE_RECHECK_INTERVAL
+	_path = []
+	_path_idx = 0
+
+
+func _resettle_patrol() -> void:
+	# Confusion over: patrol whatever is still reachable (keeping patrol order), else lighthouse.
+	var wp := _first_reachable_waypoint()
+	if wp >= 0:
+		_target_idx = wp
+		_set_path_to(waypoints[_target_idx])
+		_patrol_repath_t = PATROL_REPATH_INTERVAL
+	else:
+		_enter_lighthouse()
+
+
+func _first_reachable_waypoint() -> int:
+	# First reachable waypoint scanning forward from the current target (so a corralled guard
+	# keeps its patrol order), or -1 if none can be reached right now. _find_path start-snaps,
+	# so this works even while we sit on a blocked cell.
+	if waypoints.size() < 2:
+		return -1
+	var start := _world_to_cell(position)
+	for i in waypoints.size():
+		var idx: int = (_target_idx + i) % waypoints.size()
+		if _find_path(start, _world_to_cell(waypoints[idx])).size() > 0:
+			return idx
+	return -1
+
+
+func _turn_body_toward(dir: Vector2, delta: float) -> void:
+	if dir.length_squared() < 0.0001:
+		return
+	var want := Vector3(dir.x, 0.0, dir.y).normalized()
+	var fwd := -global_transform.basis.z
+	fwd.y = 0.0
+	if fwd.length_squared() < 0.0001:
+		return
+	fwd = fwd.normalized()
+	var off := fwd.signed_angle_to(want, Vector3.UP)
+	rotate(Vector3.UP, clampf(off, -TURN_RATE * delta, TURN_RATE * delta))
 
 
 func _creep(delta: float) -> void:
@@ -415,7 +546,10 @@ func _move_toward(target_pos: Vector3, delta: float, speed_mult: float) -> void:
 	# corridor/clear-walk checks gate the big moves; this catches the rest (and
 	# stalls the sphere at a gap edge instead of letting it float across).
 	var next_pos := position + horizontal_dir * step
-	if not _level.is_floor(Vector2i(roundi(next_pos.x), roundi(next_pos.z))):
+	var next_cell := Vector2i(roundi(next_pos.x), roundi(next_pos.z))
+	if not _level.is_floor(next_cell) or _gate_blocked_now.has(next_cell):
+		# Stall at a gap edge OR a gate face instead of clipping across it during the
+		# ~0.3s repath window (the corridor/A* checks gate the big moves; this the rest).
 		return
 	position = next_pos
 
@@ -436,8 +570,14 @@ func _enter_state(new_state: State) -> void:
 	elif new_state == State.PATROL and prev != State.PATROL:
 		_play_sting(_sting_standdown)
 	if new_state == State.PATROL:
-		_target_idx = _closest_waypoint_idx()
-		_set_path_to(waypoints[_target_idx])
+		_lighthouse = false
+		_confused_t = 0.0
+		if waypoints.size() >= 2:
+			_target_idx = _closest_waypoint_idx()
+			_set_path_to(waypoints[_target_idx])
+			_patrol_repath_t = PATROL_REPATH_INTERVAL
+		else:
+			_enter_lighthouse()   # node-less guard returns to scanning, not to an empty-waypoint crash
 	if new_state == State.SUSPICIOUS:
 		_set_path_to(_last_seen_pos)
 	if new_state == State.INVESTIGATE:
@@ -1048,6 +1188,8 @@ func _cell_blocked(cell: Vector2i) -> bool:
 		return true
 	if _nav_blocked.has(cell):
 		return true
+	if _gate_blocked_now.has(cell):   # a shut gate blocks its whole span, live (see _refresh_gate_blocked)
+		return true
 	# A hiding player counts as a wall to pathfinding: they "look like part of
 	# the wall," so the enemy plans around the footprint instead of barging in.
 	# Gated on is_hiding (still + in cover) not is_blending (full phase), so the
@@ -1067,6 +1209,54 @@ func _cell_blocked(cell: Vector2i) -> bool:
 
 func _world_to_cell(p: Vector3) -> Vector2i:
 	return Vector2i(roundi(p.x), roundi(p.z))
+
+
+func _refresh_gate_blocked() -> void:
+	# Once-per-frame snapshot of every cell a currently-shut gate blocks. _cell_blocked and
+	# the _move_toward backstop read this, so A* routes around live gate state without touching
+	# the static _nav_blocked grid. ponytail: O(gates * cells) per guard per frame -- fine for
+	# a handful of gates; cache-on-gate-state-change only if a level ever runs many big gates.
+	_gate_blocked_now.clear()
+	for g in get_tree().get_nodes_in_group("gates"):
+		for c in g.blocked_cells():
+			_gate_blocked_now[c] = true
+
+
+func _maybe_eject() -> void:
+	# A gate that shut on our cell shoves us out to the nearer open side. "Nearest open cell to
+	# our ACTUAL sub-cell position" gives the fairness rule for free: past the gate midpoint we
+	# are closer to the far side (ejected through), before it the near side (ejected back).
+	if _eject_t > 0.0:
+		return
+	var here := _world_to_cell(position)
+	if not _gate_blocked_now.has(here):
+		return
+	var dest := _nearest_open_cell(position)
+	if dest == here:   # no open neighbour -> stay put, the start-snap repath will get us out
+		return
+	_eject_from = position
+	_eject_to = Vector3(dest.x, position.y, dest.y)
+	_eject_t = EJECT_TIME
+
+
+func _nearest_open_cell(from: Vector3) -> Vector2i:
+	# Nearest 8-neighbour cell that is open (floor, not gate/wall blocked, not a hide cell) to
+	# the actual position `from`, so the shove picks the side we are physically closest to.
+	# Returns the (blocked) current cell if none is open -- callers treat that as "no eject".
+	var here := _world_to_cell(from)
+	var best := here
+	var best_d := INF
+	for d in NEIGHBORS_8:
+		var c: Vector2i = here + d
+		if _cell_blocked(c):
+			continue
+		var dx := float(c.x) - from.x
+		var dz := float(c.y) - from.z
+		var dist := dx * dx + dz * dz
+		if dist < best_d:
+			best_d = dist
+			best = c
+	return best
 
 
 func _set_path_to(target: Vector3) -> void:
@@ -1144,7 +1334,24 @@ func _find_path(start: Vector2i, goal: Vector2i) -> Array[Vector2i]:
 			return []
 		goal = best_n
 	if _cell_blocked(start):
-		return []
+		# Symmetric to the goal snap above: a guard sitting on a cell that just became blocked
+		# (a gate shut on it, a player blended onto it) plans from its nearest open neighbour
+		# toward the goal instead of returning [] and freezing. The guard then walks out onto it.
+		var best_s := Vector2i.ZERO
+		var best_sd := INF
+		var found_s := false
+		for d in NEIGHBORS_8:
+			var n: Vector2i = start + d
+			if _cell_blocked(n):
+				continue
+			var dist := float((goal - n).length_squared())
+			if dist < best_sd:
+				best_sd = dist
+				best_s = n
+				found_s = true
+		if not found_s:
+			return []
+		start = best_s
 	if start == goal:
 		var single: Array[Vector2i] = [start]
 		return single

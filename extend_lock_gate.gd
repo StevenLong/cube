@@ -44,6 +44,7 @@ var _shapes: Array[CollisionShape3D] = []
 
 
 func _ready() -> void:
+	add_to_group("gates")   # enemy nav snapshots shut gates here (blocked_cells) to corral guards
 	_player = get_node("../Player") as Player
 	if nodes.is_empty():
 		nodes = [Vector2i(roundi(global_position.x), roundi(global_position.z))]
@@ -128,6 +129,13 @@ func _openers_satisfied() -> bool:
 
 func add_opener(o: Object) -> void:
 	_openers.append(o)
+
+
+func blocked_cells() -> Array:
+	# Cells this gate blocks to ENEMY NAV right now: its whole span while shut,
+	# nothing while open (lowered/passable). Enemies snapshot this once per frame
+	# and route around it (the cube is already blocked physically by the colliders).
+	return [] if _open else _covered
 
 
 func _covers_player() -> bool:

@@ -1,5 +1,67 @@
 # Handoff
 
+## Session 16 (2026-07-01): ENEMY NAV ROBUSTNESS built end to end (a+b+c); SEEK ratified; button feel-check CONFIRMED
+Grilled the nav cluster, then built it as one slice. All headless-verified; in-editor feel-check owed.
+Commits: cube (this), game-dev task list. SEEK is now [settled]; the button + tut_08 feel-checks the dev
+owed from S15 are CONFIRMED ("buttons work well", likes tut_08).
+
+KEY REFRAME (from the grill): this was NOT a nav-grid rebuild. `enemy_sphere._cell_blocked()` is already
+queried live per A* expansion and already carries a dynamic term (the player-hiding block). So corralling =
+ADD a live gate term there. Gates already track `_covered` + `_open`; they just needed a group.
+
+(a) SHUT GATES CORRAL ENEMIES.
+- Gates join group "gates" (extend_lock_gate `_ready`); new `blocked_cells()` returns `_covered` while shut,
+  [] while open. enemy_sphere `_refresh_gate_blocked()` snapshots those cells once per frame into
+  `_gate_blocked_now`; `_cell_blocked` + the `_move_toward` backstop read it. Sight-blocking was already free
+  (raised gate = mask-1 StaticBody). UNIFORM (all gates, no per-gate flag).
+- `_move_toward` backstop now also refuses a gate-blocked next cell -> a guard stops at the gate FACE instead
+  of clipping through during the ~0.3s repath window.
+- EJECT on close: `_maybe_eject()` (top of `_process`) -> if a shut gate covers our cell, slide to the
+  nearest OPEN neighbour (`_nearest_open_cell`, nearest to actual sub-cell pos = the "past midpoint through,
+  else back" fairness rule for free). Slide = a ~0.15s ease (EJECT_TIME) applied AFTER the state match so it
+  overrides normal locomotion; overlaps the 0.25s gate rise. No open neighbour -> stays put, start-snap gets it.
+
+(b) GRACEFUL RE-NAV + CONFUSION.
+- START-SNAP in `_find_path`: symmetric to the existing goal-snap -- a blocked START plans from its nearest
+  open neighbour toward the goal instead of returning [] and freezing.
+- PATROL rewrite: a PATROL_REPATH_INTERVAL (0.5s) timer re-plans mid-leg (not just on arrival), so a gate
+  shutting across the current leg is noticed. Empty re-plan = leg severed -> CONFUSION. A detour keeps a
+  non-empty path -> quietly reroute (confusion is severance-ONLY).
+- CONFUSION = a PATROL sub-FLAG (`_confused_t`), deliberately NOT a State enum entry (that grows the
+  [_state]-indexed hum/colour arrays -> the SEEK crash d6684cd). ~1.5s erratic look-around (`_confused_glance`
+  snaps a fresh random yaw every 0.4s), grey, no alert glyph, vision still live. Trigger fires for a gate
+  shut OR a player BLEND in a chokepoint (the hiding block already lives in _cell_blocked -> emergent: blend
+  in a chokepoint and a confused guard mills next to you). Then `_resettle_patrol` -> reachable remainder or
+  lighthouse.
+
+(c) LIGHTHOUSE = `_lighthouse` flag. `waypoints < 2` or fully-sealed -> slow STEADY yaw sweep
+(`_lighthouse_scan`, LIGHTHOUSE_SWEEP_RATE), grey cone, vision live (contrast: confusion is erratic). Re-checks
+reachability every LIGHTHOUSE_RECHECK_INTERVAL (1.5s) so a sealed guard RESUMES patrol when a gate reopens.
+`_enter_state(PATROL)` now clears both sub-flags and routes a node-less guard to lighthouse (was an
+empty-waypoint crash risk).
+
+VERIFIED HEADLESS (throwaway tests in scratchpad, not committed):
+- Grid truth table (11/11): gate-block, detour-reroute, full-severance -> [], start-snap (non-empty, reaches
+  goal, excludes the blocked start), eject nearest-side (2.4 -> forward (3,0); 1.6 -> back (1,0)), isolated
+  cell -> no eject.
+- Integration smoke on level_01 + tut_07 (the two shipped gates+enemies levels): load clean, gates in group,
+  gates shut-at-load blocking cells, guards survive 40 pumped frames of the new patrol/eject/refresh code.
+
+OWED IN-EDITOR FEEL-CHECK (none headless-able): corralling feel (run into a lock-gate room, gate shuts behind
+you, guard can't follow); the eject bump when a gate closes on a guard; the confusion glance ("huh?") when you
+blend in a chokepoint on a patrol route; the lighthouse sweep (node-less guard, and a fully-sealed one); and
+SPECIFICALLY re-check level_01 + tut_07 -- their gates now corral, so a guard whose beat crossed a
+(shut-at-load) gate will confuse->lighthouse until the player opens it. Confirm that reads sensibly, not broken.
+Build a 1-guard + 1-lock-gate room to exercise it. KNOBS to tune on feel: EJECT_TIME, CONFUSION_TIME +
+CONFUSION_GLANCE_INTERVAL, LIGHTHOUSE_SWEEP_RATE, LIGHTHOUSE_RECHECK_INTERVAL, PATROL_REPATH_INTERVAL.
+POSSIBLE ADD (deferred): confusion currently look-only; the dev floated a small WANDER (a step or two) -- add
+on feel-check if the stationary glance reads too static. Terms pinned in GLOSSARY: Corral, Confusion, Lighthouse.
+
+NEXT (obvious): feel-check the nav slice in-editor. Then still owed: remaining per-object grills (closing gate,
+remote-noise, cylinder); parked feel-checks (glass-blend 30s; pitfall amber telegraph + 5-cell ping radius).
+The closing/airlock gate is now a natural next prop -- corralling makes it meaningful (a gate that shuts on a
+TIMER or trigger, not just a lock/button, to seal guards).
+
 ## Session 15 (2026-06-29): FLOOR BUTTON built end to end (object + gate refactor + Button Puzzle wizard); headless-verified, feel-check owed
 Built the floor button per the Session-14 SPEC, in the pinned build order. All logic verified headless;
 in-editor feel-check is the only thing owed. GLOSSARY + task list updated.
