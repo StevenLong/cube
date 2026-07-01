@@ -1,5 +1,38 @@
 # Handoff
 
+## Session 17 (2026-07-01): S16 feel-checks CONFIRMED; sound Option B built; 5 notes triaged
+Short session, dev out of time at the end. All of S16's owed feel-checks came back GOOD -- corralling, eject,
+confusion glance, lighthouse, level_01/tut_07 re-check, wizard un-trap, open-gate pad. Only the sound muffle
+(Option A) was rejected.
+
+SOUND OPTION B BUILT + CONFIRMED (commit 1f80e67, enemy_sphere.gd). Option A (NOISE_WALL_MUFFLE 0.45->0.70)
+was rejected on feel: any tuning loud enough to round a corner made walls barely muffle at all. Built B: a
+wall-blocked noise now uses a bounded A* PATH length as its propagation distance, so a sound rounds corners to
+a guard just past a wall while a sealed room stays quiet. New `_noise_path_dist` + `_sound_blocked` (walls +
+shut gates only; crosses void + the hiding player; goal cell always enterable for the wall-knock lure). Gated
+behind the existing `_noise_path_clear` raycast -> the straight-line case hears directly with NO pathfinding,
+so the A* only fires for the in-range-but-blocked corner case. NOISE_WALL_MUFFLE deleted (dead). Headless 4/4
+(rounds a corner, sealed -> -1, shut gate seals like a wall, out-of-range bounded). Dev confirmed "sounds good".
+
+WIZARD WORKS BUT UX IS BAD (dev's verdict). Un-trap succeeded (no more softlock) BUT the fix moved "advance
+stage" into the tool MENU, which defeats the wizard's fast-sequential point. Dev wants dedicated advance/back/
+finish KEYS that can't trap (no menu-to-continue, no Shift+Tab chords), and the bare ANY/ALL Label3D needs an
+in-world EXPLANATION (illegible to non-authors). -> filed as an alpha-blocking UX grill (task-list Notes 07-01b #1).
+
+TRIAGED 5 NOTES into the task list ("### Notes 2026-07-01b"), NOT built (triage-only pass, dev out of time):
+1. Wizard UX redesign (alpha-blocking; grill). 2. Post-round liveliness cluster -- enemy win/loss reactions,
+world keeps living instead of freezing, Kula-World camera sweep on clear (feature; grill; large; high char).
+3. Physics knockback on catch (stretch, against non-physics grain; parked). 4. Gate-descent z-clip at level
+edges (red/blue z-fight + hard cutoff; wants fade-down gradient; SMALL visual bug, no grill). 5. Confusion
+repeats at the same severed leg.
+DECISION MADE this session (dev signed off): #5 = fire confusion ONCE per severance (on the reachable->severed
+transition, suppress while severed, clear when the leg reopens -- one boolean, no per-node flag soup). READY TO
+BUILD, small. The idle waypoint-glance charm idea is a SEPARATE parked feature (first/last node), grill if wanted.
+PROPOSED ORDER: 4 (small visual) -> 5 (small, decided) -> 1 (wizard grill) -> 2 (liveliness grill) -> 3 (parked).
+
+NEXT (obvious): the two small self-contained wins -- #4 gate z-clip fade, then #5 confusion-once (decided, just
+build it). Then the grills (#1 wizard UX is alpha-blocking; #2 liveliness is the big character piece).
+
 ## Session 16 (2026-07-01): ENEMY NAV ROBUSTNESS built end to end (a+b+c); SEEK ratified; button feel-check CONFIRMED
 Grilled the nav cluster, then built it as one slice. All headless-verified; in-editor feel-check owed.
 Commits: cube (this), game-dev task list. SEEK is now [settled]; the button + tut_08 feel-checks the dev
