@@ -66,7 +66,6 @@ const DETECT_MIN_PROXIMITY := 0.15   # fill floor at cone edge
 const DETECT_SIZE_WEIGHT := 0.15     # per extension unit
 const DETECT_ALERT_FILL_MULT := 1.5  # faster fill when already alert
 const DETECT_NOISE_SEED := 0.5       # heard noise seeds detection here, then drains
-const NOISE_WALL_MUFFLE := 0.70      # heard-radius fraction left when a wall blocks the sound path. Raised from 0.45 (2026-07-01): a wall-blocked sound was hard-dropped past 45% of its radius, so a sound just around a corner never reached a guard right there (read as pure line-of-sight). FEEL KNOB -- if this still reads like LoS, escalate to grid-PATH propagation (sound rounds corners; see task-list note 1 option B).
 const DEBUG_DETECTION := true        # temporary on-screen _detection readout; remove with the focusing-cone task
 
 # Focusing cone (reads _detection). The cone narrows, colour-ramps, and aims at
@@ -736,17 +735,22 @@ func _on_player_noise(origin: Vector2, max_radius: float, duration: float) -> vo
 		return
 	var enemy_xz := Vector2(position.x, position.z)
 	var dist := enemy_xz.distance_to(origin)
-	if dist > max_radius:
+	# Unblocked straight line: hear it directly, no pathfinding (the common case).
+	# A knock's origin sits INSIDE the knocked wall and rays ignore the shape they
+	# start in, so a knock still carries straight through its own wall (the lure works).
+	if _noise_path_clear(origin):
+		if dist > max_radius:
+			return
+		_pending_sounds.append({ "origin": origin, "delay": dist * duration / max_radius })
 		return
-	# Walls muffle: a blocked sound path cuts the heard radius hard, so a loud
-	# step on the far side of a wall no longer reads as a precise beacon. A
-	# knock's origin sits INSIDE the knocked wall and rays ignore the shape they
-	# start in, so a knock still carries through its own wall (the lure works)
-	# but is muffled by any further wall.
-	if not _noise_path_clear(origin) and dist > max_radius * NOISE_WALL_MUFFLE:
+	# A wall blocks the straight line, so the sound has to round corners: use the
+	# GRID-PATH distance as the propagation distance. A path just around a corner
+	# still reaches a nearby guard (delay scales with the longer path); a fully
+	# sealed room has no path in range and the sound is lost.
+	var path_dist := _noise_path_dist(origin, max_radius)
+	if path_dist < 0.0:
 		return
-	var delay := dist * duration / max_radius
-	_pending_sounds.append({ "origin": origin, "delay": delay })
+	_pending_sounds.append({ "origin": origin, "delay": path_dist * duration / max_radius })
 
 
 func _noise_path_clear(origin: Vector2) -> bool:
@@ -758,6 +762,49 @@ func _noise_path_clear(origin: Vector2) -> bool:
 	query.collision_mask = 1
 	query.collide_with_areas = false
 	return space.intersect_ray(query).is_empty()
+
+
+func _sound_blocked(cell: Vector2i) -> bool:
+	# Sound is stopped only by solid walls and shut gates. Unlike _cell_blocked it
+	# crosses void and the hiding player (they don't stop a sound), so it can't
+	# reuse that test.
+	return _nav_blocked.has(cell) or _gate_blocked_now.has(cell)
+
+
+func _noise_path_dist(origin: Vector2, max_radius: float) -> float:
+	# Grid-path distance from this guard to a wall-blocked sound so the sound rounds
+	# corners. Bounded to max_radius: a fully sealed room empties the frontier -> -1.
+	# Only runs when the LoS ray is blocked (_on_player_noise early-out), so this A*
+	# is rare. The goal (sound origin) is always enterable so a knock inside a wall
+	# is still reachable via an adjacent open cell.
+	var start := _world_to_cell(global_position)
+	var goal := _world_to_cell(Vector3(origin.x, 0.0, origin.y))
+	if start == goal:
+		return 0.0
+	var g_score: Dictionary = { start: 0.0 }
+	var open: Dictionary = { start: _octile(start, goal) }
+	while not open.is_empty():
+		var current := _pop_lowest(open)
+		if current == goal:
+			return g_score[current]
+		var current_g: float = g_score[current]
+		for step in NEIGHBORS_8:
+			var n: Vector2i = current + step
+			if n != goal and _sound_blocked(n):
+				continue
+			# No diagonal corner cutting, matching _find_path: a diagonal step needs
+			# both shared orthogonal cells open, so sound can't slip a wall corner seam.
+			if step.x != 0 and step.y != 0:
+				if _sound_blocked(Vector2i(current.x + step.x, current.y)) or _sound_blocked(Vector2i(current.x, current.y + step.y)):
+					continue
+			var move_cost := SQRT2 if (step.x != 0 and step.y != 0) else 1.0
+			var tentative_g := current_g + move_cost
+			if tentative_g > max_radius:
+				continue
+			if not g_score.has(n) or tentative_g < g_score[n]:
+				g_score[n] = tentative_g
+				open[n] = tentative_g + _octile(n, goal)
+	return -1.0
 
 
 func _advance_pending_sounds(delta: float) -> void:
