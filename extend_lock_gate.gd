@@ -14,7 +14,7 @@ extends StaticBody3D
 
 const RAISE_TIME := 0.25            # seconds for the rise/sink animation
 const RAISED_TOP := 1.0             # tile top y when shut (a 1u wall above the floor)
-const LOWERED_TOP := -0.1           # tile top y when open (tucked just under the floor surface)
+const LOWERED_TOP := 0.05           # tile top y when open: a flush red PAD just proud of the floor, so an open gate's footprint still reads (lets the player see where a gate is and time a shut on an approaching guard). Height = state (pad open / wall shut), colour = "this is a gate". TUNABLE.
 const BOX_H := 1.9                  # spans floor depth: raised covers 0..1, lowered tucks to floor bottom (no protrusion below the level)
 const WALL_MATERIAL := preload("res://wall_material.tres")
 const RED_LINE := Color(1.0, 0.25, 0.25)   # red grid lines = "this floor is blocking you"
@@ -146,15 +146,14 @@ func _covers_player() -> bool:
 
 
 func _apply_visual() -> void:
-	# Lerp the tile boxes between lowered (tucked under the floor, hidden) and
-	# raised (a 1u red grid wall). No glow fade needed: a lowered tile is occluded
-	# by the floor tile above it.
+	# Lerp the tile boxes between lowered (a flush red pad just proud of the floor) and
+	# raised (a 1u red grid wall). The pad stays VISIBLE when open so the gate's footprint
+	# always reads -- the player can see where a gate is and judge when to shut it. The
+	# collider still disables while lowered, so the pad blocks nothing.
 	var top := lerpf(LOWERED_TOP, RAISED_TOP, _raise_t)
 	var center_y := top - BOX_H * 0.5
-	var lowered := _raise_t <= 0.01   # fully sunk: hide so it doesn't z-fight inside the deep floor column
 	for m in _meshes:
 		m.position.y = center_y
-		m.visible = not lowered
 	for c in _shapes:
 		c.position.y = center_y
 		c.disabled = _raise_t < 0.5   # passable once mostly lowered

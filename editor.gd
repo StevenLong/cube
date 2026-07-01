@@ -175,10 +175,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		_wizard_back()
 		return
 	if event.is_action_pressed("editor_menu"):
-		if _wizard_active:
-			_wizard_advance()   # in the wizard the menu button is "next stage", not the palette
-		else:
-			_open_menu()
+		# The palette ALWAYS opens (even mid-wizard): during a wizard it carries the
+		# Next/Finish controls and picking any tool ends the wizard, so Tab is never a
+		# trap. (Previously Tab was hijacked to advance, stranding an accidental wizard.)
+		_open_menu()
 		return
 	if event.is_action_pressed("editor_none"):
 		if _wizard_active:
@@ -915,6 +915,16 @@ func _required_dims(ent: Dictionary) -> Vector3i:
 # --- Tool menu (Tab): pick the active placement tool, or "None" for free control ---
 
 func _build_tool_menu() -> void:
+	# Rebuilt on every open (_open_menu) so the wizard controls appear/disappear with
+	# _wizard_active and the focus-wrap below stays correct.
+	for c in _tool_list.get_children():
+		_tool_list.remove_child(c)
+		c.free()
+	if _wizard_active:
+		# During a wizard the palette IS its control surface: advance/finish here, and any
+		# tool below ends the wizard (placed objects stay). So Tab always offers a way out.
+		_add_action_button("> Next stage / finish puzzle", _menu_wizard_next)
+		_add_action_button("x Finish wizard", _menu_wizard_finish)
 	_add_tool_button("none", "None (free control)")
 	_add_wizard_button()
 	for id in ObjectRegistry.TYPES:
@@ -946,6 +956,15 @@ func _add_tool_button(id: String, label: String, variant: String = "lock") -> vo
 	_tool_list.add_child(b)
 
 
+func _add_action_button(label: String, cb: Callable) -> void:
+	var b := Button.new()
+	b.custom_minimum_size = Vector2(0, 34)
+	b.add_theme_font_size_override("font_size", 18)
+	b.text = label
+	b.pressed.connect(cb)
+	_tool_list.add_child(b)
+
+
 func _add_wizard_button() -> void:
 	# The puzzle wizards are not registry types; each drives placement across its stages
 	# and auto-wires the links (slice 4). Lock = lock/gate/unlock; Button = button/gate.
@@ -963,11 +982,22 @@ func _add_wizard_entry(label: String, kind: String) -> void:
 
 
 func _open_menu() -> void:
+	_build_tool_menu()   # rebuild so the wizard's Next/Finish entries track _wizard_active
 	_menu_open = true
 	_player.process_mode = Node.PROCESS_MODE_DISABLED   # freeze the cube while choosing
 	_tool_menu.show()
 	if _tool_list.get_child_count() > 0:
 		(_tool_list.get_child(0) as Control).grab_focus()
+
+
+func _menu_wizard_next() -> void:
+	_close_menu()
+	_wizard_advance()
+
+
+func _menu_wizard_finish() -> void:
+	_close_menu()
+	_wizard_exit()
 
 
 func _close_menu() -> void:
@@ -1010,6 +1040,8 @@ func _quit_to_menu() -> void:
 
 
 func _select_tool(id: String, variant: String = "lock") -> void:
+	if _wizard_active:
+		_wizard_active = false   # picking any tool ends the wizard; placed objects stay (real _objects)
 	_end_path()   # switching tool commits any patrol path in progress
 	_tool = id
 	_tool_mode = variant
@@ -1029,9 +1061,10 @@ func _tool_label(id: String) -> String:
 # --- Lock-puzzle wizard (slice 4): a grouped-sequence flow that places a puzzle's
 # lock(s) -> gate(s) -> unlock(s), tags each object with the puzzle's group, and lets
 # _serialize mint ids + emit all-to-all links within the group (every lock opens every
-# gate, every lock is released_by every unlock). Tab = next stage (and, past unlock,
-# finish this puzzle and start the next one); ` (editor_none) = finish and exit.
-# Placement itself is the existing zone/gate tooling, untouched. ---
+# gate, every lock is released_by every unlock). The palette (Tab) carries the wizard
+# controls: "Next stage" advances (past unlock, finishes this puzzle and starts the next),
+# "Finish wizard" exits, and picking any tool ends the wizard (placed objects stay).
+# Shift+Tab steps back a stage. Placement itself is the existing zone/gate tooling. ---
 
 func _start_wizard(kind: String) -> void:
 	_close_menu()
@@ -1104,7 +1137,7 @@ func _wizard_prompt() -> String:
 		"gate": "place gate(s)" + ("  [T = gate ANY/ALL]" if _wizard_kind == "button" else ""),
 		"unlock": "place unlock zone(s)",
 	}[_wizard_stage]
-	return "%s %d: %s.  Tab = next/finish, Shift+Tab = back, ` = done" % [_wizard_noun(), _wizard_group, what]
+	return "%s %d: %s.  Tab = menu (Next / Finish / switch tool),  Shift+Tab = back" % [_wizard_noun(), _wizard_group, what]
 
 
 func _wizard_exit() -> void:
