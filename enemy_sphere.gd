@@ -66,7 +66,7 @@ const DETECT_MIN_PROXIMITY := 0.15   # fill floor at cone edge
 const DETECT_SIZE_WEIGHT := 0.15     # per extension unit
 const DETECT_ALERT_FILL_MULT := 1.5  # faster fill when already alert
 const DETECT_NOISE_SEED := 0.5       # heard noise seeds detection here, then drains
-const NOISE_WALL_MUFFLE := 0.45      # heard-radius fraction left when a wall blocks the sound path
+const NOISE_WALL_MUFFLE := 0.70      # heard-radius fraction left when a wall blocks the sound path. Raised from 0.45 (2026-07-01): a wall-blocked sound was hard-dropped past 45% of its radius, so a sound just around a corner never reached a guard right there (read as pure line-of-sight). FEEL KNOB -- if this still reads like LoS, escalate to grid-PATH propagation (sound rounds corners; see task-list note 1 option B).
 const DEBUG_DETECTION := true        # temporary on-screen _detection readout; remove with the focusing-cone task
 
 # Focusing cone (reads _detection). The cone narrows, colour-ramps, and aims at

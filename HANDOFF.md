@@ -57,10 +57,27 @@ CONFUSION_GLANCE_INTERVAL, LIGHTHOUSE_SWEEP_RATE, LIGHTHOUSE_RECHECK_INTERVAL, P
 POSSIBLE ADD (deferred): confusion currently look-only; the dev floated a small WANDER (a step or two) -- add
 on feel-check if the stationary glance reads too static. Terms pinned in GLOSSARY: Corral, Confusion, Lighthouse.
 
-NEXT (obvious): feel-check the nav slice in-editor. Then still owed: remaining per-object grills (closing gate,
-remote-noise, cylinder); parked feel-checks (glass-blend 30s; pitfall amber telegraph + 5-cell ping radius).
-The closing/airlock gate is now a natural next prop -- corralling makes it meaningful (a gate that shuts on a
-TIMER or trigger, not just a lock/button, to seal guards).
+S16 CONT'D -- TRIAGED 3 feel-check notes (task list "### Notes 2026-07-01"), built all three in dev order 2->3->1:
+1. WIZARD TAB TRAP (editor.gd). Tab was hijacked to advance-stage during a wizard, stranding an accidental
+   entry (only ` exited, Shift-req on the dev's board). FIX: Tab ALWAYS opens the tool palette now (palette is
+   rebuilt on each open); during a wizard the palette carries "> Next stage" and "x Finish wizard" entries, and
+   picking ANY tool ends the wizard with placed objects KEPT (_select_tool clears _wizard_active). Advance/back
+   = menu / Shift+Tab. Prompt + comments updated. Parse-clean; GUI feel-check owed (not headless-drivable).
+2. GATES KEEP COLOUR WHEN OPEN (extend_lock_gate.gd). An open gate sank flush + hid (matched floor), so you
+   couldn't see where to time a shut on an approaching guard. FIX: LOWERED_TOP -0.1 -> 0.05 and stop hiding the
+   meshes -> an open gate is a flush red PAD just proud of the floor (height = state, colour = "this is a gate").
+   Collider still disables while lowered. Visual feel-check owed (z-fight is the tunable if it shows).
+3. WALL AUDIO MUFFLE (enemy_sphere.gd). Blocked sound was hard-dropped past 45% of its radius -> felt like pure
+   line-of-sight, never rounded a corner. Grilled the model with the dev; SHIPPED OPTION A: NOISE_WALL_MUFFLE
+   0.45 -> 0.70 (blocked sound just carries further, still straight-line/through-wall). Dev feeling it out. IF it
+   still reads like LoS -> OPTION B (grid-PATH around-corners: a bounded sound-pathfinder gated behind the LoS
+   raycast early-out, ~50 lines, runtime negligible) -- fully specced + cost-breakdown in the task list note.
+
+NEXT (obvious): feel-check this session's work in-editor -- the nav slice (corralling, eject bump, confusion
+glance, lighthouse; re-check level_01 + tut_07), the wizard un-trap, the open-gate pad, and the louder muffle.
+Then still owed: remaining per-object grills (closing gate, remote-noise, cylinder); parked feel-checks
+(glass-blend 30s; pitfall amber telegraph + 5-cell ping radius). The closing/airlock gate is now a natural next
+prop -- corralling makes it meaningful (a gate that shuts on a TIMER or trigger, not just a lock/button).
 
 ## Session 15 (2026-06-29): FLOOR BUTTON built end to end (object + gate refactor + Button Puzzle wizard); headless-verified, feel-check owed
 Built the floor button per the Session-14 SPEC, in the pinned build order. All logic verified headless;
