@@ -126,6 +126,8 @@ var _eject_from: Vector3 = Vector3.ZERO
 var _eject_to: Vector3 = Vector3.ZERO
 var _confused_t: float = 0.0      # >0 during the PATROL confusion beat (route just severed)
 var _severed_idx: int = -1        # waypoint index of the cut leg we've already glanced at (-1 = none). Gates confusion to ONCE per DISTINCT severance; clears when THAT leg reopens, so re-cutting it -- or hitting a different cut -- glances anew.
+var _leg_severed: bool = false    # the current patrol leg is cut: we're walking a PARTIAL path up to the blockage, and confuse once we reach its dead-end (not back at the last waypoint)
+var _last_path_partial: bool = false  # set by _find_path: the path just returned is a partial (goal unreachable, walked as close as we could) rather than a real route to goal
 var _glance_t: float = 0.0        # countdown to the next confused glance snap
 var _glance_dir: Vector2 = Vector2(0.0, 1.0)  # current confused-look target (xz)
 var _lighthouse: bool = false     # scanning in place: no reachable waypoint (or node-less)
@@ -356,8 +358,7 @@ func _patrol(delta: float) -> void:
 			if wp >= 0:   # a gate reopened -> resume the real patrol
 				_lighthouse = false
 				_target_idx = wp
-				_set_path_to(waypoints[_target_idx])
-				_patrol_repath_t = PATROL_REPATH_INTERVAL
+				_plan_patrol_leg()
 		return
 	if waypoints.size() < 2:
 		_enter_lighthouse()   # node-less: scan in place instead of sitting dead
@@ -365,27 +366,38 @@ func _patrol(delta: float) -> void:
 	var target: Vector3 = waypoints[_target_idx]
 	if (target - position).length() < ARRIVE_THRESHOLD:
 		_target_idx = (_target_idx + 1) % waypoints.size()
-		_set_path_to(waypoints[_target_idx])
-		_patrol_repath_t = PATROL_REPATH_INTERVAL
-		if _path.is_empty():
-			_handle_severed_leg()   # sealed next leg: glance ONCE per distinct cut, then cope silently
-		elif _severed_idx == _target_idx:
-			_severed_idx = -1       # this leg reopened -> a fresh cut here glances again
+		_plan_patrol_leg()
 		return
 	# Re-plan periodically, not only on arrival: a gate shutting ACROSS the current leg leaves a
-	# stale path that would walk us into the gate face forever (we'd never arrive). An empty
-	# re-plan means the leg was just severed -> confusion. A reroute (start/goal-snap found a
-	# detour) keeps a non-empty path, so we just quietly go around -- confusion is severance-only.
+	# stale path that would walk us into the gate face forever, and a gate REOPENING should resume
+	# the real leg. _plan_patrol_leg re-plans and, when the leg is cut, sets a PARTIAL path to the
+	# blockage (_leg_severed) so we walk up to the gate face instead of stopping mid-corridor.
 	_patrol_repath_t -= delta
 	if _patrol_repath_t <= 0.0:
-		_set_path_to(target)
-		_patrol_repath_t = PATROL_REPATH_INTERVAL
-		if _path.is_empty():
-			_handle_severed_leg()
-			return
-		elif _severed_idx == _target_idx:
-			_severed_idx = -1   # this leg reopened -> a fresh cut here glances again
+		_plan_patrol_leg()
+	# Reached the dead-end of a severed leg (partial path exhausted short of the waypoint) ->
+	# confuse HERE, at the gate/wall face, not back at the last reachable waypoint.
+	if _leg_severed and _path_idx >= _path.size():
+		_leg_severed = false
+		_handle_severed_leg()   # glance ONCE per distinct cut, then cope silently
+		return
 	_follow_path(delta, 1.0, target)
+
+
+func _plan_patrol_leg() -> void:
+	# Plan the current patrol leg. A severed leg returns a PARTIAL path to the closest reachable
+	# cell (the gate/wall face) and sets _leg_severed, so the guard walks UP TO the blockage and
+	# gets confused there -- not back at the waypoint it just left. An empty path means boxed in
+	# (no open neighbour), which _patrol's dead-end check confuses on immediately.
+	var start := _world_to_cell(position)
+	_path = _find_path(start, _world_to_cell(waypoints[_target_idx]), true)
+	_leg_severed = _last_path_partial or _path.is_empty()
+	if not _leg_severed and _severed_idx == _target_idx:
+		_severed_idx = -1   # this leg reopened -> a fresh cut here glances again
+	_path_idx = 0
+	if _path.size() > 0 and _path[0] == start:
+		_path_idx = 1
+	_patrol_repath_t = PATROL_REPATH_INTERVAL
 
 
 func _handle_severed_leg() -> void:
@@ -435,6 +447,7 @@ func _resettle_patrol() -> void:
 	# Confusion over (or coping silently while severed): patrol whatever is still reachable, keeping
 	# patrol order. If the only reachable waypoint is the one we're already standing on (boxed in),
 	# scan in place instead of re-targeting ourselves every frame.
+	_leg_severed = false   # re-targets to a REACHABLE waypoint below (or lighthouses); no partial walk
 	var wp := _first_reachable_waypoint()
 	if wp >= 0 and (waypoints[wp] - position).length() >= ARRIVE_THRESHOLD:
 		_target_idx = wp
@@ -592,6 +605,7 @@ func _enter_state(new_state: State) -> void:
 		_lighthouse = false
 		_confused_t = 0.0
 		_severed_idx = -1
+		_leg_severed = false
 		if waypoints.size() >= 2:
 			_target_idx = _closest_waypoint_idx()
 			_set_path_to(waypoints[_target_idx])
@@ -1382,7 +1396,11 @@ func _line_on_floor(from: Vector3, to: Vector3) -> bool:
 	return true
 
 
-func _find_path(start: Vector2i, goal: Vector2i) -> Array[Vector2i]:
+func _find_path(start: Vector2i, goal: Vector2i, allow_partial := false) -> Array[Vector2i]:
+	# allow_partial: when the goal is unreachable, return a path to the closest-reachable cell
+	# (the blockage face) instead of []. Patrol uses this to walk UP TO a shut gate before it
+	# confuses; every other caller leaves it false and gets [] on an unreachable goal.
+	_last_path_partial = false
 	# Goal-blocked fallback: snap to closest open 8-neighbour of the goal so the
 	# sphere walks to a cell adjacent to a footprint sitting on a wall edge.
 	if _cell_blocked(goal):
@@ -1426,6 +1444,8 @@ func _find_path(start: Vector2i, goal: Vector2i) -> Array[Vector2i]:
 	var came_from: Dictionary = {}
 	var g_score: Dictionary = {start: 0.0}
 	var open: Dictionary = {start: _octile(start, goal)}
+	var best_seen := start                     # closest-to-goal cell reached so far (for allow_partial)
+	var best_h := _octile(start, goal)
 	while not open.is_empty():
 		var current := _pop_lowest(open)
 		if current == goal:
@@ -1446,6 +1466,15 @@ func _find_path(start: Vector2i, goal: Vector2i) -> Array[Vector2i]:
 				came_from[n] = current
 				g_score[n] = tentative_g
 				open[n] = tentative_g + _octile(n, goal)
+				var h := _octile(n, goal)
+				if h < best_h:
+					best_h = h
+					best_seen = n
+	# Goal unreachable. Partial callers get a route to the closest cell we could reach (the
+	# blockage face); everyone else gets [].
+	if allow_partial:
+		_last_path_partial = true
+		return _reconstruct_path(came_from, best_seen)
 	return []
 
 
